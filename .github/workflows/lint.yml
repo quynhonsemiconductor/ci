@@ -23,6 +23,17 @@ permissions:
   contents: read
 
 jobs:
+  # Replaces Code Scanning Default Setup's `Analyze (actions)` as the required
+  # gate on this repo's own ruleset — that managed check doesn't reliably
+  # report on bot-authored PRs (Dependabot/Renovate), leaving the required
+  # check stuck "Expected" forever. Self-referenced by local path since this
+  # IS the repo the reusable workflow lives in.
+  actions-security:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/actions-security.yml
+
   actionlint:
     name: actionlint (workflows + actions)
     runs-on: ubuntu-latest
