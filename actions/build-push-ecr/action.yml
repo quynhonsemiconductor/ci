@@ -55,7 +55,9 @@ inputs:
     default: default
   cache-backend:
     description: >
-      Where the build cache lives: `registry` (default) or `gha`.
+      Where the build cache lives: `registry` (default), `gha`, or `none`.
+
+      READ THE COST NOTE BELOW BEFORE CHOOSING `registry` FOR A MULTI-GB IMAGE.
 
       REGISTRY is the default because the GitHub Actions cache is capped at 10 GB PER
       REPOSITORY, shared with every other workflow in it. A product whose images carry
@@ -63,18 +65,40 @@ inputs:
       re-downloaded a 2.2 GB model on most builds while appearing to be cached, and
       starved the rest of the repo's caches doing it. Registry cache has no such cap.
 
-      Cost is a `:buildcache` tag per image repository, a few GB at $0.10/GB-month. The
-      ECR lifecycle policy leaves it alone: its rules key on the `v` and `sha-` prefixes
-      and on untagged images, and `buildcache` is tagged and matches neither prefix.
+      COST, CORRECTED. This input previously described the cost as "a `:buildcache` tag
+      per image repository, a few GB at $0.10/GB-month". That counted STORAGE and missed
+      EGRESS, which is the larger number by an order of magnitude: a GitHub-hosted runner
+      is outside AWS, so every build PULLS the whole cache back out of ECR across the
+      internet. Measured on this account 2026-08-01..16 — `APS1-DataTransfer-Out-Bytes`
+      on ECR was 147.3 GB in sixteen days, $10.90/mo, against $1.51/mo of cache storage.
+
+      Egress scales with DEPLOY FREQUENCY, not with image count, so it is the one line on
+      the bill that grows when the team ships more. Size the decision per product:
+
+        qnsc-kb   `:buildcache` is 4.28 GB   -> pulled in full on every build
+        rally     `:buildcache` is 0.33 GB   -> effectively free, keep it
+
+      A self-hosted runner inside the VPC would make this free (same-region traffic), and
+      is the real fix if registry cache is ever wanted for a large image.
+
+      `none` disables the cache entirely — no `cache-from`, no `cache-to`, nothing
+      written to ECR. Correct for a large image on a PUBLIC repository, where Actions
+      minutes are unmetered: the cache is then buying wall-clock, not money, and the
+      egress is real money. Builds are slower and fully reproducible from scratch.
 
       `gha` remains available for a product with small images that would rather not hold
-      cache in ECR at all. Nothing else changes between the two.
+      cache in ECR at all. Nothing else changes between the three.
 
-      Requires a MUTABLE ECR repository, because each build overwrites the `buildcache`
-      tag. That is not a new constraint: this action already pushes `latest` via
-      `extra-tags`, which needs mutability for the same reason — a product whose
+      Registry mode requires a MUTABLE ECR repository, because each build overwrites the
+      `buildcache` tag. That is not a new constraint: this action already pushes `latest`
+      via `extra-tags`, which needs mutability for the same reason — a product whose
       repositories are IMMUTABLE (the ecr module's default) is already incompatible with
       this pipeline before cache enters it. rally, qnsc-kb and opshub all pass MUTABLE.
+
+      The ECR lifecycle policy leaves `buildcache` alone: its rules key on the `v` and
+      `sha-` prefixes and on untagged images, and `buildcache` matches neither. So
+      switching a product to `none` does NOT reclaim its existing cache tag — delete it
+      once by hand with `aws ecr batch-delete-image --image-ids imageTag=buildcache`.
     required: false
     default: registry
   node-auth-token:
@@ -116,6 +140,38 @@ runs:
         echo "EOF"        >> "$GITHUB_OUTPUT"
         echo "image-uri=$PRIMARY" >> "$GITHUB_OUTPUT"
 
+    # Resolved in bash rather than in a `${{ }}` ternary, because the three-way form is a
+    # trap in GitHub expressions: `x == 'none' && '' || <registry>` evaluates the empty
+    # string as FALSY and falls straight through to the registry branch, so `none` would
+    # silently keep caching. Two nested ternaries avoid that and are unreadable. A step
+    # with a `case` is neither.
+    - name: Resolve cache backend
+      id: cache
+      shell: bash
+      env:
+        BACKEND:  ${{ inputs.cache-backend }}
+        SCOPE:    ${{ inputs.cache-scope }}
+        REGISTRY: ${{ inputs.ecr-registry }}
+        IMAGE:    ${{ inputs.image-name }}
+      run: |
+        set -euo pipefail
+        case "$BACKEND" in
+          none)
+            FROM=""; TO="" ;;
+          gha)
+            FROM="type=gha,scope=$SCOPE"
+            TO="type=gha,mode=max,scope=$SCOPE" ;;
+          registry)
+            FROM="type=registry,ref=$REGISTRY/$IMAGE:buildcache"
+            TO="type=registry,ref=$REGISTRY/$IMAGE:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" ;;
+          *)
+            echo "::error::cache-backend must be registry, gha or none (got '$BACKEND')"
+            exit 1 ;;
+        esac
+        echo "from=$FROM" >> "$GITHUB_OUTPUT"
+        echo "to=$TO"     >> "$GITHUB_OUTPUT"
+        echo "cache backend: ${BACKEND}" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Build & push
       id: build
       uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
@@ -126,23 +182,17 @@ runs:
         platforms: ${{ inputs.platforms }}
         push: true
         tags: ${{ steps.tags.outputs.tags }}
-        # `image-manifest=true,oci-mediatypes=true` is REQUIRED for ECR, not decoration:
-        # buildx's default cache manifest type is not one ECR accepts, and without these
-        # the export fails with "unsupported manifest media type" AFTER the image itself
-        # has been pushed — a green build with a broken cache write.
+        # Both computed in the step above — see it for why this is not a `${{ }}` ternary,
+        # and see `cache-backend` for the cost of each backend.
         #
-        # `mode=max` exports every intermediate stage, not just the final one. That is the
-        # whole point for a multi-stage Dockerfile: the expensive layers here are `deps`
-        # and the model bake, neither of which appears in the final image's own layers.
+        # Empty is a valid value for both: docker/build-push-action treats an empty
+        # `cache-from`/`cache-to` as "no cache flags", which is exactly `none`.
         #
-        # Cache misses are not failures. `--cache-from` on a repository with no buildcache
-        # tag yet is a no-op, so the first build after enabling this simply populates it.
-        cache-from: ${{ inputs.cache-backend == 'gha'
-          && format('type=gha,scope={0}', inputs.cache-scope)
-          || format('type=registry,ref={0}/{1}:buildcache', inputs.ecr-registry, inputs.image-name) }}
-        cache-to: ${{ inputs.cache-backend == 'gha'
-          && format('type=gha,mode=max,scope={0}', inputs.cache-scope)
-          || format('type=registry,ref={0}/{1}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', inputs.ecr-registry, inputs.image-name) }}
+        # Cache misses are not failures either. `--cache-from` against a repository with no
+        # buildcache tag yet is a no-op, so the first build after enabling registry cache
+        # simply populates it, and the first build after DISABLING it just runs cold.
+        cache-from: ${{ steps.cache.outputs.from }}
+        cache-to: ${{ steps.cache.outputs.to }}
         provenance: mode=max   # SLSA L3: full build graph with materials
         sbom: true             # embed SBOM as OCI attestation (CycloneDX)
         # Authenticates `pnpm install` against GitHub Packages for private

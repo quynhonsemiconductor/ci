@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.9.2...v1.10.0) (2026-08-17)
+
+
+### Features
+
+* **build-push-ecr:** add a `none` cache backend, and correct the cost note ([#86](https://github.com/QNSC-VN/qnsc-ci/issues/86)) ([1ef2773](https://github.com/QNSC-VN/qnsc-ci/commit/1ef27731c95a6f2e4853e3665c8d76b6e70683ac))
+
 ## [1.9.2](https://github.com/QNSC-VN/qnsc-ci/compare/v1.9.1...v1.9.2) (2026-08-13)
 
 

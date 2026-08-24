@@ -43,6 +43,19 @@ on:
       # Whatever is passed MUST be the readiness probe, never liveness — see the
       # "Post-deploy readiness check" step for why that distinction is load-bearing.
       health_path:     { type: string, default: "/v1/readyz" }
+      # Build cache backend: `registry` (default), `gha` or `none`. Passed straight to
+      # actions/build-push-ecr, whose `cache-backend` input carries the full reasoning.
+      #
+      # Exposed here because the right answer is PER PRODUCT and depends on image size.
+      # A GitHub-hosted runner sits outside AWS, so registry cache is pulled back out of
+      # ECR across the internet on every build, and that egress — not the cache storage —
+      # is the cost. Measured 2026-08-01..16: 147.3 GB, $10.90/mo, against $1.51/mo of
+      # storage. qnsc-kb's cache is 4.28 GB and rally's is 0.33 GB, so the same default
+      # was cheap for one product and the largest growing line on the bill for the other.
+      #
+      # On a PUBLIC repository, Actions minutes are unmetered — so for a large image the
+      # cache buys wall-clock and costs real money. `none` is the honest trade there.
+      cache_backend:   { type: string, default: "registry" }
     secrets:
       AWS_ACCOUNT_ID:       { required: true }
       SLACK_DEPLOY_WEBHOOK: { required: false }
@@ -206,6 +219,7 @@ jobs:
           extra-tags: latest
           build-target: ${{ matrix.service }}
           cache-scope: ${{ matrix.service }}
+          cache-backend: ${{ inputs.cache_backend }}
           platforms: ${{ inputs.image_platforms }}
 
       - name: Scan ${{ matrix.service }} image
@@ -241,7 +255,7 @@ jobs:
       # versa. This repo pins upload-artifact v7 elsewhere (web-deploy, rally CI) with no
       # matching download — bumping only one side here breaks the deploy at the download
       # step, after the images are already built and pushed.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: matrix.service == 'api'
         with:
           name: api-digest
@@ -556,7 +570,7 @@ jobs:
       - name: Fetch API digest from the build
         if: github.ref_type != 'tag'
         # Same major as the upload above — see the warning there before bumping either.
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: api-digest
 
