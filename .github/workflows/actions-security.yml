@@ -41,6 +41,19 @@ on:
         required: false
         default: medium
         type: string
+      min_confidence:
+        description: >
+          Minimum confidence that fails the run when blocking (unknown, low,
+          medium, high). Severity and confidence are independent axes: a rule
+          like template-injection is inherently high-severity regardless of
+          how sure zizmor is that THIS instance is exploitable, so a
+          low-confidence match on an untrusted-but-unproven value still
+          counts as "high severity". Raise min_confidence (rather than
+          min_severity) to gate on findings actually assessed as real without
+          also gating on every low-confidence match of the same rule.
+        required: false
+        default: unknown
+        type: string
       blocking:
         description: >
           Fail the run on findings at or above min_severity. Phased rollout:
@@ -94,16 +107,17 @@ jobs:
         env:
           ZIZMOR_PATH: ${{ inputs.path }}
           MIN_SEVERITY: ${{ inputs.min_severity }}
+          MIN_CONFIDENCE: ${{ inputs.min_confidence }}
           BLOCKING: ${{ inputs.blocking }}
         run: |
           set +e
-          zizmor --min-severity "$MIN_SEVERITY" --no-progress "$ZIZMOR_PATH"
+          zizmor --min-severity "$MIN_SEVERITY" --min-confidence "$MIN_CONFIDENCE" --no-progress "$ZIZMOR_PATH"
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then
             if [ "$BLOCKING" = "true" ]; then
-              echo "::error::zizmor found findings at or above ${MIN_SEVERITY} (blocking)"
+              echo "::error::zizmor found findings at or above severity=${MIN_SEVERITY}/confidence=${MIN_CONFIDENCE} (blocking)"
               exit "$code"
             fi
-            echo "::warning::zizmor found findings at or above ${MIN_SEVERITY} (report-only; set blocking=true to enforce)"
+            echo "::warning::zizmor found findings at or above severity=${MIN_SEVERITY}/confidence=${MIN_CONFIDENCE} (report-only; set blocking=true to enforce)"
           fi
