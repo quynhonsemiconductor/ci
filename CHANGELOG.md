@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.11.0...v1.12.0) (2026-08-24)
+
+
+### Features
+
+* **ci:** self-run zizmor Actions-security scan ([#90](https://github.com/QNSC-VN/qnsc-ci/issues/90)) ([f11d8a7](https://github.com/QNSC-VN/qnsc-ci/commit/f11d8a7c2d5cb352441791991c6d58087e4ac507))
+
 ## [1.11.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.10.0...v1.11.0) (2026-08-24)
 
 
