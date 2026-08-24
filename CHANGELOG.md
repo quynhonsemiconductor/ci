@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.10.0...v1.11.0) (2026-08-24)
+
+
+### Features
+
+* **security:** add reusable Actions-security scan (zizmor) ([#88](https://github.com/QNSC-VN/qnsc-ci/issues/88)) ([1b48f38](https://github.com/QNSC-VN/qnsc-ci/commit/1b48f3835be15b21d3723c90de57a54389b1067d))
+
 ## [1.10.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.9.2...v1.10.0) (2026-08-17)
 
 
