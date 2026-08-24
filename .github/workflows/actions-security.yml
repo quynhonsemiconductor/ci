@@ -27,10 +27,14 @@ name: Reusable · Actions Security
 on:
   workflow_call:
     inputs:
-      paths:
-        description: Space-separated paths to audit (workflows + composite actions).
+      path:
+        description: >
+          Single path to audit. zizmor takes exactly one input — a second
+          positional argument is parsed as a remote owner/repo slug, not a
+          second local path, so this must stay one value. "." recursively
+          finds both workflows and composite actions from the repo root.
         required: false
-        default: '.github/workflows .github/actions'
+        default: '.'
         type: string
       min_severity:
         description: Minimum severity that fails the run when blocking (unknown, informational, low, medium, high).
@@ -72,11 +76,10 @@ jobs:
       - name: zizmor scan (SARIF)
         shell: bash
         env:
-          ZIZMOR_PATHS: ${{ inputs.paths }}
+          ZIZMOR_PATH: ${{ inputs.path }}
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2086
-          zizmor --format sarif --no-progress $ZIZMOR_PATHS > zizmor.sarif
+          zizmor --format sarif --no-progress "$ZIZMOR_PATH" > zizmor.sarif
 
       - name: Upload SARIF (GHAS UI — advisory on free plan)
         if: always()
@@ -89,13 +92,12 @@ jobs:
       - name: zizmor scan (console + gate)
         shell: bash
         env:
-          ZIZMOR_PATHS: ${{ inputs.paths }}
+          ZIZMOR_PATH: ${{ inputs.path }}
           MIN_SEVERITY: ${{ inputs.min_severity }}
           BLOCKING: ${{ inputs.blocking }}
         run: |
           set +e
-          # shellcheck disable=SC2086
-          zizmor --min-severity "$MIN_SEVERITY" --no-progress $ZIZMOR_PATHS
+          zizmor --min-severity "$MIN_SEVERITY" --no-progress "$ZIZMOR_PATH"
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then
