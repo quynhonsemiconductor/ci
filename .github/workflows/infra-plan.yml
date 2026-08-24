@@ -59,9 +59,10 @@ jobs:
         env:
           PREFIX: ${{ inputs.live_prefix }}
           MODULE_PREFIX: ${{ inputs.module_prefix }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          FILES=$(git diff --name-only "origin/$BASE_REF...HEAD")
 
           if [ -n "$MODULE_PREFIX" ] && echo "$FILES" | grep -q "^${MODULE_PREFIX}"; then
             echo "Shared module changed under ${MODULE_PREFIX} — planning every live workspace."

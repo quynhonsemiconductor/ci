@@ -33,6 +33,18 @@ jobs:
       contents: read
       security-events: write
     uses: ./.github/workflows/actions-security.yml
+    with:
+      # This repo's ~100 low-CONFIDENCE findings are `inputs.*`/`vars.*`/
+      # `steps.*.outputs.*` interpolated into `run:` blocks — values set by
+      # trusted caller repos, not directly attacker-reachable. Severity and
+      # confidence are independent: template-injection is high-SEVERITY by
+      # rule definition regardless of confidence, so gating on min_severity
+      # alone still catches all the unfixed low-confidence ones too. Gate on
+      # min_confidence instead — that isolates the findings actually
+      # assessed as real and fixed here. The low-confidence hygiene sweep is
+      # a separate, reviewable follow-up.
+      min_confidence: high
+      blocking: true
 
   actionlint:
     name: actionlint (workflows + actions)

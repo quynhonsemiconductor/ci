@@ -78,26 +78,32 @@ jobs:
       services:    ${{ steps.ctx.outputs.services }}
     steps:
       - id: ctx
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          HAS_WORKER: ${{ inputs.has_worker }}
+          HAS_MIGRATOR: ${{ inputs.has_migrator }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "$REF_TYPE" == "tag" ]]; then
             {
               echo "environment=production"
-              echo "image_tag=${{ github.ref_name }}"
-              echo "source_tag=sha-${{ github.sha }}"
+              echo "image_tag=$REF_NAME"
+              echo "source_tag=sha-$SHA"
             } >> "$GITHUB_OUTPUT"
           else
             {
               echo "environment=develop"
-              echo "image_tag=sha-${{ github.sha }}"
-              echo "source_tag=sha-${{ github.sha }}"
+              echo "image_tag=sha-$SHA"
+              echo "source_tag=sha-$SHA"
             } >> "$GITHUB_OUTPUT"
           fi
 
           # Which images this product has. `api` is not optional — a backend without
           # one has nothing to deploy — so it is unconditional and the flags only add.
           SERVICES='["api"'
-          [[ "${{ inputs.has_worker }}"   == "true" ]] && SERVICES="$SERVICES,\"worker\""
-          [[ "${{ inputs.has_migrator }}" == "true" ]] && SERVICES="$SERVICES,\"migrator\""
+          [[ "$HAS_WORKER"   == "true" ]] && SERVICES="$SERVICES,\"worker\""
+          [[ "$HAS_MIGRATOR" == "true" ]] && SERVICES="$SERVICES,\"migrator\""
           SERVICES="$SERVICES]"
           echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
 
@@ -576,10 +582,13 @@ jobs:
 
       - name: Resolve API digest
         id: api-digest
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          PROMOTED_DIGEST: ${{ needs.promote.outputs.api_digest }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            DIGEST="${{ needs.promote.outputs.api_digest }}"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            DIGEST="$PROMOTED_DIGEST"
           else
             DIGEST="$(cat api-digest.txt)"
           fi
@@ -664,16 +673,20 @@ jobs:
 
       - name: Deployment summary
         if: always()
+        env:
+          STATUS: ${{ job.status }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          APP_URL: ${{ vars.APP_URL }}
         run: |
-          STATUS="${{ job.status }}"
           {
             echo "### Deploy $STATUS — $ENVIRONMENT"
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| **Image tag** | \`$IMAGE_TAG\` |"
-            echo "| **Commit** | \`${{ github.sha }}\` |"
-            echo "| **Actor** | ${{ github.actor }} |"
-            echo "| **API URL** | \`${{ vars.APP_URL }}\` |"
+            echo "| **Commit** | \`$SHA\` |"
+            echo "| **Actor** | $ACTOR |"
+            echo "| **API URL** | \`$APP_URL\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notify deploy result

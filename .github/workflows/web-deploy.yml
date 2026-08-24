@@ -77,17 +77,20 @@ jobs:
       - id: ctx
         env:
           SINGLE_ENV: ${{ inputs.single_environment }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            ASSET_TAG="${{ github.ref_name }}"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            ASSET_TAG="$REF_NAME"
           else
-            ASSET_TAG="sha-${{ github.sha }}"
+            ASSET_TAG="sha-$SHA"
           fi
           echo "asset_tag=$ASSET_TAG" >> "$GITHUB_OUTPUT"
           if [[ -n "$SINGLE_ENV" ]]; then
             # 1-env app — always the one environment, regardless of trigger.
             echo "environment=$SINGLE_ENV" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+          elif [[ "$REF_TYPE" == "tag" ]]; then
             echo "environment=production" >> "$GITHUB_OUTPUT"
           else
             echo "environment=develop" >> "$GITHUB_OUTPUT"
@@ -301,15 +304,18 @@ jobs:
 
       - name: Deployment summary
         if: always()
+        env:
+          STATUS: ${{ job.status }}
+          ACTOR: ${{ github.actor }}
+          PAGES_PROJECT: ${{ vars.PAGES_PROJECT }}
         run: |
-          STATUS="${{ job.status }}"
           {
             echo "### Deploy $STATUS — $ENVIRONMENT"
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| **Asset tag** | \`$ASSET_TAG\` |"
-            echo "| **Pages project** | \`${{ vars.PAGES_PROJECT }}\` |"
-            echo "| **Actor** | ${{ github.actor }} |"
+            echo "| **Pages project** | \`$PAGES_PROJECT\` |"
+            echo "| **Actor** | $ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notify deploy result
