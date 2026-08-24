@@ -33,6 +33,14 @@ jobs:
       contents: read
       security-events: write
     uses: ./.github/workflows/actions-security.yml
+    with:
+      # This repo's ~100 low-confidence findings are `inputs.*`/`vars.*`/
+      # `steps.*.outputs.*` interpolated into `run:` blocks — values set by
+      # trusted caller repos, not directly attacker-reachable. Gate on
+      # high-confidence findings (the ones actually fixed) now; the
+      # low-confidence hygiene sweep is a separate, reviewable follow-up.
+      min_severity: high
+      blocking: true
 
   actionlint:
     name: actionlint (workflows + actions)

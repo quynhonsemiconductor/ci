@@ -31,19 +31,19 @@ runs:
   steps:
     - name: Send notification
       shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook-url }}
+        STATUS: ${{ inputs.status }}
+        SERVICE: ${{ inputs.service }}
+        ENV: ${{ inputs.environment }}
+        VERSION: ${{ inputs.version }}
+        RUN_URL: ${{ inputs.run-url }}
+        ACTOR: ${{ github.actor }}
       run: |
-        WEBHOOK="${{ inputs.webhook-url }}"
         if [ -z "$WEBHOOK" ]; then
           echo "::notice ::notify-deploy: webhook-url not set — skipping notification"
           exit 0
         fi
-
-        STATUS="${{ inputs.status }}"
-        SERVICE="${{ inputs.service }}"
-        ENV="${{ inputs.environment }}"
-        VERSION="${{ inputs.version }}"
-        RUN_URL="${{ inputs.run-url }}"
-        ACTOR="${{ github.actor }}"
 
         case "$STATUS" in
           success)  EMOJI="✅"; LABEL="Deploy succeeded"  ;;
