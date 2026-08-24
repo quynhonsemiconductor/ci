@@ -1,0 +1,107 @@
+# =============================================================================
+# Reusable · Actions security (zizmor) — static security audit of GitHub
+# Actions workflows/composite actions (script injection, unpinned refs,
+# excessive permissions, dangerous `pull_request_target` use, etc).
+#
+# Exists to replace CodeQL's "actions" language via Code Scanning Default
+# Setup as the thing repo rulesets require. Default Setup's managed
+# `Analyze (actions)` / `CodeQL` checks do not reliably report on PRs opened
+# by bots (Dependabot, Renovate) — the run never fires, the required check
+# sits "Expected" forever, and the PR can't merge without an admin bypass.
+# zizmor is our own workflow, triggered explicitly on `pull_request` for any
+# actor, so it always reports. Same rationale as the Security · Scan suite
+# replacing CodeQL's app-language scanning with Semgrep (free plan, no GHAS
+# dependency for the pass/fail gate).
+#
+# Consuming repos call this thin:
+#
+#   jobs:
+#     actions-security:
+#       uses: QNSC-VN/qnsc-ci/.github/workflows/actions-security.yml@v1
+#
+# Then point the ruleset's required status check at this job's name —
+# "Actions security (zizmor)" — instead of `Analyze (actions)` / `CodeQL`.
+# =============================================================================
+name: Reusable · Actions Security
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Space-separated paths to audit (workflows + composite actions).
+        required: false
+        default: '.github/workflows .github/actions'
+        type: string
+      min_severity:
+        description: Minimum severity that fails the run when blocking (unknown, informational, low, medium, high).
+        required: false
+        default: medium
+        type: string
+      blocking:
+        description: >
+          Fail the run on findings at or above min_severity. Phased rollout:
+          start false (report-only) while triaging first-run findings, then
+          flip true so the check actually gates the ruleset.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: Actions security (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # TODO: pin to a full commit SHA (org convention) once this has run once
+      # and the resolved SHA is visible in the Actions log — not verified here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install zizmor
+        run: pip install --disable-pip-version-check zizmor==1.5.2
+
+      - name: zizmor scan (SARIF)
+        shell: bash
+        env:
+          ZIZMOR_PATHS: ${{ inputs.paths }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          zizmor --format sarif --no-progress $ZIZMOR_PATHS > zizmor.sarif
+
+      - name: Upload SARIF (GHAS UI — advisory on free plan)
+        if: always()
+        continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor-actions
+
+      - name: zizmor scan (console + gate)
+        shell: bash
+        env:
+          ZIZMOR_PATHS: ${{ inputs.paths }}
+          MIN_SEVERITY: ${{ inputs.min_severity }}
+          BLOCKING: ${{ inputs.blocking }}
+        run: |
+          set +e
+          # shellcheck disable=SC2086
+          zizmor --min-severity "$MIN_SEVERITY" --no-progress $ZIZMOR_PATHS
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            if [ "$BLOCKING" = "true" ]; then
+              echo "::error::zizmor found findings at or above ${MIN_SEVERITY} (blocking)"
+              exit "$code"
+            fi
+            echo "::warning::zizmor found findings at or above ${MIN_SEVERITY} (report-only; set blocking=true to enforce)"
+          fi
