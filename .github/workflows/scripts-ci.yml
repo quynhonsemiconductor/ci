@@ -1,0 +1,58 @@
+# =============================================================================
+# Tests · shipped scripts — unit tests for the Python this repo ships to others.
+#
+# actionlint and zizmor check the SHAPE of a workflow. Neither can tell whether
+# `agent_forge_test_guard.py` correctly identifies a deleted assertion, and that
+# script is a REQUIRED check on rally's main branch: a bug in it either blocks
+# every merge or waves through the weakening it exists to catch.
+#
+# It arrived here with its tests rather than without them. The alternative was
+# moving a security control out of a repository that tested it into one that did
+# not, which trades one drift problem for a worse one.
+# =============================================================================
+name: Scripts · Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: scripts-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: Unit tests (shipped scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      # The scripts under test are standard-library only, by design — the guard runs
+      # in repositories that have never heard of agent-forge and cannot assume a
+      # dependency tree. pytest is the only thing to install.
+      - name: Install pytest
+        run: pip install --disable-pip-version-check pytest==9.1.1
+
+      # The guard builds real git repositories to diff against, so it needs an
+      # identity. Set here rather than left to the runner: a bare `git commit` with
+      # no identity anywhere aborts with "Author identity unknown", which reads as a
+      # test failure rather than a missing configuration.
+      - name: Give git an identity
+        run: |
+          git config --global user.email "ci@qnsc.vn"
+          git config --global user.name "QNSC CI"
+
+      - name: pytest
+        run: python -m pytest tests/ -q

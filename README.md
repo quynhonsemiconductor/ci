@@ -48,6 +48,28 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`scan-secrets`](actions/scan-secrets/action.yml) | Gitleaks secret scan with SARIF upload to GitHub Security tab |
+| [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
+
+Most repositories want the reusable workflow rather than the action directly — it
+brings the checkout and the pull-request-body handling with it:
+
+```yaml
+name: agent-forge test-guard
+on:
+  pull_request:
+    # `edited` is required: approvals are declared in the PR body, so editing the
+    # body to add one has to re-run the check.
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  test-guard:
+    uses: QNSC-VN/qnsc-ci/.github/workflows/agent-forge-guard.yml@v1
+```
+
+The check is named `test-guard`, which is what rally's branch protection already
+requires, so a repository can switch from its own copied version to this one
+without touching its ruleset.
 
 ### Notifications
 | Action | Description |
