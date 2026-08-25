@@ -42,8 +42,9 @@ runs:
     - name: Split image ref
       id: split
       shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image-ref }}
       run: |
-        IMAGE_REF="${{ inputs.image-ref }}"
         echo "name=${IMAGE_REF%%@*}" >> "$GITHUB_OUTPUT"
         echo "digest=${IMAGE_REF##*@}" >> "$GITHUB_OUTPUT"
 

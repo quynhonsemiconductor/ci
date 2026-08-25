@@ -41,7 +41,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # persist-credentials stays default (true): the "Move floating major/minor
+      # tags" step below does `git push -f origin refs/tags/...` using this
+      # checkout's persisted credential. Setting it false would break the push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # zizmor: ignore[artipacked]
         with:
           fetch-depth: 0
 

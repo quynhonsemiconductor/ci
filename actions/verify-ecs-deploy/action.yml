@@ -31,13 +31,14 @@ runs:
   steps:
     - name: Wait for ECS service to stabilize
       shell: bash
+      env:
+        CLUSTER: ${{ inputs.cluster }}
+        SERVICE: ${{ inputs.service }}
+        REGION: ${{ inputs.region }}
+        TAG: ${{ inputs.image-tag }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        INTERVAL: ${{ inputs.poll-interval-seconds }}
       run: |
-        CLUSTER="${{ inputs.cluster }}"
-        SERVICE="${{ inputs.service }}"
-        REGION="${{ inputs.region }}"
-        TAG="${{ inputs.image-tag }}"
-        TIMEOUT="${{ inputs.timeout-seconds }}"
-        INTERVAL="${{ inputs.poll-interval-seconds }}"
         ELAPSED=0
 
         echo "Waiting for $SERVICE in $CLUSTER to run image tag: $TAG"

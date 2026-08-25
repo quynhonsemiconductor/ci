@@ -47,15 +47,21 @@ runs:
 
     - name: Delete old images
       shell: python
+      env:
+        REGION: ${{ inputs.region }}
+        KEEP_COUNT: ${{ inputs.keep-count }}
+        PROTECTED_TAG_PATTERN: ${{ inputs.protected-tag-pattern }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        REPOSITORIES: ${{ inputs.repositories }}
       run: |
         import os, re, sys, boto3
         from datetime import timezone
 
-        region   = "${{ inputs.region }}"
-        keep     = int("${{ inputs.keep-count }}")
-        pattern  = re.compile(r"${{ inputs.protected-tag-pattern }}")
-        dry_run  = "${{ inputs.dry-run }}" == "true"
-        repos    = [r.strip() for r in """${{ inputs.repositories }}""".splitlines() if r.strip()]
+        region   = os.environ["REGION"]
+        keep     = int(os.environ["KEEP_COUNT"])
+        pattern  = re.compile(os.environ["PROTECTED_TAG_PATTERN"])
+        dry_run  = os.environ["DRY_RUN"] == "true"
+        repos    = [r.strip() for r in os.environ["REPOSITORIES"].splitlines() if r.strip()]
 
         ecr = boto3.client("ecr", region_name=region)
         total_deleted = 0

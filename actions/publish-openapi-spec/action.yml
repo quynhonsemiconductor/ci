@@ -67,15 +67,17 @@ runs:
   steps:
     - name: Verify spec exists
       shell: bash
+      env:
+        SPEC_PATH: ${{ inputs.spec-path }}
       run: |
-        if [ ! -f "${{ inputs.spec-path }}" ]; then
-          echo "::error ::OpenAPI spec not found at '${{ inputs.spec-path }}'"
+        if [ ! -f "$SPEC_PATH" ]; then
+          echo "::error ::OpenAPI spec not found at '${SPEC_PATH}'"
           echo "  Run the openapi generation step before calling publish-openapi-spec."
           exit 1
         fi
-        LINES=$(wc -l < "${{ inputs.spec-path }}")
-        SIZE=$(wc -c < "${{ inputs.spec-path }}")
-        echo "✓ Spec found: ${{ inputs.spec-path }} (${SIZE} bytes, ${LINES} lines)"
+        LINES=$(wc -l < "$SPEC_PATH")
+        SIZE=$(wc -c < "$SPEC_PATH")
+        echo "✓ Spec found: ${SPEC_PATH} (${SIZE} bytes, ${LINES} lines)"
 
     - name: Upload as GitHub artifact
       id: upload
@@ -92,11 +94,15 @@ runs:
       id: s3-upload
       if: inputs.s3-upload == 'true'
       shell: bash
+      env:
+        BUCKET: ${{ inputs.s3-bucket }}
+        ENV: ${{ inputs.s3-environment }}
+        SHA: ${{ github.sha }}
+        PREFIX_INPUT: ${{ inputs.s3-prefix }}
+        SPEC_PATH: ${{ inputs.spec-path }}
+        REGION: ${{ inputs.region }}
       run: |
-        BUCKET="${{ inputs.s3-bucket }}"
-        ENV="${{ inputs.s3-environment }}"
-        SHA="${{ github.sha }}"
-        PREFIX="${{ inputs.s3-prefix }}"
+        PREFIX="$PREFIX_INPUT"
 
         if [ -z "$PREFIX" ]; then
           PREFIX="openapi/${ENV}/${SHA}"
@@ -106,14 +112,14 @@ runs:
         LATEST_KEY="openapi/${ENV}/latest/openapi.json"
 
         echo "Uploading to s3://$BUCKET/$KEY"
-        aws s3 cp "${{ inputs.spec-path }}" "s3://${BUCKET}/${KEY}" \
-          --region "${{ inputs.region }}" \
+        aws s3 cp "$SPEC_PATH" "s3://${BUCKET}/${KEY}" \
+          --region "$REGION" \
           --cache-control "no-cache, max-age=0" \
           --content-type "application/json"
 
         echo "Updating latest pointer: s3://$BUCKET/$LATEST_KEY"
-        aws s3 cp "${{ inputs.spec-path }}" "s3://${BUCKET}/${LATEST_KEY}" \
-          --region "${{ inputs.region }}" \
+        aws s3 cp "$SPEC_PATH" "s3://${BUCKET}/${LATEST_KEY}" \
+          --region "$REGION" \
           --cache-control "no-cache, max-age=0" \
           --content-type "application/json"
 

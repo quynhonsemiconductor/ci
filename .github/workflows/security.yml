@@ -107,6 +107,8 @@ jobs:
       packages: read # pull private @qnsc-vn/* from GitHub Packages during the image build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -167,6 +169,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Registry packs (p/*) fetched anonymously (no login/token); telemetry off.
       # --error (fail on findings) added only when semgrep_blocking=true.
@@ -213,6 +217,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: QNSC-VN/qnsc-ci/actions/scan-secrets@v1
         with:
@@ -230,6 +235,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install osv-scanner
         shell: bash

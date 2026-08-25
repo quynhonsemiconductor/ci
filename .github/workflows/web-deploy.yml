@@ -115,6 +115,8 @@ jobs:
       NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       # ── Pre-flight — fail fast BEFORE build/migrate/publish ────────────────
       # A data app that requires post-deploy verification must have somewhere to
@@ -122,8 +124,10 @@ jobs:
       # unverified (the health-check step below is skipped when APP_URL is empty).
       - name: Pre-flight — required config
         if: inputs.require_health_check && vars.APP_URL == ''
+        env:
+          ENVIRONMENT: ${{ needs.context.outputs.environment }}
         run: |
-          echo "::error ::require_health_check=true but the APP_URL env var is unset for '${{ needs.context.outputs.environment }}'. Set it so the post-deploy health check can run; refusing to deploy unverified." >&2
+          echo "::error ::require_health_check=true but the APP_URL env var is unset for '${ENVIRONMENT}'. Set it so the post-deploy health check can run; refusing to deploy unverified." >&2
           exit 1
 
       # ── Install (pnpm — org default) ────────────────────────────────────────
@@ -227,20 +231,22 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE: ${{ inputs.d1_database }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
         run: |
           set -euo pipefail
-          FILE="d1-backup-${{ inputs.d1_database }}-${ASSET_TAG//\//-}.sql"
+          FILE="d1-backup-${D1_DATABASE}-${ASSET_TAG//\//-}.sql"
           echo "D1_BACKUP_FILE=$FILE" >> "$GITHUB_ENV"
-          npx --yes wrangler@${{ inputs.wrangler_version }} d1 export "${{ inputs.d1_database }}" --remote --output "$FILE"
+          npx --yes "wrangler@${WRANGLER_VERSION}" d1 export "${D1_DATABASE}" --remote --output "$FILE"
           test -s "$FILE" || { echo "::error ::D1 export produced an empty file — aborting before migrate." >&2; exit 1; }
-          echo "Exported ${{ inputs.d1_database }} → $FILE ($(wc -c <"$FILE") bytes)"
+          echo "Exported ${D1_DATABASE} → $FILE ($(wc -c <"$FILE") bytes)"
 
       - name: Upload D1 backup (artifact)
         if: inputs.run_d1_migrations && inputs.backup_before_migrate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: d1-backup-${{ inputs.product }}-${{ needs.context.outputs.asset_tag }}
-          path: ${{ inputs.working_directory }}/${{ env.D1_BACKUP_FILE }}
+          path: ${{ format('{0}/{1}', inputs.working_directory, env.D1_BACKUP_FILE) }}
           retention-days: 90
           if-no-files-found: error
 
@@ -250,11 +256,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PRODUCT: ${{ inputs.product }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
+          D1_BACKUP_BUCKET: ${{ inputs.d1_backup_bucket }}
         run: |
           set -euo pipefail
-          KEY="${{ inputs.product }}/${{ env.ENVIRONMENT }}/${{ env.D1_BACKUP_FILE }}"
-          npx --yes wrangler@${{ inputs.wrangler_version }} r2 object put "${{ inputs.d1_backup_bucket }}/${KEY}" --file "${{ env.D1_BACKUP_FILE }}" --remote
-          echo "Archived backup → r2://${{ inputs.d1_backup_bucket }}/${KEY}"
+          KEY="${PRODUCT}/${ENVIRONMENT}/${D1_BACKUP_FILE}"
+          npx --yes "wrangler@${WRANGLER_VERSION}" r2 object put "${D1_BACKUP_BUCKET}/${KEY}" --file "${D1_BACKUP_FILE}" --remote
+          echo "Archived backup → r2://${D1_BACKUP_BUCKET}/${KEY}"
 
       # ── D1 migrations (data apps) — applied before the new code is live ────
       # Forward-only + not atomic with the publish below: migrations MUST be
@@ -266,7 +275,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@${{ inputs.wrangler_version }} d1 migrations apply "${{ inputs.d1_database }}" --remote
+          D1_DATABASE: ${{ inputs.d1_database }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
+        run: npx --yes "wrangler@${WRANGLER_VERSION}" d1 migrations apply "${D1_DATABASE}" --remote
 
       # ── Publish to Cloudflare Pages ────────────────────────────────────────
       # wrangler-action auto-detects the package manager by looking for a
@@ -282,8 +293,16 @@ jobs:
       # always exactly "pnpm" or "npm" (see the input schema above), both
       # values this action accepts directly, so this is correct for standalone
       # npm callers (ceo-suite) too, not just pnpm monorepos.
+      # Accepted risk (Low confidence): setup-node's `cache: npm` upstream, then this
+      # deploy step, is zizmor's generic "cache-poisoning" shape — a poisoned npm cache
+      # entry could theoretically ride through to what gets published. Mitigated by this
+      # workflow only ever running on push to main/tags (every caller), never on an
+      # untrusted PR — there's no attacker-controlled run in a position to poison the
+      # cache before this step reads it. Inherent to any Node build+deploy pipeline using
+      # actions/setup-node's built-in caching; disabling it costs real build time for a
+      # finding with no realistic trigger here.
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0  # v4.0.0
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0  # v4.0.0  # zizmor: ignore[cache-poisoning]
         with:
           apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

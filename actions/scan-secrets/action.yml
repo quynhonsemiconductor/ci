@@ -37,8 +37,10 @@ runs:
 
     - name: Scan git history for secrets
       shell: bash
+      env:
+        FAIL_ON_LEAK: ${{ inputs.fail-on-leak }}
       run: |
-        if [ "${{ inputs.fail-on-leak }}" = "false" ]; then
+        if [ "$FAIL_ON_LEAK" = "false" ]; then
           gitleaks detect --source . --log-opts="--all" --no-banner --exit-code 0 \
             || echo "::notice ::Secret scan complete — failures will not block this run (fail-on-leak=false)"
         else

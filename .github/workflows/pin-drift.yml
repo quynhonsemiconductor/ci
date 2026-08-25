@@ -24,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every repo read here is public, so this needs no App token and no write scope.
       # If a product is ever made private this job starts failing on the clone, which is

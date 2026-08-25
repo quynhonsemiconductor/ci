@@ -36,12 +36,13 @@ runs:
   steps:
     - name: Poll health endpoint
       shell: bash
+      env:
+        URL: ${{ inputs.url }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        INTERVAL: ${{ inputs.poll-interval-seconds }}
+        EXPECTED_STATUS: ${{ inputs.expected-status }}
       run: |
-        URL="${{ inputs.url }}"
-        EXPECTED_VERSION="${{ inputs.expected-version }}"
-        TIMEOUT="${{ inputs.timeout-seconds }}"
-        INTERVAL="${{ inputs.poll-interval-seconds }}"
-        EXPECTED_STATUS="${{ inputs.expected-status }}"
         ELAPSED=0
 
         echo "Polling $URL (timeout: ${TIMEOUT}s)"
