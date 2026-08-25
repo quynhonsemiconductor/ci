@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.1](https://github.com/QNSC-VN/qnsc-ci/compare/v1.12.0...v1.12.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ci:** clear the zizmor low-confidence backlog (125 findings) ([#95](https://github.com/QNSC-VN/qnsc-ci/issues/95)) ([9ddfd3e](https://github.com/QNSC-VN/qnsc-ci/commit/9ddfd3e726509bafba575ab59da35336b77c002b))
+* **ci:** fix high-confidence zizmor findings, gate on high severity ([#93](https://github.com/QNSC-VN/qnsc-ci/issues/93)) ([be05af0](https://github.com/QNSC-VN/qnsc-ci/commit/be05af074d90976358a98dbaf51147a7b7d195ff))
+
 ## [1.12.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.11.0...v1.12.0) (2026-08-24)
 
 
