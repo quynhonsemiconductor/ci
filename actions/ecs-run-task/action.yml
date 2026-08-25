@@ -63,27 +63,36 @@ runs:
     - name: Run ECS task
       id: run-task
       shell: bash
+      env:
+        SUBNET_IDS: ${{ inputs.subnet-ids }}
+        SECURITY_GROUP_IDS: ${{ inputs.security-group-ids }}
+        COMMAND_OVERRIDE: ${{ inputs.command-override }}
+        CONTAINER_NAME: ${{ inputs.container-name }}
+        CLUSTER: ${{ inputs.cluster }}
+        TASK_DEFINITION: ${{ inputs.task-definition }}
+        LAUNCH_TYPE: ${{ inputs.launch-type }}
+        REGION: ${{ inputs.region }}
       run: |
         # Build network-config JSON inline — avoids cross-step output format issues
-        SUBNETS=$(printf '%s' "${{ inputs.subnet-ids }}" | tr ',' '\n' | \
+        SUBNETS=$(printf '%s' "$SUBNET_IDS" | tr ',' '\n' | \
           python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
-        SGS=$(printf '%s' "${{ inputs.security-group-ids }}" | tr ',' '\n' | \
+        SGS=$(printf '%s' "$SECURITY_GROUP_IDS" | tr ',' '\n' | \
           python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
         NETWORK_CONFIG="{\"awsvpcConfiguration\":{\"subnets\":${SUBNETS},\"securityGroups\":${SGS},\"assignPublicIp\":\"DISABLED\"}}"
 
         # Build optional overrides JSON
         OVERRIDES_ARG=()
-        if [ -n "${{ inputs.command-override }}" ]; then
-          OVERRIDES_JSON="{\"containerOverrides\":[{\"name\":\"${{ inputs.container-name }}\",\"command\":${{ inputs.command-override }}}]}"
+        if [ -n "$COMMAND_OVERRIDE" ]; then
+          OVERRIDES_JSON="{\"containerOverrides\":[{\"name\":\"${CONTAINER_NAME}\",\"command\":${COMMAND_OVERRIDE}}]}"
           OVERRIDES_ARG=(--overrides "$OVERRIDES_JSON")
         fi
 
         TASK_ARN=$(aws ecs run-task \
-          --cluster "${{ inputs.cluster }}" \
-          --task-definition "${{ inputs.task-definition }}" \
-          --launch-type "${{ inputs.launch-type }}" \
+          --cluster "$CLUSTER" \
+          --task-definition "$TASK_DEFINITION" \
+          --launch-type "$LAUNCH_TYPE" \
           --network-configuration "$NETWORK_CONFIG" \
-          --region "${{ inputs.region }}" \
+          --region "$REGION" \
           "${OVERRIDES_ARG[@]}" \
           --query 'tasks[0].taskArn' --output text)
 
@@ -93,13 +102,14 @@ runs:
     - name: Wait for task to complete
       id: wait-task
       shell: bash
+      env:
+        TASK_ARN: ${{ steps.run-task.outputs.task-arn }}
+        CLUSTER: ${{ inputs.cluster }}
+        REGION: ${{ inputs.region }}
+        CONTAINER: ${{ inputs.container-name }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        INTERVAL: ${{ inputs.poll-interval-seconds }}
       run: |
-        TASK_ARN="${{ steps.run-task.outputs.task-arn }}"
-        CLUSTER="${{ inputs.cluster }}"
-        REGION="${{ inputs.region }}"
-        CONTAINER="${{ inputs.container-name }}"
-        TIMEOUT="${{ inputs.timeout-seconds }}"
-        INTERVAL="${{ inputs.poll-interval-seconds }}"
         ELAPSED=0
 
         echo "Waiting for task to complete (timeout: ${TIMEOUT}s)..."

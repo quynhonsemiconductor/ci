@@ -50,8 +50,9 @@ runs:
   steps:
     - name: Install oasdiff
       shell: bash
+      env:
+        VERSION: ${{ inputs.oasdiff-version }}
       run: |
-        VERSION="${{ inputs.oasdiff-version }}"
         OS="linux"
         ARCH="amd64"
         BASE="https://github.com/Tufin/oasdiff/releases/download/${VERSION}"
@@ -73,11 +74,12 @@ runs:
     - name: Compare OpenAPI specs
       id: diff
       shell: bash
+      env:
+        CURRENT: ${{ inputs.current-spec-path }}
+        BASE: ${{ inputs.base-spec-path }}
+        FORMAT: ${{ inputs.format }}
+        FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
       run: |
-        CURRENT="${{ inputs.current-spec-path }}"
-        BASE="${{ inputs.base-spec-path }}"
-        FORMAT="${{ inputs.format }}"
-
         if [ ! -f "$BASE" ]; then
           echo "::warning ::Base spec not found at '$BASE' — skipping contract validation."
           echo "breaking-found=false" >> "$GITHUB_OUTPUT"
@@ -104,7 +106,7 @@ runs:
         if [ "${BREAKING_EXIT:-0}" -ne 0 ]; then
           echo ""
           echo "breaking-found=true" >> "$GITHUB_OUTPUT"
-          if [ "${{ inputs.fail-on-breaking }}" = "true" ]; then
+          if [ "$FAIL_ON_BREAKING" = "true" ]; then
             echo "::error ::Breaking API changes detected. Review the diff above before merging."
             exit 1
           else

@@ -129,6 +129,8 @@ jobs:
       PRODUCT:    ${{ inputs.product }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup AWS OIDC + ECR login
         id: aws
@@ -140,10 +142,13 @@ jobs:
 
       - name: Compute image list
         id: images
+        env:
+          HAS_WORKER: ${{ inputs.has_worker }}
+          HAS_MIGRATOR: ${{ inputs.has_migrator }}
         run: |
           LIST="${PRODUCT}-api"
-          [[ "${{ inputs.has_worker }}"   == "true" ]] && LIST="${LIST},${PRODUCT}-worker"
-          [[ "${{ inputs.has_migrator }}" == "true" ]] && LIST="${LIST},${PRODUCT}-migrator"
+          [[ "$HAS_WORKER"   == "true" ]] && LIST="${LIST},${PRODUCT}-worker"
+          [[ "$HAS_MIGRATOR" == "true" ]] && LIST="${LIST},${PRODUCT}-migrator"
           echo "list=$LIST" >> "$GITHUB_OUTPUT"
 
       - name: Promote images ${{ env.SOURCE_TAG }} → ${{ env.IMAGE_TAG }}
@@ -161,7 +166,7 @@ jobs:
           RELEASE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           set -euo pipefail
-          digest=$(aws ecr describe-images --repository-name "${{ inputs.product }}-api" \
+          digest=$(aws ecr describe-images --repository-name "${PRODUCT}-api" \
             --image-ids imageTag="$RELEASE_TAG" --region "$REGION" \
             --query 'imageDetails[0].imageDigest' --output text)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -204,6 +209,8 @@ jobs:
       PRODUCT:   ${{ inputs.product }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup AWS OIDC + ECR login
         id: aws
@@ -254,7 +261,9 @@ jobs:
       # be whichever image happened to build last, or empty. Only the api leg writes.
       - name: Publish API digest for the deploy job
         if: matrix.service == 'api'
-        run: echo "${{ steps.build.outputs.image-digest }}" > api-digest.txt
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.image-digest }}
+        run: echo "$IMAGE_DIGEST" > api-digest.txt
 
       # ⚠ upload-artifact and download-artifact MUST STAY ON THE SAME MAJOR. v4 changed
       # the artifact backend, so a v4 upload cannot be read by a v3 download or vice
@@ -296,6 +305,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup AWS OIDC (deploy role)
         uses: QNSC-VN/qnsc-ci/actions/setup-aws-oidc@v1
@@ -458,8 +469,10 @@ jobs:
         id: api-taskdef
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
         run: |
-          FAMILY="${{ vars.ECS_CLUSTER }}-${{ vars.ECS_API_SERVICE }}"
+          FAMILY="${ECS_CLUSTER}-${ECS_API_SERVICE}"
           TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
           NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
           import sys, json, os
@@ -478,8 +491,10 @@ jobs:
         if: inputs.has_worker
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
         run: |
-          FAMILY="${{ vars.ECS_CLUSTER }}-${{ vars.ECS_WORKER_SERVICE }}"
+          FAMILY="${ECS_CLUSTER}-${ECS_WORKER_SERVICE}"
           TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
           NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
           import sys, json, os
@@ -544,8 +559,9 @@ jobs:
         if: inputs.has_migrator
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          ECS_MIGRATOR_TASK_DEF: ${{ vars.ECS_MIGRATOR_TASK_DEF }}
         run: |
-          FAMILY="${{ vars.ECS_MIGRATOR_TASK_DEF }}"
+          FAMILY="${ECS_MIGRATOR_TASK_DEF}"
           TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
           NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
           import sys, json, os
@@ -605,41 +621,58 @@ jobs:
           REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com
           # digest resolved & attested in build/promote (no ecr:DescribeImages).
           DIGEST: ${{ steps.api-digest.outputs.digest }}
+          PRODUCT: ${{ inputs.product }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           # The attestation is signed by THIS reusable workflow (the trusted
           # builder), not the calling repo, so the signer identity must be
           # pinned with --signer-workflow (required for reusable-workflow
           # attestations) while --repo still scopes the source to the caller.
-          gh attestation verify "oci://${REGISTRY}/${{ inputs.product }}-api@${DIGEST}" \
-            --repo "${{ github.repository }}" \
-            --signer-workflow "${{ github.repository_owner }}/qnsc-ci/.github/workflows/backend-deploy.yml"
+          gh attestation verify "oci://${REGISTRY}/${PRODUCT}-api@${DIGEST}" \
+            --repo "${REPO}" \
+            --signer-workflow "${REPO_OWNER}/qnsc-ci/.github/workflows/backend-deploy.yml"
 
       - name: Deploy API service
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
+          TASKDEF_ARN: ${{ steps.api-taskdef.outputs.arn }}
+          AWS_REGION: ${{ inputs.aws_region }}
         run: |
-          aws ecs update-service --cluster "${{ vars.ECS_CLUSTER }}" --service "${{ vars.ECS_API_SERVICE }}" \
-            --task-definition "${{ steps.api-taskdef.outputs.arn }}" --force-new-deployment \
-            --region "${{ inputs.aws_region }}"
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_API_SERVICE" \
+            --task-definition "$TASKDEF_ARN" --force-new-deployment \
+            --region "$AWS_REGION"
 
       - name: Deploy Worker service
         if: inputs.has_worker
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
+          TASKDEF_ARN: ${{ steps.worker-taskdef.outputs.arn }}
+          AWS_REGION: ${{ inputs.aws_region }}
         run: |
-          aws ecs update-service --cluster "${{ vars.ECS_CLUSTER }}" --service "${{ vars.ECS_WORKER_SERVICE }}" \
-            --task-definition "${{ steps.worker-taskdef.outputs.arn }}" --force-new-deployment \
-            --region "${{ inputs.aws_region }}"
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_WORKER_SERVICE" \
+            --task-definition "$TASKDEF_ARN" --force-new-deployment \
+            --region "$AWS_REGION"
 
       - name: Verify API deployment
         id: verify
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
+          AWS_REGION: ${{ inputs.aws_region }}
         run: |
-          AWS_MAX_ATTEMPTS=120 aws ecs wait services-stable --cluster "${{ vars.ECS_CLUSTER }}" --services "${{ vars.ECS_API_SERVICE }}" --region "${{ inputs.aws_region }}"
-          ACTIVE_TASKDEF=$(aws ecs describe-services --cluster "${{ vars.ECS_CLUSTER }}" --services "${{ vars.ECS_API_SERVICE }}" --region "${{ inputs.aws_region }}" --query 'services[0].taskDefinition' --output text)
-          ACTIVE_IMAGE=$(aws ecs describe-task-definition --task-definition "$ACTIVE_TASKDEF" --region "${{ inputs.aws_region }}" --query 'taskDefinition.containerDefinitions[0].image' --output text)
+          AWS_MAX_ATTEMPTS=120 aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE" --region "$AWS_REGION"
+          ACTIVE_TASKDEF=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE" --region "$AWS_REGION" --query 'services[0].taskDefinition' --output text)
+          ACTIVE_IMAGE=$(aws ecs describe-task-definition --task-definition "$ACTIVE_TASKDEF" --region "$AWS_REGION" --query 'taskDefinition.containerDefinitions[0].image' --output text)
           echo "Active image: $ACTIVE_IMAGE"
-          if echo "$ACTIVE_IMAGE" | grep -q "${{ env.IMAGE_TAG }}"; then
+          if echo "$ACTIVE_IMAGE" | grep -q "$IMAGE_TAG"; then
             echo "outcome=success" >> "$GITHUB_OUTPUT"
           else
             echo "outcome=rollback" >> "$GITHUB_OUTPUT"
-            echo "::error ::Deployment did not converge on ${{ env.IMAGE_TAG }} — circuit breaker rolled back to $ACTIVE_IMAGE"
+            echo "::error ::Deployment did not converge on ${IMAGE_TAG} — circuit breaker rolled back to $ACTIVE_IMAGE"
             exit 1
           fi
 

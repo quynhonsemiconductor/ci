@@ -127,13 +127,18 @@ runs:
     - name: Resolve tags
       id: tags
       shell: bash
+      env:
+        ECR_REGISTRY: ${{ inputs.ecr-registry }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        EXTRA_TAGS: ${{ inputs.extra-tags }}
       run: |
-        PRIMARY="${{ inputs.ecr-registry }}/${{ inputs.image-name }}:${{ inputs.image-tag }}"
+        PRIMARY="${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
         TAGS="$PRIMARY"
-        if [ -n "${{ inputs.extra-tags }}" ]; then
+        if [ -n "$EXTRA_TAGS" ]; then
           while IFS= read -r t; do
-            [ -n "$t" ] && TAGS="$TAGS"$'\n'"${{ inputs.ecr-registry }}/${{ inputs.image-name }}:$t"
-          done <<< "${{ inputs.extra-tags }}"
+            [ -n "$t" ] && TAGS="$TAGS"$'\n'"${ECR_REGISTRY}/${IMAGE_NAME}:$t"
+          done <<< "$EXTRA_TAGS"
         fi
         echo "tags<<EOF" >> "$GITHUB_OUTPUT"
         echo "$TAGS"      >> "$GITHUB_OUTPUT"
@@ -203,6 +208,9 @@ runs:
     - name: Expose image URI and digest
       id: expose
       shell: bash
+      env:
+        IMAGE_URI: ${{ steps.tags.outputs.image-uri }}
+        DIGEST: ${{ steps.build.outputs.digest }}
       run: |
-        echo "image-uri=${{ steps.tags.outputs.image-uri }}" >> "$GITHUB_OUTPUT"
-        echo "digest=${{ steps.build.outputs.digest }}"      >> "$GITHUB_OUTPUT"
+        echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+        echo "digest=${DIGEST}"      >> "$GITHUB_OUTPUT"

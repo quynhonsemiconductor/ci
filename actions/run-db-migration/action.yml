@@ -68,6 +68,9 @@ runs:
 
     - name: Confirm migration success
       shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        TASK_ARN: ${{ steps.migrate.outputs.task-arn }}
       run: |
-        echo "✓ Migrations applied on ${{ inputs.environment }} (task: ${{ steps.migrate.outputs.task-arn }})"
+        echo "✓ Migrations applied on ${ENVIRONMENT} (task: ${TASK_ARN})"
         echo "  Deploy can now proceed safely."

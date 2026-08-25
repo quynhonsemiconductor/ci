@@ -35,11 +35,16 @@ runs:
     - name: Create invalidation
       id: invalidate
       shell: bash
+      env:
+        DISTRIBUTION_ID: ${{ inputs.distribution-id }}
+        # Deliberately unquoted below for word-splitting — a space-separated list.
+        PATHS: ${{ inputs.paths }}
+        REGION: ${{ inputs.region }}
       run: |
         INVALIDATION_ID=$(aws cloudfront create-invalidation \
-          --distribution-id "${{ inputs.distribution-id }}" \
-          --paths ${{ inputs.paths }} \
-          --region "${{ inputs.region }}" \
+          --distribution-id "$DISTRIBUTION_ID" \
+          --paths $PATHS \
+          --region "$REGION" \
           --query 'Invalidation.Id' \
           --output text)
 
@@ -49,10 +54,14 @@ runs:
     - name: Wait for invalidation to complete
       if: inputs.wait == 'true'
       shell: bash
+      env:
+        DISTRIBUTION_ID: ${{ inputs.distribution-id }}
+        INVALIDATION_ID: ${{ steps.invalidate.outputs.invalidation-id }}
+        REGION: ${{ inputs.region }}
       run: |
-        echo "Waiting for invalidation ${{ steps.invalidate.outputs.invalidation-id }} to complete..."
+        echo "Waiting for invalidation ${INVALIDATION_ID} to complete..."
         aws cloudfront wait invalidation-completed \
-          --distribution-id "${{ inputs.distribution-id }}" \
-          --id "${{ steps.invalidate.outputs.invalidation-id }}" \
-          --region "${{ inputs.region }}"
+          --distribution-id "$DISTRIBUTION_ID" \
+          --id "$INVALIDATION_ID" \
+          --region "$REGION"
         echo "✓ Invalidation complete"

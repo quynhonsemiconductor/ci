@@ -38,11 +38,12 @@ runs:
         SOURCE_TAG:  ${{ inputs.source-tag }}
         RELEASE_TAG: ${{ inputs.release-tag }}
         REGION:      ${{ inputs.region }}
+        IMAGE_NAMES: ${{ inputs.image-names }}
       run: |
         set -euo pipefail
         PROMOTED=""
 
-        IFS=',' read -ra REPOS <<< "${{ inputs.image-names }}"
+        IFS=',' read -ra REPOS <<< "$IMAGE_NAMES"
         for repo in "${REPOS[@]}"; do
           repo="${repo// /}"  # trim whitespace
           echo "── Promoting $repo: ${SOURCE_TAG} → ${RELEASE_TAG}"
