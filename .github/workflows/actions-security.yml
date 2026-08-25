@@ -81,7 +81,7 @@ jobs:
 
       # TODO: pin to a full commit SHA (org convention) once this has run once
       # and the resolved SHA is visible in the Actions log — not verified here.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -99,7 +99,7 @@ jobs:
       - name: Upload SARIF (GHAS UI — advisory on free plan)
         if: always()
         continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
         with:
           sarif_file: zizmor.sarif
           category: zizmor-actions
