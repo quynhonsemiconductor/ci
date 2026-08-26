@@ -32,9 +32,22 @@
 # One copy, versioned like the rest of this repo's contents, removes that failure
 # mode rather than asking people to remember.
 #
-# The check NAME is `test-guard`, matching what rally's branch protection already
-# requires — GitHub matches required checks by name, not by workflow, so a repository
-# can switch to this without touching its ruleset.
+# THE CHECK THIS REPORTS IS `test-guard / test-guard`, NOT `test-guard`. A job that
+# calls a reusable workflow is named `<caller job>/<called job>` by GitHub — the
+# security suite in this repository shows up as `security / SAST (Semgrep)` for the
+# same reason. The job below is named `test-guard` and the caller's job will be too,
+# and the reported check is the pair.
+#
+# That makes this the WRONG form for a repository that already requires `test-guard`,
+# which includes rally: the ruleset would match nothing, and a required check that
+# never reports does not fail — it blocks every merge, indefinitely, showing as
+# "Expected" in the protection UI. Those repositories should call
+# `actions/agent-forge-test-guard` directly, which keeps the job local and the check
+# name intact. See the README for that form.
+#
+# This workflow is the right choice for a repository with no existing `test-guard`
+# requirement, whose ruleset can name `test-guard / test-guard` from the start, and
+# which would rather not carry the checkout and body-capture steps itself.
 # =============================================================================
 name: Reusable · agent-forge test-guard
 
