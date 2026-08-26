@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.13.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.12.1...v1.13.0) (2026-08-26)
+
+
+### Features
+
+* **agent-forge:** share the test-guard instead of copying it into every repo ([#96](https://github.com/QNSC-VN/qnsc-ci/issues/96)) ([8a365f7](https://github.com/QNSC-VN/qnsc-ci/commit/8a365f73c0311894282c616f387d17044da37ca7))
+
+
+### Bug Fixes
+
+* **ci:** release-please could cut a release but not label the pull request ([#97](https://github.com/QNSC-VN/qnsc-ci/issues/97)) ([cedd741](https://github.com/QNSC-VN/qnsc-ci/commit/cedd7412681a021151075aa709a5e524092520e3))
+
 ## [1.12.1](https://github.com/QNSC-VN/qnsc-ci/compare/v1.12.0...v1.12.1) (2026-08-25)
 
 
