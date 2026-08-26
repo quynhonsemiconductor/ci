@@ -50,8 +50,16 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | [`scan-secrets`](actions/scan-secrets/action.yml) | Gitleaks secret scan with SARIF upload to GitHub Security tab |
 | [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 
-Most repositories want the reusable workflow rather than the action directly — it
-brings the checkout and the pull-request-body handling with it:
+**Use the ACTION, not the reusable workflow, if `test-guard` is already a required
+check.** A job that calls a reusable workflow reports as `<caller job>/<called
+job>` — the security suite in this repo shows up as `security / SAST (Semgrep)` for
+exactly this reason. So the reusable form reports **`test-guard / test-guard`**, and
+a ruleset requiring `test-guard` matches nothing. A required check that never
+reports does not fail: it blocks every merge, indefinitely, showing as "Expected"
+in the protection UI.
+
+The action form keeps the job local, so the check keeps the name `test-guard` and an
+existing ruleset needs no change:
 
 ```yaml
 name: agent-forge test-guard
@@ -63,13 +71,28 @@ on:
 permissions:
   contents: read
 jobs:
-  test-guard:
-    uses: QNSC-VN/qnsc-ci/.github/workflows/agent-forge-guard.yml@v1
+  test-guard:            # this job id IS the check name — do not rename it
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0          # the guard diffs against the merge base
+          persist-credentials: false
+      - name: capture the pull request body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.txt"
+      - uses: QNSC-VN/qnsc-ci/actions/agent-forge-test-guard@v1
+        with:
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          body-file: ${{ runner.temp }}/pr-body.txt
 ```
 
-The check is named `test-guard`, which is what rally's branch protection already
-requires, so a repository can switch from its own copied version to this one
-without touching its ruleset.
+The reusable workflow (`.github/workflows/agent-forge-guard.yml@v1`) is shorter and
+carries the checkout and body handling for you. It is the right choice only for a
+repository that has **no** existing `test-guard` requirement, and whose ruleset can
+name `test-guard / test-guard` from the start.
 
 ### Notifications
 | Action | Description |
