@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.1](https://github.com/QNSC-VN/qnsc-ci/compare/v1.13.0...v1.13.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* **agent-forge:** the reusable reports `test-guard / test-guard`, not `test-guard` ([#99](https://github.com/QNSC-VN/qnsc-ci/issues/99)) ([cb1cc09](https://github.com/QNSC-VN/qnsc-ci/commit/cb1cc09454e56cfad5c638dd1ee84269188edce3))
+
 ## [1.13.0](https://github.com/QNSC-VN/qnsc-ci/compare/v1.12.1...v1.13.0) (2026-08-26)
 
 
