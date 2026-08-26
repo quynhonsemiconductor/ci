@@ -24,3 +24,17 @@ logs/
 
 # Node (if any tooling is added)
 node_modules/
+
+# Python. This repo now ships Python (scripts/, actions/agent-forge-test-guard/) and
+# runs it under pytest, so it generates bytecode. Unanchored on purpose: __pycache__
+# is always a build artefact wherever it appears, unlike a directory name that could
+# also be source — an unanchored `policy/` in agent-forge silently excluded a whole
+# source package from that repository.
+#
+# `scripts/__pycache__/pin_drift.cpython-314.pyc` was committed before this file had
+# a Python section; it is removed here rather than left, because a stale bytecode
+# file tracked in git will be checked out over a newer source file's cache and is
+# read by the interpreter in preference to nothing at all.
+__pycache__/
+*.py[cod]
+.pytest_cache/

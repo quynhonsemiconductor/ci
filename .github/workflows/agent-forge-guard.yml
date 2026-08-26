@@ -1,0 +1,93 @@
+# =============================================================================
+# Reusable agent-forge test-guard — the required check that fails a pull request
+# for making a repository's tests weaker without saying so.
+#
+# Caller (a product repository):
+#   name: agent-forge test-guard
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, edited]
+#   permissions:
+#     contents: read
+#   jobs:
+#     test-guard:
+#       uses: QNSC-VN/qnsc-ci/.github/workflows/agent-forge-guard.yml@v1
+#
+# `edited` MATTERS and the caller must include it: the approval paths are declared
+# in the pull request BODY, so editing the body to add an approval has to re-run the
+# check. Without it an approved change keeps a red tick nobody can clear.
+#
+# The caller should NOT add a concurrency group. Combined with `edited`, a group
+# with cancel-in-progress is the shape that produced false greens on rally and
+# opshub: an edit cancels the real run and GitHub counts the replacement's skipped
+# jobs as passing. That failure needed a second ingredient this workflow does not
+# have, so it would be safe today — and it is left out anyway, because this is a
+# REQUIRED check and the cost of being wrong is a merge that passed unexamined.
+#
+# WHY THIS IS SHARED RATHER THAN COPIED. It used to be two files copied into each
+# repository: a workflow and a ~280-line script. The script then drifted, and drifted
+# in the direction nobody watches — rally's copy was fixed for a shell-injection
+# finding (#495) and the fix never returned to the canonical template, so every
+# repository onboarded after that point would have received the vulnerable version.
+# One copy, versioned like the rest of this repo's contents, removes that failure
+# mode rather than asking people to remember.
+#
+# The check NAME is `test-guard`, matching what rally's branch protection already
+# requires — GitHub matches required checks by name, not by workflow, so a repository
+# can switch to this without touching its ruleset.
+# =============================================================================
+name: Reusable · agent-forge test-guard
+
+on:
+  workflow_call:
+    inputs:
+      base_ref:
+        description: >
+          Base branch to diff against. Defaults to the pull request's own base, which
+          is what a product repository wants; an override exists for a repository whose
+          release flow merges elsewhere.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-guard:
+    # The job id IS the check name a caller's branch protection sees. Do not rename it.
+    name: test-guard
+    runs-on: ubuntu-latest
+    # The guard is a diff and a script. Ten minutes is generous; the point is that a
+    # hung required check blocks a merge indefinitely and looks identical to one that
+    # is still running.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The guard diffs against the merge base, which does not exist in a shallow
+          # clone.
+          fetch-depth: 0
+          # It reads history and runs a script over attacker-influenced input, and it
+          # never pushes. A persisted checkout credential would be available to
+          # everything that runs afterwards.
+          persist-credentials: false
+
+      - name: Capture the pull request body
+        # Written to a file rather than passed as an argument: a body containing a
+        # shell metacharacter would otherwise be interpreted, and the body is
+        # attacker-controlled text.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.txt"
+
+      - name: Run the guard
+        # `@v1` rather than a commit SHA, and deliberately: this is a same-repository
+        # reference, so the action and the workflow calling it are released together.
+        # Pinning a SHA here would mean every release of this repo has to rewrite this
+        # line to point at its own new commit, which cannot be done before the commit
+        # exists. Same reasoning as rally pinning `actions-security.yml@v1`.
+        uses: QNSC-VN/qnsc-ci/actions/agent-forge-test-guard@v1
+        with:
+          base-ref: ${{ inputs.base_ref || github.event.pull_request.base.ref }}
+          body-file: ${{ runner.temp }}/pr-body.txt
