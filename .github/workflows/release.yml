@@ -13,6 +13,25 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # REQUIRED, and its absence is why every push to main since v1.12.1 failed.
+      #
+      # release-please's last act after cutting a release is to move the release
+      # pull request's label from `autorelease: pending` to `autorelease: tagged`.
+      # A label on a pull request is an ISSUES resource, not a pull-requests one,
+      # so without this the sequence was: create the v1.12.1 release (succeeded,
+      # 04:51:13), relabel the pull request (403 Resource not accessible by
+      # integration), job fails 8 seconds later.
+      #
+      # The release existed and the label did not, so #94 stayed `pending` — which
+      # is release-please's marker for "merged but not yet released". Every
+      # subsequent push therefore retried the SAME release and failed the same way,
+      # and no new release pull request could be proposed behind the stuck one. Two
+      # merged features sat unreleased.
+      #
+      # The failure mode is worth naming: a missing permission on a step that runs
+      # AFTER the visible work, so the released artefact looks fine and the
+      # automation is quietly wedged.
+      issues: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       major: ${{ steps.release.outputs.major }}
