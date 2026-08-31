@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.2](https://github.com/QNSC-VN/qnsc-ci/compare/v1.13.1...v1.13.2) (2026-08-31)
+
+
+### Bug Fixes
+
+* **promote-ecr-images:** raise the ECR poll budget from 10 to 17 minutes ([#101](https://github.com/QNSC-VN/qnsc-ci/issues/101)) ([43f6daf](https://github.com/QNSC-VN/qnsc-ci/commit/43f6daf7b7e9d56b3e2eb44907caa2c7a31442dc))
+
 ## [1.13.1](https://github.com/QNSC-VN/qnsc-ci/compare/v1.13.0...v1.13.1) (2026-08-26)
 
 
