@@ -50,8 +50,34 @@ runs:
 
           MANIFEST=""
           # The release-commit's develop build may still be pushing sha-<sha> when this
-          # prod promote runs (same merge triggers both). Poll up to ~10 min.
-          for attempt in $(seq 1 40); do
+          # prod promote runs (same merge triggers both). Poll up to ~17 min.
+          #
+          # 68 x 15s, NOT the 40 it was. This is a SAFETY NET for a race the caller
+          # should not be losing in the first place, and the number is derived from the
+          # release that proved 10 min was not enough rather than picked round:
+          #
+          #   rally v0.7.13, 2026-08-31. The prod promote gave up at 11:18:01 while the
+          #   develop deploy's "Wait for Backend · CI" gate did not clear until 11:18:22
+          #   and its api image landed at 11:21:56 — so the budget expired 21 SECONDS
+          #   before the thing it waits for even started building. Backend · CI had gone
+          #   from 8m36s to 15m16s on that commit, all of it in Docker build: the release
+          #   carried a pnpm-lock.yaml change, which invalidates the `deps`/`prod-deps`
+          #   layers and forces a full `pnpm install` in both. Renovate bumps lockfiles
+          #   routinely, so that is a recurring cost, not a one-off.
+          #
+          # The margin was always thin — promote waited 7m12s / 7m23s / 9m03s / 6m21s on
+          # the four releases before it, so v0.7.11 cleared a 10 min budget by 57s.
+          # 17 min covers the observed 15m16s worst case and still fits inside the
+          # calling job's `timeout-minutes: 20` with ~2 min for checkout and AWS login.
+          #
+          # RAISING THIS IS NOT THE REAL FIX, and the next person should not reach for it
+          # again. A timer is standing in for an ordering guarantee: the caller's tag
+          # deploy skips its "Wait for Backend · CI" gate (correctly — Backend · CI runs
+          # on main, not on tags) and then races the develop deploy it depends on. The
+          # fix is for the tag deploy to WAIT on the develop backend-deploy run for the
+          # same sha, which is the precondition the error message below already states.
+          # Once every caller does that, this loop should never poll more than once.
+          for attempt in $(seq 1 68); do
             MANIFEST=$(aws ecr batch-get-image \
               --repository-name "$repo" \
               --image-ids imageTag="${SOURCE_TAG}" \
@@ -60,12 +86,12 @@ runs:
             if [[ -n "$MANIFEST" && "$MANIFEST" != "None" ]]; then
               break
             fi
-            echo "  [${attempt}/40] $repo:${SOURCE_TAG} not in ECR yet — waiting for the develop build (15s)…"
+            echo "  [${attempt}/68] $repo:${SOURCE_TAG} not in ECR yet — waiting for the develop build (15s)…"
             sleep 15
           done
 
           if [[ -z "$MANIFEST" || "$MANIFEST" == "None" ]]; then
-            echo "ERROR: $repo:${SOURCE_TAG} not found in ECR after ~10 min."
+            echo "ERROR: $repo:${SOURCE_TAG} not found in ECR after ~17 min."
             echo "The commit must be merged to main and deployed to develop before tagging a release."
             exit 1
           fi
