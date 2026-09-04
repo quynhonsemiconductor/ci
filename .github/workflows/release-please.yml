@@ -6,7 +6,7 @@
 # Caller:
 #   jobs:
 #     release:
-#       uses: QNSC-VN/qnsc-ci/.github/workflows/release-please.yml@v1
+#       uses: quynhonsemiconductor/qnsc-ci/.github/workflows/release-please.yml@v1
 #       secrets:
 #         RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 #
