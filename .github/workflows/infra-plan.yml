@@ -87,7 +87,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: QNSC-VN/qnsc-ci/actions/setup-tofu-aws@v1
+      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-tofu-aws@v1
         with:
           # fmt needs no cloud access; assume the read-only plan role for parity.
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
@@ -110,7 +110,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: QNSC-VN/qnsc-ci/actions/setup-tofu-aws@v1
+      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-tofu-aws@v1
         with:
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}

@@ -56,7 +56,7 @@ runs:
   steps:
     - name: Run migration task
       id: migrate
-      uses: QNSC-VN/qnsc-ci/actions/ecs-run-task@v1
+      uses: quynhonsemiconductor/qnsc-ci/actions/ecs-run-task@v1
       with:
         cluster: ${{ inputs.cluster }}
         task-definition: ${{ inputs.task-definition }}

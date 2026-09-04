@@ -36,7 +36,7 @@ import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
-OWNER = "QNSC-VN"
+OWNER = "quynhonsemiconductor"
 
 # The two repos that DEFINE the shared versions, excluded because they are not consumers:
 # qnsc-tf-modules holds the modules rather than pinning them, and qnsc-ci referencing its

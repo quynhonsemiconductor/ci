@@ -4,7 +4,7 @@
 # Caller:
 #   jobs:
 #     labeler:
-#       uses: QNSC-VN/qnsc-ci/.github/workflows/labeler.yml@v1
+#       uses: quynhonsemiconductor/qnsc-ci/.github/workflows/labeler.yml@v1
 #
 # The label map (.github/labeler.yml) stays PRODUCT-LOCAL — it references
 # each repo's own paths. This workflow only provides the shared plumbing.
