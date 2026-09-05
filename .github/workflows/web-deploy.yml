@@ -133,7 +133,7 @@ jobs:
       # ── Install (pnpm — org default) ────────────────────────────────────────
       - name: Install dependencies (pnpm)
         if: inputs.package_manager == 'pnpm'
-        uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@v1
+        uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1
         with:
           node-version: ${{ inputs.node_version }}
           pnpm-version: ${{ inputs.pnpm_version }}
@@ -315,7 +315,7 @@ jobs:
 
       - name: Post-deploy health check
         if: vars.APP_URL != ''
-        uses: quynhonsemiconductor/qnsc-ci/actions/post-deploy-health-check@v1
+        uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@v1
         with:
           url: ${{ vars.APP_URL }}
           expected-status: '200'
@@ -339,7 +339,7 @@ jobs:
 
       - name: Notify deploy result
         if: always()
-        uses: quynhonsemiconductor/qnsc-ci/actions/notify-deploy@v1
+        uses: quynhonsemiconductor/ci/actions/notify-deploy@v1
         with:
           webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
           status: ${{ job.status == 'success' && 'success' || 'failure' }}

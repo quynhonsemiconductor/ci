@@ -11,7 +11,7 @@
 #     contents: read
 #   jobs:
 #     test-guard:
-#       uses: quynhonsemiconductor/qnsc-ci/.github/workflows/agent-forge-guard.yml@v1
+#       uses: quynhonsemiconductor/ci/.github/workflows/agent-forge-guard.yml@v1
 #
 # `edited` MATTERS and the caller must include it: the approval paths are declared
 # in the pull request BODY, so editing the body to add an approval has to re-run the
@@ -100,7 +100,7 @@ jobs:
         # Pinning a SHA here would mean every release of this repo has to rewrite this
         # line to point at its own new commit, which cannot be done before the commit
         # exists. Same reasoning as rally pinning `actions-security.yml@v1`.
-        uses: quynhonsemiconductor/qnsc-ci/actions/agent-forge-test-guard@v1
+        uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1
         with:
           base-ref: ${{ inputs.base_ref || github.event.pull_request.base.ref }}
           body-file: ${{ runner.temp }}/pr-body.txt

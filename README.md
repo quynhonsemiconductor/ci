@@ -83,7 +83,7 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.txt"
-      - uses: quynhonsemiconductor/qnsc-ci/actions/agent-forge-test-guard@v1
+      - uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1
         with:
           base-ref: ${{ github.event.pull_request.base.ref }}
           body-file: ${{ runner.temp }}/pr-body.txt
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@main
+      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
         with:
           node-version: '22'
           pnpm-version: '10.10.0'
@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@main
+      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
         with:
           node-version: '22'
           pnpm-version: '10.10.0'
@@ -170,12 +170,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@main
+      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
         with:
           node-version: '22'
           pnpm-version: '10.10.0'
       - run: pnpm build:openapi      # generates openapi.json
-      - uses: quynhonsemiconductor/qnsc-ci/actions/publish-openapi-spec@main
+      - uses: quynhonsemiconductor/ci/actions/publish-openapi-spec@main
         with:
           artifact-name: openapi-spec-${{ github.sha }}
       - uses: actions/download-artifact@v4
@@ -183,7 +183,7 @@ jobs:
           name: openapi-spec-base    # uploaded by base-branch CI
           path: base-spec/
         continue-on-error: true      # graceful on first run / new branch
-      - uses: quynhonsemiconductor/qnsc-ci/actions/validate-openapi-contract@main
+      - uses: quynhonsemiconductor/ci/actions/validate-openapi-contract@main
         with:
           current-spec-path: openapi.json
           base-spec-path: base-spec/openapi.json
@@ -207,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # 1. AWS auth + ECR login
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-aws-oidc@main
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
         id: aws
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rally-${{ inputs.environment }}-github-deploy
@@ -215,7 +215,7 @@ jobs:
           ecr-login: 'true'
 
       # 2. Build & push image
-      - uses: quynhonsemiconductor/qnsc-ci/actions/build-push-ecr@main
+      - uses: quynhonsemiconductor/ci/actions/build-push-ecr@main
         id: build
         with:
           ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
@@ -226,12 +226,12 @@ jobs:
           cache-scope: api
 
       # 3. Attest (SOC 2 / supply-chain evidence)
-      - uses: quynhonsemiconductor/qnsc-ci/actions/attest-image@main
+      - uses: quynhonsemiconductor/ci/actions/attest-image@main
         with:
           image-ref: ${{ steps.build.outputs.image-uri }}
 
       # 4. Migrate DB (MUST run before new app version goes live)
-      - uses: quynhonsemiconductor/qnsc-ci/actions/run-db-migration@main
+      - uses: quynhonsemiconductor/ci/actions/run-db-migration@main
         with:
           cluster: ${{ vars.ECS_CLUSTER }}
           task-definition: rally-${{ inputs.environment }}-migrator
@@ -249,7 +249,7 @@ jobs:
             --region ${{ vars.AWS_REGION }}
 
       # 6. Verify ECS stabilized
-      - uses: quynhonsemiconductor/qnsc-ci/actions/verify-ecs-deploy@main
+      - uses: quynhonsemiconductor/ci/actions/verify-ecs-deploy@main
         with:
           cluster: ${{ vars.ECS_CLUSTER }}
           service: ${{ vars.ECS_API_SERVICE }}
@@ -257,13 +257,13 @@ jobs:
           region: ${{ vars.AWS_REGION }}
 
       # 7. Health-check live endpoint
-      - uses: quynhonsemiconductor/qnsc-ci/actions/post-deploy-health-check@main
+      - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
         with:
           url: https://api.rally.io/v1/health/ready
           expected-version: ${{ env.IMAGE_TAG }}
 
       # 8. Notify result
-      - uses: quynhonsemiconductor/qnsc-ci/actions/notify-deploy@main
+      - uses: quynhonsemiconductor/ci/actions/notify-deploy@main
         if: always()
         with:
           webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
@@ -288,12 +288,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@main
+      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
         with:
           node-version: '22'
           pnpm-version: '10.10.0'
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-aws-oidc@main
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rally-${{ inputs.environment }}-github-deploy
           region: ${{ vars.AWS_REGION }}
@@ -304,16 +304,16 @@ jobs:
           aws s3 sync dist/ s3://rally-${{ inputs.environment }}-web \
             --delete --region ${{ vars.AWS_REGION }}
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/cloudfront-invalidate@main
+      - uses: quynhonsemiconductor/ci/actions/cloudfront-invalidate@main
         with:
           distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
           region: ${{ vars.AWS_REGION }}
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/post-deploy-health-check@main
+      - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
         with:
           url: https://app.rally.io
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/notify-deploy@main
+      - uses: quynhonsemiconductor/ci/actions/notify-deploy@main
         if: always()
         with:
           webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
@@ -334,7 +334,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # full history for gitleaks
-      - uses: quynhonsemiconductor/qnsc-ci/actions/scan-secrets@main
+      - uses: quynhonsemiconductor/ci/actions/scan-secrets@main
 
   sast:                           # GitHub-native CodeQL — no composite needed
     runs-on: ubuntu-latest
@@ -355,11 +355,11 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-aws-oidc@main
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rally-develop-github-deploy
           region: ${{ vars.AWS_REGION }}
-      - uses: quynhonsemiconductor/qnsc-ci/actions/ecr-cleanup@main
+      - uses: quynhonsemiconductor/ci/actions/ecr-cleanup@main
         with:
           repositories: |
             rally-api
@@ -589,10 +589,10 @@ Auto-detects Slack vs Discord by webhook URL pattern.
 Pin to a release tag for production stability:
 ```yaml
 # Production — pin to a tag
-uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@v1
+uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1
 
 # Dev / fast iteration
-uses: quynhonsemiconductor/qnsc-ci/actions/setup-node-pnpm@main
+uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
 ```
 
 This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Consuming repos should pin to `@v1` or `@v1.2.0` in production workflows.

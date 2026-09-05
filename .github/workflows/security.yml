@@ -6,7 +6,7 @@
 #
 #   jobs:
 #     security:
-#       uses: quynhonsemiconductor/qnsc-ci/.github/workflows/security.yml@v1
+#       uses: quynhonsemiconductor/ci/.github/workflows/security.yml@v1
 #       with:
 #         product: rally
 #       secrets: inherit
@@ -219,7 +219,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/scan-secrets@v1
+      - uses: quynhonsemiconductor/ci/actions/scan-secrets@v1
         with:
           fail-on-leak: 'true'
 

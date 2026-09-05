@@ -18,7 +18,7 @@ inputs:
   git-token:
     description: >
       Optional token used to fetch PRIVATE Terraform modules over HTTPS during
-      `tofu init` (e.g. git::https://github.com/<org>/qnsc-tf-modules.git//...).
+      `tofu init` (e.g. git::https://github.com/<org>/tf-modules.git//...).
       When set, git is configured to send it as credentials for github.com.
       Leave empty when all module sources are public or local paths.
     required: false
@@ -28,7 +28,7 @@ runs:
   using: composite
   steps:
     # Authenticate HTTPS git fetches to github.com so `tofu init` can clone
-    # PRIVATE module repos (e.g. qnsc-tf-modules). Without this, git prompts for
+    # PRIVATE module repos (e.g. tf-modules). Without this, git prompts for
     # a username on a private source and fails: "could not read Username for
     # 'https://github.com'". Scoped to github.com only; the token is short-lived
     # (a GitHub App installation token, ~1h) and never written to the repo.

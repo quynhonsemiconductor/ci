@@ -17,7 +17,7 @@
 #
 #   jobs:
 #     actions-security:
-#       uses: quynhonsemiconductor/qnsc-ci/.github/workflows/actions-security.yml@v1
+#       uses: quynhonsemiconductor/ci/.github/workflows/actions-security.yml@v1
 #
 # Then point the ruleset's required status check at this job's name —
 # "Actions security (zizmor)" — instead of `Analyze (actions)` / `CodeQL`.
