@@ -92,7 +92,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-tofu-aws@v1
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@v1
         with:
           # fmt needs no cloud access; assume the read-only plan role for parity.
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
@@ -125,9 +125,9 @@ jobs:
           app-id: ${{ vars.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
           # Least privilege: only needs to read the shared modules repo.
-          repositories: qnsc-tf-modules
+          repositories: tf-modules
 
-      - uses: quynhonsemiconductor/qnsc-ci/actions/setup-tofu-aws@v1
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@v1
         with:
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}
