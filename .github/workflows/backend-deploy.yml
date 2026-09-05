@@ -632,7 +632,7 @@ jobs:
           # attestations) while --repo still scopes the source to the caller.
           gh attestation verify "oci://${REGISTRY}/${PRODUCT}-api@${DIGEST}" \
             --repo "${REPO}" \
-            --signer-workflow "${REPO_OWNER}/qnsc-ci/.github/workflows/backend-deploy.yml"
+            --signer-workflow "${REPO_OWNER}/ci/.github/workflows/backend-deploy.yml"
 
       - name: Deploy API service
         env:
