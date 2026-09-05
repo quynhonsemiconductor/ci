@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.3](https://github.com/quynhonsemiconductor/ci/compare/v1.13.2...v1.13.3) (2026-09-05)
+
+
+### Bug Fixes
+
+* **deploy:** correct attestation signer-workflow path ([#109](https://github.com/quynhonsemiconductor/ci/issues/109)) ([659ad59](https://github.com/quynhonsemiconductor/ci/commit/659ad590a5811674365f1cc049a7f0dad1952483))
+* **infra-plan:** auth private module fetch via RELEASE_BOT app token ([#105](https://github.com/quynhonsemiconductor/ci/issues/105)) ([1adf6c7](https://github.com/quynhonsemiconductor/ci/commit/1adf6c7a6dd7b2e8ce105ec607d20da0f65af634))
+
 ## [1.13.2](https://github.com/QNSC-VN/qnsc-ci/compare/v1.13.1...v1.13.2) (2026-08-31)
 
 
