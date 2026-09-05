@@ -26,6 +26,11 @@ on:
     secrets:
       AWS_ACCOUNT_ID:      { required: true }
       tf_secret_vars_json: { required: false }
+      # Private key for the RELEASE_BOT GitHub App, used to mint a short-lived
+      # token so `tofu init` can fetch PRIVATE modules (qnsc-tf-modules) over
+      # HTTPS. Optional: if absent, module fetch falls back to the job token
+      # (works only for public/same-repo sources).
+      RELEASE_BOT_PRIVATE_KEY: { required: false }
 
 permissions:
   id-token: write
@@ -110,11 +115,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # Mint a short-lived GitHub App token so `tofu init` can clone the PRIVATE
+      # qnsc-tf-modules over HTTPS. continue-on-error so repos with only public/
+      # local modules (no private key wired) still run.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        id: module-token
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          # Least privilege: only needs to read the shared modules repo.
+          repositories: qnsc-tf-modules
+
       - uses: quynhonsemiconductor/qnsc-ci/actions/setup-tofu-aws@v1
         with:
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}
           tofu-version: ${{ inputs.tofu_version }}
+          git-token:    ${{ steps.module-token.outputs.token }}
 
       - name: Export non-secret TF_VARs
         env:
