@@ -15,10 +15,31 @@ inputs:
     description: OpenTofu version to install.
     required: false
     default: "1.9.1"
+  git-token:
+    description: >
+      Optional token used to fetch PRIVATE Terraform modules over HTTPS during
+      `tofu init` (e.g. git::https://github.com/<org>/qnsc-tf-modules.git//...).
+      When set, git is configured to send it as credentials for github.com.
+      Leave empty when all module sources are public or local paths.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    # Authenticate HTTPS git fetches to github.com so `tofu init` can clone
+    # PRIVATE module repos (e.g. qnsc-tf-modules). Without this, git prompts for
+    # a username on a private source and fails: "could not read Username for
+    # 'https://github.com'". Scoped to github.com only; the token is short-lived
+    # (a GitHub App installation token, ~1h) and never written to the repo.
+    - name: Configure git auth for private module fetch
+      if: ${{ inputs.git-token != '' }}
+      shell: bash
+      env:
+        GIT_TOKEN: ${{ inputs.git-token }}
+      run: |
+        git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+
     - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4  # v2.0.2
       with:
         tofu_version: ${{ inputs.tofu-version }}
