@@ -1,4 +1,4 @@
-# qnsc-ci
+# ci
 
 Shared GitHub Actions composite actions for all QNSC product repositories (Rally, OpsHub, and future products).
 
@@ -434,7 +434,7 @@ trusted builder — so pin the signer identity, not just the source repo):
 ```bash
 gh attestation verify oci://registry/name@sha256:… \
   --repo <owner>/<consumer-repo> \
-  --signer-workflow <owner>/qnsc-ci/.github/workflows/backend-deploy.yml
+  --signer-workflow <owner>/ci/.github/workflows/backend-deploy.yml
 ```
 
 ---
