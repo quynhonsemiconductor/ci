@@ -1,0 +1,48 @@
+# =============================================================================
+# Stack conformance — weekly report on divergence between the product stack modules.
+#
+# The reasoning, and the three measured divergences that prompted it (a $15/mo ElastiCache
+# node, a guard that exited 0 on violation, and a registry that existed in three states),
+# live in scripts/stack_conformance.py. This file only schedules it.
+#
+# COMPLEMENTS pin_drift.py rather than duplicating it. pin_drift asks "do the repos agree on
+# a VERSION of a shared module?"; this asks "do the repos agree on the STRUCTURE of the
+# composition they each copied?" A repo can be perfectly pinned and still be missing a
+# capability its peers have — which is exactly what happened with cache.shared.
+#
+# WEEKLY, like pin-drift, because the unit of loss is a divergence that persists rather than
+# dollars per day. Contrast unmanaged-resources.yml in qnsc-infra, which is daily.
+# =============================================================================
+name: Stack conformance
+
+on:
+  schedule:
+    # Monday 08:30 Asia/Ho_Chi_Minh. Cron is UTC-only, hence 01:30. Half an hour after
+    # pin-drift so the two reports land together without competing for runners.
+    - cron: '30 1 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Compare product stack modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every product repo read here is public, so this needs no App token and no write
+      # scope — the same reasoning as pin-drift.yml. If a product is ever made private this
+      # job starts failing on the clone, which is the right moment to notice rather than a
+      # silently short report.
+      #
+      # Exits non-zero when an undecided divergence exists, which turns the scheduled run
+      # red and makes GitHub notify. Record deliberate differences in ACCEPTED in the script
+      # rather than leaving the report red.
+      - name: Compare stack modules
+        run: python3 scripts/stack_conformance.py
