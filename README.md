@@ -22,7 +22,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`build-push-ecr`](actions/build-push-ecr/action.yml) | Buildx + ECR build + push (OIDC-based, no stored keys) |
-| [`ecr-cleanup`](actions/ecr-cleanup/action.yml) | Delete old ECR images per repo (keep-N, protect semver tags) |
 | [`attest-image`](actions/attest-image/action.yml) | GitHub-native SLSA provenance attestation (SOC 2 / supply chain) |
 
 ### ECS / Deploy
@@ -36,7 +35,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 ### CDN / Frontend
 | Action | Description |
 |---|---|
-| [`cloudfront-invalidate`](actions/cloudfront-invalidate/action.yml) | Create a CloudFront invalidation + optional wait for completion |
 
 ### API Contract
 | Action | Description |
@@ -377,11 +375,6 @@ jobs:
           aws s3 sync dist/ s3://rova-${{ inputs.environment }}-web \
             --delete --region ${{ vars.AWS_REGION }}
 
-      - uses: quynhonsemiconductor/ci/actions/cloudfront-invalidate@main
-        with:
-          distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-          region: ${{ vars.AWS_REGION }}
-
       - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
         with:
           url: https://app.rova.io
@@ -419,27 +412,6 @@ jobs:
         with:
           languages: javascript-typescript
       - uses: github/codeql-action/analyze@v3
-```
-
-### ECR cleanup (weekly cron)
-
-```yaml
-jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
-        with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rova-develop-github-deploy
-          region: ${{ vars.AWS_REGION }}
-      - uses: quynhonsemiconductor/ci/actions/ecr-cleanup@main
-        with:
-          repositories: |
-            rova-api
-            rova-worker
-            rova-migrator
-          keep-count: '20'
-          region: ${{ vars.AWS_REGION }}
 ```
 
 ---
@@ -512,17 +484,6 @@ gh attestation verify oci://registry/name@sha256:… \
 
 ---
 
-### `ecr-cleanup`
-| Input | Default | Description |
-|---|---|---|
-| `repositories` | **required** | Newline-separated ECR repo names |
-| `keep-count` | `20` | Most-recent images to keep per repo |
-| `protected-tag-pattern` | `^v[0-9]+\.[0-9]+\.[0-9]+$` | Tags matching this regex are never deleted |
-| `region` | **required** | AWS region |
-| `dry-run` | `false` | Print without deleting |
-
----
-
 ### `ecs-run-task`
 | Input | Default | Description |
 |---|---|---|
@@ -580,20 +541,6 @@ Wrapper around `ecs-run-task` for the Drizzle migration "third motion". Fails fa
 | `timeout-seconds` | `120` | Max poll time |
 | `poll-interval-seconds` | `10` | Poll interval |
 | `expected-status` | `200` | Expected HTTP status code |
-
----
-
-### `cloudfront-invalidate`
-| Input | Default | Description |
-|---|---|---|
-| `distribution-id` | **required** | CloudFront distribution ID |
-| `paths` | `/*` | Space-separated paths to invalidate |
-| `region` | `us-east-1` | AWS region |
-| `wait` | `false` | Wait for invalidation to reach `Completed` |
-
-| Output | Description |
-|---|---|
-| `invalidation-id` | CloudFront invalidation ID |
 
 ---
 
