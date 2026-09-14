@@ -116,6 +116,30 @@ ACCEPTED: dict[str, str] = {
     # SES from noreply@qnsc.vn / opshub-noreply@qnsc.vn, whose DKIM records live in the
     # Cloudflare zone rather than a product stack.
     "module::dns_ses_dkim": "qnsc-kb signs its own subdomain; zone-level DKIM for the others",
+    # Added to rova's stack on 2026-09-14 to rebuild rova-prod into rova-prod-db: AWS refuses
+    # to move a DB instance between subnet groups in the same VPC, so the only route into the
+    # correctly-named group was a restore into a new instance. opshub and qnsc-kb were already
+    # in their own groups and needed neither.
+    #
+    # ACCEPTED rather than ported, because porting would add plumbing to two products that
+    # have no use for it, and `snapshot_identifier` is a loaded argument to leave lying around
+    # — it is ForceNew in the provider, held under ignore_changes precisely so that editing a
+    # string cannot destroy a database. Port it when a product actually needs a restore.
+    "rds::snapshot_identifier": "rova only — added for the 2026-09-14 subnet-group rebuild; port on demand",
+    "rds::skip_final_snapshot": "rova only — follows rds::snapshot_identifier",
+    # `create_standalone` only means anything DURING a standalone-to-bundle migration: it is
+    # the retained-rollback step where both forms exist at once. qnsc-kb was already bundled,
+    # so it never needed the argument. opshub used it on 2026-09-13 and rova before that.
+    "secrets::create_standalone": "qnsc-kb was already bundled; the argument only applies mid-migration",
+    # ecs-service defaults container_port to 3000. rova's api omits it and therefore GETS 3000;
+    # opshub passes 3000 explicitly, which restates the default; qnsc-kb passes 8000 because
+    # uvicorn binds there. So nothing is missing from rova — the three agree on the value and
+    # differ only on whether they say it out loud. Not worth churning a task definition over.
+    "api::container_port": "all three agree on the effective port; only qnsc-kb differs (8000, uvicorn)",
+    # Same shape: rova's worker pins 3001 and qnsc-kb's 8001, while opshub's takes the 3000
+    # default. Inert either way — a worker serves no HTTP, so the mapping is unused. Revisit
+    # if opshub's worker ever exposes a metrics or health port.
+    "worker::container_port": "workers expose no HTTP; the mapping is unused in all three",
 }
 
 
