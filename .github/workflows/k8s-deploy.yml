@@ -1,0 +1,144 @@
+name: k8s-deploy
+
+# The delivery path for a product on Kubernetes (§11).
+#
+#   PR              tests · build · push to ECR with an IMMUTABLE tag
+#   merge to main   CI bumps the dev tag in `gitops` → ArgoCD syncs dev
+#   promote         PR in `gitops` changing the prod tag → approval → ArgoCD syncs prod
+#   rollback        revert that commit
+#
+# A product repository NEVER touches a cluster. It builds an image and edits one
+# line in another repository; ArgoCD reconciles from there. That is the whole
+# mechanism, and it is why branch protection on `gitops` is a production access
+# control rather than a code-quality convention (§10b).
+#
+# ── WHAT THIS REPLACES, AND WHAT IT MUST NOT LOSE ──────────────────────────────
+# §11 names three properties of the current ECS pipeline and says losing any of
+# them is a silent regression. All three are preserved by REUSING the existing
+# composite actions rather than writing new ones:
+#
+#   multi-arch    arm64 for rova and opshub. qnsc-kb stays amd64 until §4c splits
+#                 clamav out — `clamav/clamav` publishes no arm64 tag
+#   build cache   GitHub Actions cache. Moved off the ECR `registry` backend on
+#                 2026-09-13 after August's ECR bill was ~94% data transfer
+#   attestation   rova's deploy verifies image attestation before rolling. Kept —
+#                 and Kubernetes makes it STRONGER: Sigstore policy-controller
+#                 rejects an unsigned image cluster-wide, so a bypassed pipeline
+#                 cannot deploy one (§10)
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Short slug — rova · opshub · kb. NOT qnsc-kb (§7c).'
+        type: string
+        required: true
+      services:
+        description: 'Space-separated, for the gitops bump: "api worker migrator".'
+        type: string
+        required: true
+      services-json:
+        description: 'The same list as JSON, for the build matrix: ["api","worker","migrator"].'
+        type: string
+        required: true
+      platforms:
+        description: >
+          linux/arm64 by default. qnsc-kb passes linux/amd64 until the clamav
+          split lands (§4c) — that one line is worth ~$35/month.
+        type: string
+        default: linux/arm64
+      dockerfile:
+        type: string
+        default: Dockerfile
+      aws-region:
+        type: string
+        default: ap-southeast-1
+    secrets:
+      aws-role-arn:
+        required: true
+      gitops-token:
+        description: >
+          §10b — scope this to the DEV path only. A token that can write prod.yaml
+          makes the promotion review decorative, and the CI identity has no reason
+          to hold one.
+        required: true
+
+permissions:
+  contents: read
+  id-token: write        # OIDC to AWS — no long-lived access keys
+  attestations: write    # build provenance
+
+concurrency:
+  # One deploy per product at a time. Two concurrent bumps race on the same file
+  # in `gitops`, and the loser silently reverts the winner.
+  group: k8s-deploy-${{ inputs.product }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # One image per service. A product is N services sharing a repository, and
+      # each gets its own ECR repository named <product>-<service> (§7c).
+      matrix:
+        service: ${{ fromJSON(inputs.services-json) }}
+      fail-fast: false
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compute the tag
+        id: tag
+        run: |
+          # §11 — `sha-<commit>` is the IDENTITY tag. Every build gets one, it is
+          # immutable by construction (a commit hash cannot mean two things), and
+          # it is what DEV deploys. Production gets a second `v<version>` tag on
+          # the same image at promotion; nothing is rebuilt.
+          echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
+        id: aws
+        with:
+          role-arn: ${{ secrets.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+          ecr-login: true
+
+      - name: Build and push
+        id: build
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@main
+        with:
+          ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
+          # §7c — the ECR repository carries NO environment. Promotion is "the
+          # same image gets a second tag", so a per-environment repository would
+          # mean copying bytes between them and the attestation below would stop
+          # covering what runs in production.
+          image-name: ${{ inputs.product }}-${{ matrix.service }}
+          image-tag: ${{ steps.tag.outputs.tag }}
+          platforms: ${{ inputs.platforms }}
+          dockerfile: ${{ inputs.dockerfile }}
+          # NOT the `registry` backend. August's ECR bill was ~94% data transfer.
+          cache-backend: gha
+          cache-scope: ${{ inputs.product }}-${{ matrix.service }}
+
+      - name: Attest
+        uses: quynhonsemiconductor/ci/actions/attest-image@main
+        with:
+          image-ref: ${{ steps.build.outputs.image-uri }}
+
+
+  deploy-dev:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      # The only thing that "deploys". No kubectl, no cluster credentials, no
+      # access to the cluster at all — this edits one line in another repository.
+      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
+        with:
+          product: ${{ inputs.product }}
+          env: dev
+          services: ${{ inputs.services }}
+          tag: ${{ needs.build.outputs.tag }}
+          mode: commit
+          gitops-token: ${{ secrets.gitops-token }}
