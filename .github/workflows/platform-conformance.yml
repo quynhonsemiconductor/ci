@@ -33,7 +33,7 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-          repositories: gitops,infra
+          repositories: gitops,infra,tf-modules
 
       # persist-credentials: false on all three — this job reads three
       # repositories and pushes to none, so leaving a token in .git/config just
@@ -52,6 +52,17 @@ jobs:
           path: infra
           token: ${{ steps.token.outputs.token }}
           persist-credentials: false
+      # fetch-depth: 0 for the TAGS, which are the whole point of this checkout —
+      # `module-refs` asks whether the ref a live stack pins actually exists, and
+      # a shallow clone carries none, so the contract would report every ref as
+      # unverifiable rather than checking it.
+      - uses: actions/checkout@v5
+        with:
+          repository: quynhonsemiconductor/tf-modules
+          path: tf-modules
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 0
 
       - run: pip install --quiet pyyaml
 
