@@ -49,6 +49,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 | [`pr-title-conventional-commits`](actions/pr-title-conventional-commits/action.yml) | Validate a PR title against Conventional Commits — Release Please derives the CHANGELOG from it |
 | [`assert-jobs-succeeded`](actions/assert-jobs-succeeded/action.yml) | Fail a CI gate job unless every job it depends on reported `success` — closes the skipped/cancelled-counts-as-passing hole |
+| [`wait-for-run`](actions/wait-for-run/action.yml) | Block until another workflow's run for THIS commit finishes, then propagate its conclusion — retries a rate limit instead of reporting it as a failed run |
 
 ### A REQUIRED check must be a composite action, never a reusable workflow
 
