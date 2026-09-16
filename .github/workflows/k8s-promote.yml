@@ -1,0 +1,141 @@
+name: k8s-promote
+
+# Promote an image that is ALREADY RUNNING IN DEV to production (§11).
+#
+# Deliberately a separate workflow from k8s-deploy, because promotion is a
+# separate ACT rather than a stage of a build. Nothing is compiled here: the
+# image exists, it has run in dev, and this adds a `v<version>` tag to it and
+# opens a pull request pointing production at that tag.
+#
+# ── WHY IT IS A PULL REQUEST ──────────────────────────────────────────────────
+# §11: "Promotion becomes a reviewable diff. Today it is a version tag that
+# applies whatever `main` contains, which is why rova production ran code from
+# before 7 September while `main` was 44 commits ahead — and why an alerting fix
+# could not reach production without shipping nine features."
+#
+# The reviewable line is the point:
+#
+#     - tag: v1.3.0
+#     + tag: v1.4.0
+#
+# which tells a reviewer something. `sha-a3f9c2e → sha-c2e8a91` does not, and that
+# is the whole argument for a second tag existing at all (§11).
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        type: string
+        required: true
+      services:
+        description: 'Space-separated, e.g. "api worker migrator".'
+        type: string
+        required: true
+      source-tag:
+        description: >
+          The `sha-<commit>` currently running in dev. This is what gets promoted —
+          the exact bytes that soaked, not a fresh build of the same commit.
+        type: string
+        required: true
+      version:
+        description: 'The release tag to add, e.g. v1.4.0. Never `latest` (§11).'
+        type: string
+        required: true
+      aws-region:
+        type: string
+        default: ap-southeast-1
+    secrets:
+      aws-role-arn:
+        required: true
+      gitops-token:
+        description: >
+          Needs write access to open a branch and a pull request on `gitops`.
+          It does NOT need permission to merge — §10b, the review is the control.
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: k8s-promote-${{ inputs.product }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # The approval gate. A promotion that nobody looked at is the thing §11 exists
+    # to prevent.
+    environment: production
+    steps:
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
+        id: aws
+        with:
+          role-arn: ${{ secrets.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+          ecr-login: true
+
+      - name: Tag the existing image
+        env:
+          # ── EVERY input goes through env, never straight into the script ────
+          # zizmor flagged this as template-injection, correctly. `${{ inputs.x }}`
+          # interpolated into a `run:` block is substituted BEFORE bash sees it,
+          # so a crafted value becomes shell. This workflow holds an AWS OIDC
+          # role and a token that writes to `gitops`, which makes it the worst
+          # possible place for that.
+          #
+          # Through `env:` the value is a variable bash READS, never text the
+          # shell parses.
+          REGISTRY: ${{ steps.aws.outputs.ecr-registry }}
+          PRODUCT: ${{ inputs.product }}
+          SERVICES: ${{ inputs.services }}
+          SOURCE_TAG: ${{ inputs.source-tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" != v* ]]; then
+            echo "::error::version must start with v — the prefix is what the 180-day retention rule selects on (§13)."
+            exit 1
+          fi
+
+          for svc in $SERVICES; do
+            repo="${PRODUCT}-${svc}"
+
+            # Copy the MANIFEST, not the image. The digest is unchanged, so the
+            # attestation from the build still covers exactly what production
+            # runs — which is the reason §7c forbids a per-environment ECR
+            # repository: copying bytes would break that.
+            manifest=$(aws ecr batch-get-image \
+              --repository-name "$repo" \
+              --image-ids imageTag="$SOURCE_TAG" \
+              --query 'images[0].imageManifest' --output text)
+
+            if [ -z "$manifest" ] || [ "$manifest" = "None" ]; then
+              echo "::error::${repo}:${SOURCE_TAG} not found. Promote a tag that exists and has soaked in dev."
+              exit 1
+            fi
+
+            # ECR tag immutability (§11) means this FAILS if the version already
+            # exists, rather than silently repointing it at different bytes.
+            aws ecr put-image \
+              --repository-name "$repo" \
+              --image-tag "$VERSION" \
+              --image-manifest "$manifest" >/dev/null
+
+            echo "  $repo: $SOURCE_TAG -> also $VERSION"
+          done
+
+          # The image now carries BOTH tags, which moves it from the short
+          # retention rule to the long one automatically — §13's rulePriority 2
+          # (v*, 180 days) beats rulePriority 3 (sha-*, keep 20). Nothing has to
+          # remember to do it.
+
+      - name: Open the promotion pull request
+        uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
+        with:
+          product: ${{ inputs.product }}
+          env: prod
+          services: ${{ inputs.services }}
+          tag: ${{ inputs.version }}
+          mode: pull-request
+          gitops-token: ${{ secrets.gitops-token }}

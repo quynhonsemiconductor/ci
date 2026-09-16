@@ -1,0 +1,185 @@
+name: Bump a service image tag in gitops
+description: >
+  Point one service at a new image by editing gitops/values/<product>/<env>.yaml,
+  which is what makes ArgoCD deploy it.
+
+  §11 — this is the whole delivery mechanism. A product repository never touches a
+  cluster: it builds an image and edits one line in another repository. ArgoCD
+  reconciles from there.
+
+  §10b — the identity that runs this must NOT be able to write prod.yaml. Promotion
+  to production is a reviewed pull request, and a token that can bypass it makes
+  branch protection on `gitops` decorative. Pass a token scoped to the dev path, or
+  set `mode: pull-request` and let a human approve.
+
+inputs:
+  product:
+    description: 'Short slug — rova · opshub · kb. NOT qnsc-kb (§7c).'
+    required: true
+  env:
+    description: 'dev | prod. Never develop/production (§7c).'
+    required: true
+  services:
+    description: 'Space-separated service names, e.g. "api worker migrator".'
+    required: true
+  tag:
+    description: >
+      Image tag. `sha-<commit>` for dev, `v<version>` for prod (§11).
+      NEVER `latest` — that is how a develop build reached a production task
+      definition (qnsc-kb-backend/infra/live/prod/main.tf:104).
+    required: true
+  mode:
+    description: 'commit (dev) | pull-request (prod). Production is always a reviewed diff.'
+    default: commit
+  gitops-repo:
+    default: quynhonsemiconductor/gitops
+  gitops-token:
+    description: 'Token with write access to gitops. Scope it to what this env may change.'
+    required: true
+
+outputs:
+  changed:
+    description: 'true when the tag actually moved. A no-op re-run is not a deploy.'
+    value: ${{ steps.bump.outputs.changed }}
+  pr-url:
+    description: 'Set when mode = pull-request.'
+    value: ${{ steps.pr.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    # ── WHY EVERY `run:` BELOW READS `env:` AND NEVER `${{ inputs.x }}` ────────
+    # A `${{ }}` expression inside a `run:` body is substituted into the script
+    # TEXT before bash starts, so an input containing `$(...)` or a newline stops
+    # being a value and becomes a command. zizmor calls this template-injection
+    # and flagged this file, correctly.
+    #
+    # It matters more here than in most actions: this composite holds a token
+    # with write access to `gitops`, and §10b makes that token the thing standing
+    # between a build and production. Through `env:` the value is a variable bash
+    # reads, never text bash parses.
+    #
+    # `if:` conditions are a different thing — they are evaluated by the runner,
+    # never by a shell, so `inputs.mode` there is not a sink.
+    - name: Reject a mutable tag
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        ENV: ${{ inputs.env }}
+      run: |
+        # §11 — the chart's schema rejects `latest` too, but failing here means the
+        # image is never even referenced, and the error names the cause rather than
+        # surfacing as a schema violation three steps later.
+        if [[ "$TAG" == "latest" || "$TAG" == *":latest" ]]; then
+          echo "::error::refusing to write a mutable tag. Use sha-<commit> for dev or v<version> for prod (§11)."
+          exit 1
+        fi
+        if [[ "$ENV" != "dev" && "$ENV" != "prod" ]]; then
+          echo "::error::env must be dev or prod, never develop/production (§7c)."
+          exit 1
+        fi
+
+    - uses: actions/checkout@v5
+      with:
+        repository: ${{ inputs.gitops-repo }}
+        token: ${{ inputs.gitops-token }}
+        path: .gitops
+
+    - name: Bump
+      id: bump
+      shell: bash
+      working-directory: .gitops
+      env:
+        PRODUCT: ${{ inputs.product }}
+        ENV: ${{ inputs.env }}
+        SERVICES: ${{ inputs.services }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        # ── THE MACHINE-OWNED FILE ────────────────────────────────────────
+        # NOT <env>.yaml. `yq -i` rewrites a whole file, and the values files
+        # carry reasoning transcribed from the live OpenTofu — why qnsc-kb's api
+        # stays off Spot, why clamav needs 2 GB, why the worker is pinned at one
+        # replica. A tag bump must not be able to reflow or drop any of it, and it
+        # would run on EVERY merge to main.
+        #
+        # So the machine owns this file and humans own the others. It also makes
+        # a promotion pull request a three-line diff rather than a diff against
+        # a file full of prose (§11).
+        file="values/${PRODUCT}/tags.${ENV}.yaml"
+        [ -f "$file" ] || { echo "::error::$file not found. A product with no $file has no ${ENV} Application (§5c)."; exit 1; }
+
+        before=$(sha256sum "$file" | cut -d' ' -f1)
+        for svc in $SERVICES; do
+          # The tag arrives as a yq STRVAR rather than inside the expression, for
+          # the same reason it arrives here as an env var rather than as `${{ }}`:
+          # yq has its own expression language, and interpolating into it is the
+          # same bug one layer down.
+          TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+        done
+        after=$(sha256sum "$file" | cut -d' ' -f1)
+
+        if [ "$before" = "$after" ]; then
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "tag already $TAG — nothing to deploy"
+        else
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --stat
+        fi
+
+    - name: Commit (dev)
+      if: inputs.mode == 'commit' && steps.bump.outputs.changed == 'true'
+      shell: bash
+      working-directory: .gitops
+      env:
+        PRODUCT: ${{ inputs.product }}
+        ENV: ${{ inputs.env }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        git config user.name  "qnsc-ci"
+        git config user.email "ci@qnsc.vn"
+        git commit -am "chore(${PRODUCT}): ${ENV} -> ${TAG}"
+        # Rebase rather than merge: two products bumping concurrently is normal,
+        # and a merge commit per deploy makes the promotion diff unreadable.
+        for i in 1 2 3; do
+          git pull --rebase --autostash && git push && exit 0
+          sleep $((i * 5))
+        done
+        echo "::error::could not push after 3 attempts"; exit 1
+
+    - name: Open a pull request (prod)
+      id: pr
+      if: inputs.mode == 'pull-request' && steps.bump.outputs.changed == 'true'
+      shell: bash
+      working-directory: .gitops
+      env:
+        GH_TOKEN: ${{ inputs.gitops-token }}
+        PRODUCT: ${{ inputs.product }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        branch="promote/${PRODUCT}-${TAG}"
+        git config user.name  "qnsc-ci"
+        git config user.email "ci@qnsc.vn"
+        git checkout -b "$branch"
+        git commit -am "promote(${PRODUCT}): prod -> ${TAG}"
+        git push -u origin "$branch"
+        url=$(gh pr create \
+          --title "promote(${PRODUCT}): prod -> ${TAG}" \
+          --body "$(cat <<'BODY'
+        §11 — promotion is a reviewable diff.
+
+        Before this existed, a version tag applied whatever `main` contained, which
+        is why rova production ran code from before 7 September while `main` was 44
+        commits ahead — and why an alerting fix could not reach production without
+        shipping nine features.
+
+        The image below already ran in dev. This changes which tag production
+        points at; it builds nothing.
+
+        Rollback: revert this commit.
+        BODY
+        )")
+        echo "url=$url" >> "$GITHUB_OUTPUT"
+        echo "::notice::$url"

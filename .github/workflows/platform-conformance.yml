@@ -1,0 +1,65 @@
+name: platform-conformance
+
+# Every contract that crosses a repository boundary, checked in one place.
+#
+# This is the only workflow that checks out MORE THAN ONE repository, and that is
+# the whole reason it exists: the bugs it catches are invisible to any check that
+# sees one repo at a time. terraform validate, helm lint and helm unittest all
+# pass on every one of them, because each file is individually valid.
+#
+# §17 retires `stack_conformance.py` with the ECS estate. This is what takes over.
+
+on:
+  schedule:
+    - cron: "0 1 * * *"     # daily. Drift arrives between pull requests, not in them.
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/platform_conformance.py, .github/workflows/platform-conformance.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      # `gitops` and `infra` are PRIVATE, and the job token is scoped to this
+      # repository only — a cross-repo checkout with it 404s. Same app and same
+      # pattern infra-plan.yml already uses to let `tofu init` fetch tf-modules,
+      # scoped to the two repositories this reads and nothing else.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        id: token
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          repositories: gitops,infra
+
+      # persist-credentials: false on all three — this job reads three
+      # repositories and pushes to none, so leaving a token in .git/config just
+      # widens what a later step (or an uploaded artifact) could carry off.
+      - uses: actions/checkout@v5
+        with: { path: ci, persist-credentials: false }
+      - uses: actions/checkout@v5
+        with:
+          repository: quynhonsemiconductor/gitops
+          path: gitops
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: quynhonsemiconductor/infra
+          path: infra
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
+
+      - run: pip install --quiet pyyaml
+
+      # The rendered manifests are what the secret-refs contract reads, and a
+      # stale rendered/ would check yesterday's output. gitops CI fails on a stale
+      # render, so this is belt-and-braces rather than a second source of truth.
+      - uses: azure/setup-helm@v4
+        with: { version: "3.18.0" }
+      - run: cd gitops && ./scripts/render.sh
+
+      - run: ./ci/scripts/platform_conformance.py --root .
