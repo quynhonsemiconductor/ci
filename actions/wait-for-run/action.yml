@@ -1,0 +1,209 @@
+name: Wait for a workflow run on this commit
+description: >
+  Block until another workflow's run for a GIVEN COMMIT has finished, then propagate its
+  conclusion — the cross-workflow gate every deploy in this org needs ("a red main must not
+  deploy", "prod promotes the image develop pushed").
+
+  WHY THIS EXISTS RATHER THAN `gh run watch --exit-status` AT EACH CALL SITE.
+
+  Two problems, and the second is a correctness bug rather than a style point.
+
+  1. RATE LIMIT. `GITHUB_TOKEN` is capped at 1,000 API requests per hour PER REPOSITORY, and
+     `gh run watch` polls every 3 seconds by default while also fetching annotations. Four
+     concurrent waiters (two deploy workflows x two gates) against a 15-minute CI run is
+     ~1,200 requests for ONE push — over budget before a second push starts. rova lost both
+     deploys on 2026-09-13 this way, twice in two hours, on commits whose CI had PASSED.
+
+  2. `--exit-status` CANNOT TELL "THE RUN FAILED" FROM "I COULD NOT ASK". Both are a non-zero
+     exit, so a 403 rate limit was reported as a failed upstream run and the deploy failed
+     closed on an answer it never received. The call sites already guarded `gh run list` with
+     `|| ID=""` for exactly this reason; the watch was left unguarded.
+
+  So this polls `gh run view --json status,conclusion` itself: the interval is ours to set, a
+  transient API error is retried instead of concluded, and no annotations are fetched — which
+  also removes the `checks:read` 403 the watch logged on every poll.
+
+  CALL IT FROM A LOCAL JOB. `needs` and `if:` stay the caller's, and the job's own
+  `timeout-minutes` remains the outer bound. The caller needs `actions: read`.
+
+inputs:
+  workflow:
+    description: 'Workflow FILE name to wait for, e.g. `backend-ci.yml`.'
+    required: true
+  sha:
+    description: 'Commit to key on. Keying on the sha is what stops this waiting on an unrelated run.'
+    required: false
+    default: ${{ github.sha }}
+  branch:
+    description: >
+      Optional `--branch` filter. Two uses: narrowing to `main`, and EXCLUDING THE CALLING RUN —
+      a tag run and the develop run share a workflow file and a commit, so without this a
+      workflow waiting for its own sibling finds itself and waits forever.
+    required: false
+    default: ''
+  label:
+    description: 'Human name for the log lines. Defaults to the workflow file name.'
+    required: false
+    default: ''
+  if-missing:
+    description: >
+      `fail` (default) or `warn`, when no run exists for the sha.
+
+      Both are real cases in this org and the difference is deliberate: a missing CI run means
+      ship-blind, so it blocks; a missing sibling deploy on a hand-cut tag has the promote
+      step's own poll as a backstop, so blocking there would only make a release
+      un-shippable. Pick per gate, never as a default.
+    required: false
+    default: 'fail'
+  missing-message:
+    description: 'Overrides the not-found text. Say what the reader should do about it.'
+    required: false
+    default: ''
+  failure-message:
+    description: >
+      Overrides the text when the awaited run FAILED. Worth setting: "the develop deploy of
+      this sha did not succeed, so there is nothing to promote" diagnoses in seconds what
+      "not found in ECR" took ~17 minutes to say.
+    required: false
+    default: ''
+  interval-seconds:
+    description: >
+      Poll interval. 30 rather than `gh run watch`'s 3 — a tenth of the requests, and noticing
+      30s later costs nothing against a gate whose job timeout is measured in tens of minutes.
+    required: false
+    default: '30'
+  max-wait-minutes:
+    description: >
+      Give up after this long with a clear message. Defaults to 0 = no inner bound, leaving the
+      job `timeout-minutes` as the only limit — set it when you would rather read a sentence
+      than a cancelled job.
+    required: false
+    default: '0'
+  find-attempts:
+    description: 'How many times to look for the run before concluding there is none.'
+    required: false
+    default: '12'
+  find-delay-seconds:
+    description: 'Delay between those attempts. A sibling run is not registered the instant this job starts.'
+    required: false
+    default: '10'
+  repository:
+    description: 'owner/repo. Explicit because a gate job usually does not check out.'
+    required: false
+    default: ${{ github.repository }}
+  github-token:
+    description: 'Token used for the queries. Needs `actions: read`.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for the run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        WF: ${{ inputs.workflow }}
+        SHA: ${{ inputs.sha }}
+        BRANCH: ${{ inputs.branch }}
+        LABEL: ${{ inputs.label }}
+        IF_MISSING: ${{ inputs.if-missing }}
+        MISSING_MSG: ${{ inputs.missing-message }}
+        FAILURE_MSG: ${{ inputs.failure-message }}
+        INTERVAL: ${{ inputs.interval-seconds }}
+        MAX_WAIT: ${{ inputs.max-wait-minutes }}
+        FIND_ATTEMPTS: ${{ inputs.find-attempts }}
+        FIND_DELAY: ${{ inputs.find-delay-seconds }}
+        REPO: ${{ inputs.repository }}
+      run: |
+        set -uo pipefail
+
+        NAME="${LABEL:-$WF}"
+        case "$IF_MISSING" in
+          fail|warn) ;;
+          *) echo "::error::if-missing must be 'fail' or 'warn', got '${IF_MISSING}'." ; exit 1 ;;
+        esac
+
+        # ── Find the run ────────────────────────────────────────────────────────
+        # `|| ID=""` is load-bearing: this script runs under `set -u` with pipefail, and an
+        # assignment takes its command substitution's exit status, so a flaky or rate-limited
+        # `gh run list` would otherwise end the step instead of being retried.
+        # `${arr[@]+"${arr[@]}"}` and not `"${arr[@]}"`: expanding an EMPTY array under `set -u`
+        # is an unbound-variable error on bash 3.2, which is what macOS ships. The runners have
+        # bash 5 and would never have shown it, so the plain form is a latent break for anyone
+        # running this logic locally.
+        BRANCH_ARG=()
+        [ -n "$BRANCH" ] && BRANCH_ARG=(--branch "$BRANCH")
+
+        ID=""
+        for _ in $(seq 1 "$FIND_ATTEMPTS"); do
+          ID=$(gh run list --repo "$REPO" --workflow "$WF" --commit "$SHA" \
+                 ${BRANCH_ARG[@]+"${BRANCH_ARG[@]}"} --limit 1 \
+                 --json databaseId --jq '.[0].databaseId // empty') || ID=""
+          [ -n "$ID" ] && break
+          sleep "$FIND_DELAY"
+        done
+
+        if [ -z "$ID" ]; then
+          MSG="${MISSING_MSG:-No ${NAME} run found for ${SHA}.}"
+          if [ "$IF_MISSING" = "warn" ]; then
+            echo "::warning::${MSG} Proceeding."
+            exit 0
+          fi
+          echo "::error::${MSG} Blocking (fail closed)."
+          exit 1
+        fi
+
+        echo "Waiting on ${NAME} run ${ID} (polling every ${INTERVAL}s) …"
+
+        # ── Poll it ─────────────────────────────────────────────────────────────
+        # An API error is NOT an answer about the run. Retried with backoff, and only a long
+        # unbroken run of them gives up — with a message that says we could not ask, rather
+        # than claiming the upstream failed.
+        DEADLINE=0
+        [ "$MAX_WAIT" != "0" ] && DEADLINE=$(( $(date +%s) + MAX_WAIT * 60 ))
+        ERRORS=0
+        MAX_ERRORS=10
+
+        while true; do
+          if [ "$DEADLINE" != "0" ] && [ "$(date +%s)" -gt "$DEADLINE" ]; then
+            echo "::error::Gave up waiting for ${NAME} run ${ID} after ${MAX_WAIT} minutes. It had not finished; re-run this job once it has."
+            exit 1
+          fi
+
+          if ! OUT=$(gh run view "$ID" --repo "$REPO" --json status,conclusion 2>&1); then
+            ERRORS=$(( ERRORS + 1 ))
+            if printf '%s' "$OUT" | grep -qiE 'rate limit|HTTP 403|HTTP 429|secondary rate'; then
+              # The failure this action exists for. Back off hard: the budget is per repository
+              # per hour, so polling faster cannot help and starves every other gate.
+              BACKOFF=$(( INTERVAL * 4 ))
+              echo "::notice::Rate limited while asking about ${NAME} run ${ID} (attempt ${ERRORS}/${MAX_ERRORS}); backing off ${BACKOFF}s. This is NOT a verdict on the run."
+            else
+              BACKOFF="$INTERVAL"
+              echo "::notice::Could not read ${NAME} run ${ID} (attempt ${ERRORS}/${MAX_ERRORS}); retrying in ${BACKOFF}s. Reason: $(printf '%s' "$OUT" | head -1)"
+            fi
+            if [ "$ERRORS" -ge "$MAX_ERRORS" ]; then
+              echo "::error::Could not determine the status of ${NAME} run ${ID} after ${MAX_ERRORS} attempts. This is an API failure, NOT a failed run — re-run this job."
+              exit 1
+            fi
+            sleep "$BACKOFF"
+            continue
+          fi
+          ERRORS=0
+
+          STATUS=$(printf '%s' "$OUT" | jq -r '.status')
+          CONCLUSION=$(printf '%s' "$OUT" | jq -r '.conclusion // ""')
+
+          if [ "$STATUS" != "completed" ]; then
+            sleep "$INTERVAL"
+            continue
+          fi
+
+          if [ "$CONCLUSION" = "success" ]; then
+            echo "${NAME} succeeded (run ${ID})."
+            exit 0
+          fi
+
+          echo "::error::${FAILURE_MSG:-${NAME} did not succeed (run ${ID}, conclusion: ${CONCLUSION}).}"
+          exit 1
+        done
