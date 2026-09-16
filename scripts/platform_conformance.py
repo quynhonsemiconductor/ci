@@ -41,6 +41,7 @@ import argparse
 import dataclasses
 import pathlib
 import re
+import subprocess
 import sys
 from typing import Callable, Iterator
 
@@ -62,6 +63,27 @@ class Estate:
     @property
     def live(self) -> pathlib.Path:
         return self.root / "infra" / "live"
+
+    @property
+    def tf_modules(self) -> pathlib.Path:
+        return self.root / "tf-modules"
+
+    def tags(self) -> set[str] | None:
+        """Every tag in the tf-modules checkout, or None when it is not here.
+
+        None is NOT a pass. `check_module_refs` reports it, because a silently
+        unchecked contract is the failure mode this whole file exists for — the
+        checkout is shallow by default and `git tag -l` on a shallow clone returns
+        nothing, which would read as "every ref is broken" or, worse, be quietly
+        skipped.
+        """
+        if not (self.tf_modules / ".git").exists():
+            return None
+        out = subprocess.run(["git", "-C", str(self.tf_modules), "tag", "-l"],
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            return None
+        return {t for t in out.stdout.split() if t}
 
     def products(self) -> Iterator[tuple[str, str, pathlib.Path, pathlib.Path | None]]:
         """(product, env, values file, infra stack or None).
@@ -93,6 +115,12 @@ class Estate:
             else:
                 out[k] = v
         return out
+
+    @staticmethod
+    def uncommented(f: pathlib.Path) -> str:
+        """`hcl()` for ONE file. Comments mention `source =` when explaining why a
+        module is pinned where it is, and matching those is a false positive."""
+        return re.sub(r"(?m)^\s*(#|//).*$", "", f.read_text(encoding="utf-8"))
 
     @staticmethod
     def hcl(stack: pathlib.Path) -> str:
@@ -232,11 +260,67 @@ def check_secret_refs(e: Estate) -> list[Finding]:
     return out
 
 
+def check_module_refs(e: Estate) -> list[Finding]:
+    """Every `source` in a live stack must resolve — from a CI checkout, not a laptop.
+
+    Both halves of this are bugs that reached main inside a week, in the same
+    stack, and neither was catchable by anything that reads one repository:
+
+      1. `source = "../../../tf-modules/modules/rds"` — a path OUT of the
+         repository. It resolves on a machine that happens to have the two repos
+         side by side and nowhere else, so `tofu validate` and tflint both PASSED
+         locally while CI reported "the module directory does not exist or cannot
+         be read" for every module in both data stacks.
+      2. `?ref=product-profile-v1.0.0` — a tag nothing produces. The module was
+         absent from release-please-config.json, so no `product-profile-v*` tag
+         would ever have been cut. A ref to a tag that does not exist fails at
+         `tofu init`, which is to say on the machine of whoever is mid-migration,
+         not at review.
+
+    A registry source (`hashicorp/...`) is somebody else's to resolve; only local
+    paths and this org's git refs are checked.
+    """
+    SOURCE = re.compile(r'^\s*source\s*=\s*"([^"]+)"', re.M)
+    GIT_REF = re.compile(r'^git::https://github\.com/quynhonsemiconductor/tf-modules\.git//'
+                         r'modules/[\w-]+\?ref=(?P<ref>[\w.-]+)$')
+    out: list[Finding] = []
+    tags = e.tags()
+    infra_root = e.live.parent
+
+    for tf in sorted(p for p in e.live.rglob("*.tf") if ".terraform" not in p.parts):
+        where = str(tf.relative_to(infra_root))
+        for src in SOURCE.findall(e.uncommented(tf)):
+            if src.startswith((".", "/")):
+                resolved = (tf.parent / src).resolve()
+                try:
+                    resolved.relative_to(infra_root.resolve())
+                except ValueError:
+                    out.append(Finding("module-refs", where,
+                                       f"{src!r} resolves OUTSIDE the repository — it works only on a "
+                                       f"machine with the repos side by side, and CI checks out one"))
+                continue
+
+            m = GIT_REF.match(src)
+            if not m:
+                continue  # a registry module, or another org's — not this contract's
+            ref = m.group("ref")
+            if tags is None:
+                out.append(Finding("module-refs", where,
+                                   f"cannot verify {ref!r}: no tf-modules checkout beside infra "
+                                   f"(check it out with fetch-depth: 0, or tags are absent)"))
+            elif ref not in tags:
+                out.append(Finding("module-refs", where,
+                                   f"pins {ref!r} — no such tag in tf-modules. `tofu init` fails on "
+                                   f"this, at apply time"))
+    return out
+
+
 CONTRACTS: dict[str, tuple[str, Check]] = {
     "size":         ("§7c — the one fact declared twice", check_size),
     "services":     ("chart ServiceAccounts vs product-profile IRSA roles", check_services),
     "remote-state": ("stack reads vs stack outputs", check_remote_state),
     "secret-refs":  ("§8 — references vs definitions", check_secret_refs),
+    "module-refs":  ("live stack sources vs tf-modules tags", check_module_refs),
 }
 
 

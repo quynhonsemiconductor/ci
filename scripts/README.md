@@ -13,13 +13,15 @@ CONTRACTS               spans several and no repo should try
 
 ## `platform_conformance.py`
 
-Four contracts, each guarding a bug found in the 2026-09-16 review:
+Five contracts, each guarding a bug that reached main:
 
 ```
 size          §7c — the one fact declared in gitops AND infra
 services      chart ServiceAccounts vs product-profile IRSA roles
 remote-state  a stack's reads vs the target stack's outputs
 secret-refs   every secretRef/configMapRef has something that creates it
+module-refs   a live stack's `source` resolves — no path out of the repo, and
+              every pinned `?ref=` is a tag tf-modules actually has
 ```
 
 **Adding a contract is adding an entry to `CONTRACTS`.** If a check does not fit

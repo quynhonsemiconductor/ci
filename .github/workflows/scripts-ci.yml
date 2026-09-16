@@ -47,11 +47,16 @@ jobs:
         with:
           python-version: '3.14'
 
-      # The scripts under test are standard-library only, by design — the guard runs
-      # in repositories that have never heard of agent-forge and cannot assume a
-      # dependency tree. pytest is the only thing to install.
-      - name: Install pytest
-        run: pip install --disable-pip-version-check pytest==9.1.1
+      # The GUARD is standard-library only, by design — it runs in repositories that
+      # have never heard of agent-forge and cannot assume a dependency tree, and one
+      # of its own tests asserts that by reading its source.
+      #
+      # `platform_conformance.py` is the exception and always was: it parses Helm
+      # values, so it needs pyyaml. Installing it here is deliberate — without it
+      # the module-refs tests SKIP rather than fail, and a contract that silently
+      # stops running is the failure this whole file exists to prevent.
+      - name: Install pytest and pyyaml
+        run: pip install --disable-pip-version-check pytest==9.1.1 pyyaml==6.0.3
 
       # The guard builds real git repositories to diff against, so it needs an
       # identity. Set here rather than left to the runner: a bare `git commit` with
