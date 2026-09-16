@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.18.0](https://github.com/quynhonsemiconductor/ci/compare/v1.17.0...v1.18.0) (2026-09-16)
+
+
+### Features
+
+* kubernetes delivery path and estate-wide conformance ([#142](https://github.com/quynhonsemiconductor/ci/issues/142)) ([52999cc](https://github.com/quynhonsemiconductor/ci/commit/52999cc1a1e4ca6e211847d7f6185b15b3e064cf))
+* **scripts:** report divergence between the product stack modules ([#134](https://github.com/quynhonsemiconductor/ci/issues/134)) ([5015096](https://github.com/quynhonsemiconductor/ci/commit/501509660d0fb3491569327afc65fdb5c5403a41))
+
 ## [1.17.0](https://github.com/quynhonsemiconductor/ci/compare/v1.16.3...v1.17.0) (2026-09-10)
 
 
