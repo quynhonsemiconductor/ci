@@ -24,12 +24,34 @@ jobs:
   conformance:
     runs-on: ubuntu-latest
     steps:
+      # `gitops` and `infra` are PRIVATE, and the job token is scoped to this
+      # repository only — a cross-repo checkout with it 404s. Same app and same
+      # pattern infra-plan.yml already uses to let `tofu init` fetch tf-modules,
+      # scoped to the two repositories this reads and nothing else.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        id: token
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          repositories: gitops,infra
+
+      # persist-credentials: false on all three — this job reads three
+      # repositories and pushes to none, so leaving a token in .git/config just
+      # widens what a later step (or an uploaded artifact) could carry off.
       - uses: actions/checkout@v5
-        with: { path: ci }
+        with: { path: ci, persist-credentials: false }
       - uses: actions/checkout@v5
-        with: { repository: quynhonsemiconductor/gitops, path: gitops }
+        with:
+          repository: quynhonsemiconductor/gitops
+          path: gitops
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
       - uses: actions/checkout@v5
-        with: { repository: quynhonsemiconductor/infra, path: infra }
+        with:
+          repository: quynhonsemiconductor/infra
+          path: infra
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: false
 
       - run: pip install --quiet pyyaml
 

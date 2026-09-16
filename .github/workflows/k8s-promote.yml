@@ -77,16 +77,29 @@ jobs:
 
       - name: Tag the existing image
         env:
+          # ── EVERY input goes through env, never straight into the script ────
+          # zizmor flagged this as template-injection, correctly. `${{ inputs.x }}`
+          # interpolated into a `run:` block is substituted BEFORE bash sees it,
+          # so a crafted value becomes shell. This workflow holds an AWS OIDC
+          # role and a token that writes to `gitops`, which makes it the worst
+          # possible place for that.
+          #
+          # Through `env:` the value is a variable bash READS, never text the
+          # shell parses.
           REGISTRY: ${{ steps.aws.outputs.ecr-registry }}
+          PRODUCT: ${{ inputs.product }}
+          SERVICES: ${{ inputs.services }}
+          SOURCE_TAG: ${{ inputs.source-tag }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "${{ inputs.version }}" != v* ]]; then
+          if [[ "$VERSION" != v* ]]; then
             echo "::error::version must start with v — the prefix is what the 180-day retention rule selects on (§13)."
             exit 1
           fi
 
-          for svc in ${{ inputs.services }}; do
-            repo="${{ inputs.product }}-${svc}"
+          for svc in $SERVICES; do
+            repo="${PRODUCT}-${svc}"
 
             # Copy the MANIFEST, not the image. The digest is unchanged, so the
             # attestation from the build still covers exactly what production
@@ -94,11 +107,11 @@ jobs:
             # repository: copying bytes would break that.
             manifest=$(aws ecr batch-get-image \
               --repository-name "$repo" \
-              --image-ids imageTag=${{ inputs.source-tag }} \
+              --image-ids imageTag="$SOURCE_TAG" \
               --query 'images[0].imageManifest' --output text)
 
             if [ -z "$manifest" ] || [ "$manifest" = "None" ]; then
-              echo "::error::${repo}:${{ inputs.source-tag }} not found. Promote a tag that exists and has soaked in dev."
+              echo "::error::${repo}:${SOURCE_TAG} not found. Promote a tag that exists and has soaked in dev."
               exit 1
             fi
 
@@ -106,10 +119,10 @@ jobs:
             # exists, rather than silently repointing it at different bytes.
             aws ecr put-image \
               --repository-name "$repo" \
-              --image-tag "${{ inputs.version }}" \
+              --image-tag "$VERSION" \
               --image-manifest "$manifest" >/dev/null
 
-            echo "  $repo: ${{ inputs.source-tag }} → also ${{ inputs.version }}"
+            echo "  $repo: $SOURCE_TAG -> also $VERSION"
           done
 
           # The image now carries BOTH tags, which moves it from the short

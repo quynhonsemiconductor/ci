@@ -87,6 +87,10 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
+        # This job builds an image; it never pushes a git ref. The tag bump
+        # happens in bump-gitops-tag, against a DIFFERENT repository with its
+        # own token, so there is nothing here for a persisted credential to do.
+        with: { persist-credentials: false }
 
       - name: Compute the tag
         id: tag
