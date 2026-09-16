@@ -111,15 +111,16 @@ runs:
         found=0
         failed=0
         for dir in $DIRS; do
-          # A directory holding no `*.tf` is not a stack, and skipping it is what
-          # lets a caller reach a NESTED one at all. `live/*/ live/*/*/` is the
-          # only glob that finds infra's `live/kb/dev`, and it necessarily also
-          # matches `live/kb/` — a parent holding nothing but subdirectories.
-          # Without this the widened glob fails on the parent, so the nested stack
-          # stays unlinted, which is exactly how `live/kb/dev` reached main twice
-          # over: once sourcing a module by a path OUT of the repository, and once
-          # pinning a tag that did not exist. Both would have been caught by a
-          # single `tofu init`.
+          # A directory holding no `*.tf` is not a stack. Skipping it means a
+          # caller's glob can be wider than its layout without failing on the
+          # difference — an empty parent, a docs directory, a `modules/` that
+          # holds only subdirectories.
+          #
+          # Written for a nested stack (`infra`'s `live/kb/dev`) that has since
+          # been flattened to `live/kb-dev`, because one stack at a different depth
+          # from every other one is what let two bugs reach main unlinted. The
+          # skip is kept regardless: it costs nothing, and it is the difference
+          # between a glob that is merely too wide and a red build.
           #
           # `found` deliberately does NOT count a skipped directory: it means "we
           # linted something", so a glob that matches only empty parents must
@@ -156,15 +157,16 @@ runs:
         found=0
         failed=0
         for dir in $DIRS; do
-          # A directory holding no `*.tf` is not a stack, and skipping it is what
-          # lets a caller reach a NESTED one at all. `live/*/ live/*/*/` is the
-          # only glob that finds infra's `live/kb/dev`, and it necessarily also
-          # matches `live/kb/` — a parent holding nothing but subdirectories.
-          # Without this the widened glob fails on the parent, so the nested stack
-          # stays unlinted, which is exactly how `live/kb/dev` reached main twice
-          # over: once sourcing a module by a path OUT of the repository, and once
-          # pinning a tag that did not exist. Both would have been caught by a
-          # single `tofu init`.
+          # A directory holding no `*.tf` is not a stack. Skipping it means a
+          # caller's glob can be wider than its layout without failing on the
+          # difference — an empty parent, a docs directory, a `modules/` that
+          # holds only subdirectories.
+          #
+          # Written for a nested stack (`infra`'s `live/kb/dev`) that has since
+          # been flattened to `live/kb-dev`, because one stack at a different depth
+          # from every other one is what let two bugs reach main unlinted. The
+          # skip is kept regardless: it costs nothing, and it is the difference
+          # between a glob that is merely too wide and a red build.
           #
           # `found` deliberately does NOT count a skipped directory: it means "we
           # linted something", so a glob that matches only empty parents must
