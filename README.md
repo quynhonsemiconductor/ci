@@ -29,7 +29,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 |---|---|
 | [`ecs-run-task`](actions/ecs-run-task/action.yml) | Run a one-off Fargate task and wait for its exit code |
 | [`run-db-migration`](actions/run-db-migration/action.yml) | Run Drizzle migrations as a gated ECS task (third motion — before traffic flip) |
-| [`verify-ecs-deploy`](actions/verify-ecs-deploy/action.yml) | Poll ECS service until the expected image tag is running |
 | [`post-deploy-health-check`](actions/post-deploy-health-check/action.yml) | Poll `/health/ready` until HTTP 200 (optionally assert version) |
 
 ### CDN / Frontend
@@ -320,13 +319,12 @@ jobs:
             --force-new-deployment \
             --region ${{ vars.AWS_REGION }}
 
-      # 6. Verify ECS stabilized
-      - uses: quynhonsemiconductor/ci/actions/verify-ecs-deploy@main
-        with:
-          cluster: ${{ vars.ECS_CLUSTER }}
-          service: ${{ vars.ECS_API_SERVICE }}
-          image-tag: ${{ env.IMAGE_TAG }}
-          region: ${{ vars.AWS_REGION }}
+      # 6. Verify ECS stabilized — inline, see backend-deploy.yml's "Verify API
+      #    deployment" step. `services-stable` plus an image comparison, which also
+      #    catches a circuit-breaker rollback.
+      - run: |
+          AWS_MAX_ATTEMPTS=120 aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE" --region "$AWS_REGION"
 
       # 7. Health-check live endpoint
       - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
@@ -519,18 +517,6 @@ Wrapper around `ecs-run-task` for the Drizzle migration "third motion". Fails fa
 | `region` | **required** | AWS region |
 | `environment` | `unknown` | Label for log messages |
 | `timeout-seconds` | `600` | Max wait seconds |
-
----
-
-### `verify-ecs-deploy`
-| Input | Default | Description |
-|---|---|---|
-| `cluster` | **required** | ECS cluster |
-| `service` | **required** | ECS service name |
-| `image-tag` | **required** | Expected image tag now running |
-| `region` | **required** | AWS region |
-| `timeout-seconds` | `600` | Max wait seconds |
-| `poll-interval-seconds` | `15` | Poll interval seconds |
 
 ---
 
