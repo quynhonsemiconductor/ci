@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.1](https://github.com/quynhonsemiconductor/ci/compare/v1.19.0...v1.19.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **conformance:** stacks are flat — live/&lt;product&gt;-&lt;env&gt;, one level ([#146](https://github.com/quynhonsemiconductor/ci/issues/146)) ([e570961](https://github.com/quynhonsemiconductor/ci/commit/e57096181d2d37decb069487dd1b089b10f179df))
+
 ## [1.19.0](https://github.com/quynhonsemiconductor/ci/compare/v1.18.0...v1.19.0) (2026-09-16)
 
 
