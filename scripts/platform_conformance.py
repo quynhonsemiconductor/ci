@@ -101,7 +101,16 @@ class Estate:
                 # product environment the moment the split landed.)
                 if envfile.stem == "base" or envfile.stem.startswith("tags."):
                     continue
-                stack = self.live / product / envfile.stem
+                # `live/<product>-<env>`, one level. EVERY stack in the estate
+                # sits directly under live/ — bootstrap, cluster-prod, data-dev,
+                # kb-dev — because every tool that enumerates stacks does it by
+                # globbing a fixed depth: iac-lint's `dirs`, the plan detector's
+                # `cut -d/ -f1-3`, and this join. A second depth means all three
+                # have to agree forever, and on 2026-09-16 they did not: kb was
+                # the one nested stack, `live/*/` never reached it, and a module
+                # path pointing OUT of the repository and then a ref to a tag that
+                # did not exist both reached main through it unseen.
+                stack = self.live / f"{product}-{envfile.stem}"
                 yield product, envfile.stem, envfile, stack if stack.is_dir() else None
 
     @staticmethod
