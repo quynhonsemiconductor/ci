@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.19.0](https://github.com/quynhonsemiconductor/ci/compare/v1.18.0...v1.19.0) (2026-09-16)
+
+
+### Features
+
+* **actions:** add wait-for-run, a cross-workflow gate that survives a rate limit ([#144](https://github.com/quynhonsemiconductor/ci/issues/144)) ([e8b722c](https://github.com/quynhonsemiconductor/ci/commit/e8b722c18721f9f66bc2e6f7f69d822604842c4f))
+
+
+### Bug Fixes
+
+* **iac-lint:** lint nested stacks, and check that a module ref resolves ([#143](https://github.com/quynhonsemiconductor/ci/issues/143)) ([182bb56](https://github.com/quynhonsemiconductor/ci/commit/182bb56c1cca0ece7950f8abac31d61f9cb15f8b))
+
 ## [1.18.0](https://github.com/quynhonsemiconductor/ci/compare/v1.17.0...v1.18.0) (2026-09-16)
 
 
