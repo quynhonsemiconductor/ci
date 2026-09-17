@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/quynhonsemiconductor/ci/compare/v1.19.1...v1.19.2) (2026-09-17)
+
+
+### Bug Fixes
+
+* **scan-secrets:** gitleaks 8.30.1 — 8.21.2 flags a secretStoreRef as a secret ([#149](https://github.com/quynhonsemiconductor/ci/issues/149)) ([31a2ac0](https://github.com/quynhonsemiconductor/ci/commit/31a2ac0ddc5beef782248619dbb4756acbe204dd))
+
 ## [1.19.1](https://github.com/quynhonsemiconductor/ci/compare/v1.19.0...v1.19.1) (2026-09-16)
 
 
