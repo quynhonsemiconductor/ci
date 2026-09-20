@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/quynhonsemiconductor/ci/compare/v1.19.2...v1.20.0) (2026-09-20)
+
+
+### Features
+
+* a schedulable conformance contract, and stop publishing :latest ([#151](https://github.com/quynhonsemiconductor/ci/issues/151)) ([9378397](https://github.com/quynhonsemiconductor/ci/commit/937839759770a0d922ccf0cca8f8e657e2481fe2))
+
 ## [1.19.2](https://github.com/quynhonsemiconductor/ci/compare/v1.19.1...v1.19.2) (2026-09-17)
 
 
