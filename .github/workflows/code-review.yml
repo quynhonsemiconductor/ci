@@ -59,6 +59,22 @@ on:
         required: false
         type: string
         default: 'v1'
+      resolve_outdated:
+        description: >
+          Resolve the bot's own inline threads once their lines no longer exist. `false`, `report`
+          (logs what it would do, mutates nothing) or `true`.
+
+          `true` requires the CALLING workflow to grant `contents: write`, because GitHub gates the
+          resolve mutation on repository write access rather than the pull-request scope — with
+          `pull-requests: write` alone the action warns and continues, which looks like it worked.
+          That permission is not granted here by default: write access to the repository is a lot to
+          hand a reviewer for the convenience of tidying threads.
+
+          Only meaningful with `inline_comments: true`; with the default routing there are no inline
+          threads to resolve.
+        required: false
+        type: string
+        default: 'false'
       max_tokens_budget:
         description: >
           Hard ceiling on total input plus output tokens for one review. Checked before every round:
@@ -194,7 +210,12 @@ jobs:
           # One summary comment, updated in place on each push, rather than a growing pile.
           sticky_summary: 'true'
           max_tokens_budget: ${{ inputs.max_tokens_budget }}
-          # With inline comments off, findings are routed into that summary instead of becoming
-          # review threads that each need resolving before the branch can merge.
+          # With inline comments off, every severity is routed into that summary instead of becoming
+          # a review thread that must be resolved before the branch can merge. `critical` is the top
+          # severity and routing is at-or-below, so this covers all of them.
+          #
+          # One gap worth knowing: a finding whose severity the model leaves empty is never routed by
+          # this policy, so it can still arrive inline. Routing fails open by design — it would rather
+          # post a finding in the wrong place than drop it.
           route_severity_below: ${{ inputs.inline_comments && '' || 'critical' }}
-          resolve_outdated: 'true'
+          resolve_outdated: ${{ inputs.resolve_outdated }}
