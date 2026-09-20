@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/quynhonsemiconductor/ci/compare/v1.20.0...v1.21.0) (2026-09-20)
+
+
+### Features
+
+* refuse a plan that destroys data, instead of prevent_destroy ([#154](https://github.com/quynhonsemiconductor/ci/issues/154)) ([d236a8a](https://github.com/quynhonsemiconductor/ci/commit/d236a8a87764384869e2acafc9ff07a378554400))
+
 ## [1.20.0](https://github.com/quynhonsemiconductor/ci/compare/v1.19.2...v1.20.0) (2026-09-20)
 
 
