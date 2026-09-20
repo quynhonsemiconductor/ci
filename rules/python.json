@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": "**/*.py",
+      "merge_system_rule": true,
+      "rule": "QNSC Python conventions, on top of the built-in Python rules, which already cover mutable\ndefaults, boundary handling and dead code.\n\n- Type hints on every public function; flag a new public function without them.\n- Flag a bare `except:` or `except Exception` that does not re-raise or log.\n- Prefer `pathlib` over string path arithmetic.\n- Flag a regex written with `(?<name>...)`: Python needs `(?P<name>...)`, and the JavaScript form\n  raises at compile time rather than failing a match — a pattern copied from a JS tool will not\n  work here.\n- Flag subprocess use with `shell=True` where a list of arguments would do.\n- Where the code shells out to a tool, flag a flag passed without its value (a trailing\n  `--option` that expects an argument fails with a usage error, not a clear message).\n- Scripts this repository ships to other repositories are consumed by every product: a change to\n  one needs a test, because a break reaches every pipeline on the next version bump.\n"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": ".github/workflows/**/*.{yml,yaml}",
+      "merge_system_rule": true,
+      "rule": "QNSC workflow conventions, on top of the built-in GitHub Actions rules.\n\n## Pinning\n- Third-party actions are pinned by 40-character commit SHA with the version in a trailing\n  comment. A tag can be moved; a SHA cannot. Reusable workflow calls within this organisation use\n  `@v1` by convention — that distinction is deliberate, so do not flag it.\n\n## A required check must be able to report\n- A check named in branch protection that never reports does not fail: it blocks every merge\n  forever. Flag a rename of a job or a `name:` that a ruleset requires, and flag converting an\n  action call into a reusable workflow call, which changes the reported check name to\n  `<caller>/<called>`.\n\n## Secrets and permissions\n- `permissions` must be least-privilege at the job, not inherited broadly.\n- Flag a secret echoed, written to an output, or interpolated into a `run:` line where an `env:`\n  entry would keep it out of the command.\n- Flag `pull_request_target` combined with a checkout of the head ref; that runs untrusted code\n  with write access.\n\n## Reality of the runner\n- Flag a step that assumes a tool exists without installing or checking it.\n- Flag a long-running step with no timeout.\n- Flag a build step that mutates a tracked file: it leaves a dirty tree that rides along in the\n  next commit.\n"
+    }
+  ]
+}

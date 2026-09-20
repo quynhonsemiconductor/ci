@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": "**/*.dart",
+      "merge_system_rule": true,
+      "rule": "Dart and Flutter. There is no built-in ruleset for Dart, so this covers the basics as well as\nconventions.\n\n## Correctness\n- Null safety: flag `!` used to silence the analyser where the null case is reachable.\n- Flag `async` work started in `build()`; builds run many times and must stay pure.\n- Every `StreamSubscription`, `AnimationController`, `TextEditingController` and timer created in\n  a `State` must be disposed in `dispose()`.\n- Flag `BuildContext` used across an `await` without a `mounted` check; the widget may be gone.\n\n## Structure\n- Widgets should be classes, not functions returning widgets: a function does not get its own\n  element, so it cannot be rebuilt independently or made `const`.\n- Prefer `const` constructors where the widget is immutable.\n- Flag business logic inside a widget where a separate layer exists in this project.\n\n## Style\n- Follow `dart format`; do not raise formatting the formatter would fix.\n- Flag a `print` left in application code where a logger exists.\n"
+    }
+  ]
+}

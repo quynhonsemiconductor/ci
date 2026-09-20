@@ -1,0 +1,39 @@
+{
+  "rules": [
+    {
+      "path": "**/*.{test,spec}.{ts,tsx}",
+      "merge_system_rule": true,
+      "rule": "Tests are the guard (this repository uses both `.test.ts` and `.spec.ts`), so a test that cannot fail is the worst defect in the change.\n\n- Flag a test asserting a value it also computed.\n- Flag a mock so permissive that the assertion holds regardless of the code under test.\n- Flag a test that depends on ambient environment (a real `.env`, a live network, the clock)\n  where an injected value was available — an environment-dependent test passes on the author's\n  machine and proves nothing in CI.\n- Flag a queue-style fake that runs out of responses mid-test: once it returns a default, the\n  remaining assertions describe the fake, not the code.\n"
+    },
+    {
+      "path": "**/infrastructure/persistence/*.ts",
+      "merge_system_rule": true,
+      "rule": "Repositories, where a missing filter becomes a data leak.\n\n## Every query is scoped to the workspace\n\nRows in this schema carry `workspace_id`, and roughly nine hundred repository call sites pass a\nworkspace through. A query that omits it returns another customer's data and looks perfectly\ncorrect in a test with one workspace in the database.\n\n- Flag ANY new query, count, aggregate or `EXISTS` that does not constrain the workspace, and say\n  plainly that this is a cross-tenant leak rather than a style issue.\n- Flag an update or delete located by id alone where the table is workspace-scoped: an id from\n  one workspace must not be actionable from another.\n- Flag a soft-deleted row included where the rest of the module filters `deleted_at IS NULL`, and\n  the reverse. A partial unique index means a key can be reused after a soft delete, so the two\n  must agree or uniqueness differs between code and database.\n\n## Performance\n- Flag a query inside a loop over rows just fetched — that is the N+1 shape.\n- Flag a list endpoint with no limit.\n"
+    },
+    {
+      "path": "**/interface/http/*.controller.ts",
+      "merge_system_rule": true,
+      "rule": "HTTP controllers.\n\n## Authorization is explicit on every route\n\nTwenty-four controllers here declare permissions with `@RequirePermission`. A new route without\none is open to any authenticated caller, and nothing in a test will say so.\n\n- Flag a new route with no permission declaration, and name the permission its neighbours use.\n- Where a permission is scoped to a resource read from the request, check the request actually\n  carries that field. A guard reading `projectId` from the query fails with a permission error\n  when the parameter is simply absent, which sends the reader to look for missing access instead\n  of a missing parameter.\n- Flag a route that takes an id and does not verify the caller may see that id.\n\n## Contract\n- A response shape is a contract. Flag a removed or renamed field, a narrowed type, or a changed\n  status code without a note on who consumes it.\n- Flag a new required request field on an existing route; existing callers become invalid.\n"
+    },
+    {
+      "path": "**/dto/*.ts",
+      "merge_system_rule": true,
+      "rule": "Request and response DTOs are the API's contract, and a generated client is derived from them.\n\n- A change here changes the OpenAPI document, so the committed generated client must be\n  regenerated in the same pull request. It is a 437 KB file produced from a running server, and\n  forgetting it fails the contract check with a diff rather than a clear message.\n- Flag a field added to a DTO that is not also carried through the service and the repository. A\n  field validated and then dropped before the row is the hardest kind of bug to see: the request\n  succeeds.\n- Flag a validation rule loosened without a reason, and a regex or length limit that disagrees\n  with the database column.\n"
+    },
+    {
+      "path": "**/{worker,queue,jobs,processor}*/**/*.ts",
+      "merge_system_rule": true,
+      "rule": "Background work. Delivery here is at-least-once, so a handler will run twice.\n\n- Flag a handler whose effect is not idempotent — sending mail, charging, incrementing — with no\n  key or guard that makes a repeat harmless.\n- Flag a job with no retry policy, and a retry with no backoff.\n- Flag a failure path that swallows the error: a job that fails silently is worse than one that\n  is retried loudly.\n- Flag unbounded work in one job where the input grows; batch it.\n"
+    },
+    {
+      "path": "**/{api,client,http}*.ts",
+      "merge_system_rule": true,
+      "rule": "Outbound calls.\n\n- Every request needs a timeout and an explicit failure path.\n- A write must send `Content-Type`; at least one provider rejects a body without it and the\n  error names the body, not the header.\n- Paginated endpoints differ: some take a page number, some a cursor. Sending the wrong one is\n  accepted and silently returns the first page forever.\n- Flag a response parsed without checking status.\n"
+    },
+    {
+      "path": "**/*.{ts,tsx}",
+      "merge_system_rule": true,
+      "rule": "QNSC TypeScript conventions, on top of the built-in TypeScript rules.\n\n## Layering\n\nThe backend services follow ports-and-adapters: `interface/` (HTTP, DTOs) -> `application/`\n(services) -> `domain/` (types, ports) -> `infrastructure/` (repositories). A dependency\npointing the wrong way is the defect that makes a module impossible to test.\n\n- Flag a `domain/` file importing from `infrastructure/` or `interface/`.\n- Flag HTTP concerns (request objects, status codes, headers) appearing in `application/`.\n- Flag SQL or an ORM call outside `infrastructure/`.\n\n## A repository that whitelists columns must include the new one\n\nUpdate methods here list every column they set. A field added to a DTO and to the domain type\nbut not to that list is accepted by the API, validated, and silently discarded. This has\nhappened: a key could be sent, passed validation, and never reach the row.\n\n- When a pull request adds a field to an update path, verify it is present in EVERY layer\n  between the schema and the row, and name the layer that is missing.\n\n## Optionality must be read through the helper, not guessed from the field list\n\nFields are often built by named helpers whose suffix carries the optionality. Judging a field\nrequired because the schema line looks required produces false findings.\n\n- Before reporting a field as required or optional, follow the helper it is built from.\n\n## Errors\n\n- An error message must say what the caller should do differently. `PERMISSION_DENIED` on a\n  request whose real fault was a missing query parameter sends the reader to the wrong place.\n- Flag a thrown error whose message names neither the offending value nor the remedy.\n- Flag a caught error that is swallowed without logging or rethrowing.\n\n## Tests\n\n- A new branch needs a test that fails without it.\n- Prefer asserting on observable behaviour over internal calls, except where the defect being\n  guarded is precisely that a call was missing.\n\n## Logging\n- Nothing personal or secret in a log line: no tokens, no email addresses, no request body\n  that might carry either.\n- A new external call needs a log or span on failure; an unattributable timeout is the\n  hardest thing to diagnose.\n"
+    }
+  ]
+}

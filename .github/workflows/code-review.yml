@@ -1,0 +1,241 @@
+# =============================================================================
+# Reusable code review — AI review of a pull request against QNSC's rules.
+#
+# The reviewing is done by our fork of open-code-review, pinned by commit. The fork exists so the
+# action cannot change or disappear under us: a pinned SHA protects against a moved tag, but not
+# against a repository being deleted, and Actions resolves `uses:` from GitHub at run time.
+#
+# The fork is deliberately UNMODIFIED. Everything specific to us lives in `rules/` here and in the
+# inputs below, so syncing upstream stays a button rather than a merge.
+#
+# NOT BLOCKING BY DEFAULT, and the default matters more than usual. Our product repositories set
+# `required_review_thread_resolution: true`, which means an unresolved review thread blocks a merge
+# outright — a green pull request that refuses to merge, reporting only that the base branch policy
+# prohibits it. An agent that finds ten things per pull request would turn that into a merge tax, so
+# findings go to a single summary comment unless a caller asks otherwise.
+# =============================================================================
+
+name: Code review
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Repository or product name, for the summary comment and logs.'
+        required: true
+        type: string
+      profiles:
+        description: >
+          Comma-separated rule profiles from `rules/` to merge on top of `base.json` — for example
+          `typescript,sql,workflows`. `base` is always included and does not need naming.
+        required: false
+        type: string
+        default: ''
+      model:
+        description: 'Model to review with.'
+        required: false
+        type: string
+        default: 'claude-sonnet-4-5'
+      llm_url:
+        description: >
+          Endpoint for the model. Anthropic wants the messages path; an OpenAI-protocol provider wants
+          its base URL. For GLM that is `https://open.bigmodel.cn/api/paas/v4`, or
+          `https://open.bigmodel.cn/api/coding/paas/v4` on a coding plan.
+        required: false
+        type: string
+        default: 'https://api.anthropic.com/v1/messages'
+      use_anthropic_protocol:
+        description: >
+          Whether the endpoint speaks Anthropic's protocol. Set to 'false' for an OpenAI-compatible
+          provider, which includes GLM: the tool ships `z-ai` and `z-ai-coding` as OpenAI chat
+          completions, so leaving this true against a GLM URL fails on the shape of the request rather
+          than on anything that names the cause.
+        required: false
+        type: string
+        default: 'true'
+      llm_extra_body:
+        description: >
+          Extra JSON merged into the request body. The default disables Anthropic's thinking block and
+          is Anthropic-shaped, so an OpenAI-protocol provider wants '{}' here.
+        required: false
+        type: string
+        default: '{"thinking": {"type": "disabled"}}'
+      inline_comments:
+        description: >
+          Post line-level review threads as well as the summary. Left off by default: with
+          `required_review_thread_resolution` enabled, every thread must be resolved by hand before a
+          merge, so inline findings have a cost beyond reading them.
+        required: false
+        type: boolean
+        default: false
+      language:
+        description: 'Language for the review text.'
+        required: false
+        type: string
+        default: 'English'
+      rules_ref:
+        description: 'Ref of this repository to read `rules/` from. Keep in step with the workflow ref.'
+        required: false
+        type: string
+        default: 'v1'
+      resolve_outdated:
+        description: >
+          Resolve the bot's own inline threads once their lines no longer exist. `false`, `report`
+          (logs what it would do, mutates nothing) or `true`.
+
+          `true` requires the CALLING workflow to grant `contents: write`, because GitHub gates the
+          resolve mutation on repository write access rather than the pull-request scope — with
+          `pull-requests: write` alone the action warns and continues, which looks like it worked.
+          That permission is not granted here by default: write access to the repository is a lot to
+          hand a reviewer for the convenience of tidying threads.
+
+          Only meaningful with `inline_comments: true`; with the default routing there are no inline
+          threads to resolve.
+        required: false
+        type: string
+        default: 'false'
+      max_tokens_budget:
+        description: >
+          Hard ceiling on total input plus output tokens for one review. Checked before every round:
+          a group already over budget gets one final round to report what it has, remaining groups are
+          skipped and reported rather than silently dropped. This is the cost control — a rule file
+          cannot run away with a large pull request if the run cannot exceed a number you chose.
+        required: false
+        type: string
+        default: '400000'
+    secrets:
+      llm_token:
+        description: 'API key for the model. Set once as an organisation secret.'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Code review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Assemble the ruleset
+        # The rules live in this repository while the workflow runs in the caller's checkout, so they
+        # are fetched rather than checked out: `actions/checkout` would have to land inside the
+        # caller's workspace, and the review action does its own checkouts of base and head there.
+        #
+        # Downloaded from the same ref the caller pinned the workflow to, so rules and workflow move
+        # together. A missing profile fails the step rather than reviewing with silently fewer rules
+        # than the caller asked for.
+        env:
+          PROFILES: ${{ inputs.profiles }}
+          RULES_REF: ${{ inputs.rules_ref }}
+        run: |
+          set -euo pipefail
+          base='https://raw.githubusercontent.com/quynhonsemiconductor/ci'
+          work="$RUNNER_TEMP/qnsc-rules"
+          mkdir -p "$work"
+
+          fetch() {
+            local name="$1"
+            if ! curl -fsSL "$base/$RULES_REF/rules/$name.json" -o "$work/$name.json"; then
+              echo "::error::rule profile '$name' not found at $RULES_REF — check the name against ci/rules/"
+              exit 1
+            fi
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$work/$name.json" \
+              || { echo "::error::rule profile '$name' is not valid JSON"; exit 1; }
+            echo "  loaded $name"
+          }
+
+          echo "Assembling rules from ci@$RULES_REF"
+          fetch base
+          names='base'
+          IFS=',' read -ra requested <<< "${PROFILES:-}"
+          for p in "${requested[@]:-}"; do
+            p="$(echo "$p" | tr -d '[:space:]')"
+            [ -z "$p" ] && continue
+            [ "$p" = 'base' ] && continue
+            fetch "$p"
+            names="$names,$p"
+          done
+
+          # Compose the ruleset. This is NOT a concatenation, because of how the tool resolves a
+          # rule for a file: patterns are checked in order and THE FIRST MATCH WINS, and
+          # `merge_system_rule` merges the winner with the tool's built-in rule for that file — not
+          # with our other rules.
+          #
+          # So a naive concatenation with `base` first would have made every language rule
+          # unreachable: `**/*` matches everything, wins, and nothing after it is ever consulted.
+          # Instead the base text is folded INTO each specific rule, and base is also emitted last as
+          # the catch-all for files no profile claims. Profile order is preserved, and within each
+          # profile the broad pattern is listed last for the same reason.
+          python3 - "$work" "$names" <<'PY'
+          import json, os, sys
+
+          work, names = sys.argv[1], sys.argv[2].split(',')
+
+          def rules_of(name):
+              with open(os.path.join(work, f'{name}.json'), encoding='utf-8') as fh:
+                  return json.load(fh).get('rules', [])
+
+          base_rules = rules_of('base')
+          base_text = '\n\n'.join(r['rule'] for r in base_rules)
+
+          composed = []
+          for name in names:
+              if name == 'base':
+                  continue
+              for r in rules_of(name):
+                  composed.append({
+                      'path': r['path'],
+                      'merge_system_rule': r.get('merge_system_rule', True),
+                      # Specific rule first: it is the reason this file matched. The org-wide rules
+                      # follow, present in full because no later pattern will be consulted.
+                      'rule': f"{r['rule']}\n\n---\n\n{base_text}",
+                  })
+
+          # Test-file rules are hoisted to the front, so the order a caller lists profiles in cannot
+          # decide whether a test is reviewed as a test. Without this, `profiles: frontend,typescript`
+          # sends `app-popover.test.tsx` to the `**/*.tsx` rule, and the rules written specifically
+          # about tests that cannot fail never run on a test.
+          composed.sort(key=lambda r: 0 if ('test' in r['path'] or 'spec' in r['path']) else 1)
+
+          # Catch-all last: files no profile claims still get the org-wide rules.
+          composed.extend(base_rules)
+
+          out = os.path.join(work, 'merged.json')
+          with open(out, 'w', encoding='utf-8') as fh:
+              json.dump({'rules': composed}, fh, indent=2, ensure_ascii=False)
+
+          print(f'{len(composed)} rules composed from {len(names)} profile(s)')
+          for r in composed:
+              print(f"  {r['path']}  ({len(r['rule'])} chars)")
+          PY
+
+          echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
+
+      - name: Review
+        # Pinned by commit, and not exposed as an input: `uses:` is resolved before expressions are
+        # evaluated, so a caller-supplied ref is impossible here. Bumping is an edit to this line,
+        # which is the right place for it — a review bot that changed per caller would give different
+        # answers on the same code.
+        uses: quynhonsemiconductor/code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681 # v1.12.7
+        with:
+          llm_url: ${{ inputs.llm_url }}
+          llm_auth_token: ${{ secrets.llm_token }}
+          llm_model: ${{ inputs.model }}
+          llm_use_anthropic: ${{ inputs.use_anthropic_protocol }}
+          llm_extra_body: ${{ inputs.llm_extra_body }}
+          language: ${{ inputs.language }}
+          rule: ${{ env.QNSC_RULE_FILE }}
+          # One summary comment, updated in place on each push, rather than a growing pile.
+          sticky_summary: 'true'
+          max_tokens_budget: ${{ inputs.max_tokens_budget }}
+          # With inline comments off, every severity is routed into that summary instead of becoming
+          # a review thread that must be resolved before the branch can merge. `critical` is the top
+          # severity and routing is at-or-below, so this covers all of them.
+          #
+          # One gap worth knowing: a finding whose severity the model leaves empty is never routed by
+          # this policy, so it can still arrive inline. Routing fails open by design — it would rather
+          # post a finding in the wrong place than drop it.
+          route_severity_below: ${{ inputs.inline_comments && '' || 'critical' }}
+          resolve_outdated: ${{ inputs.resolve_outdated }}
