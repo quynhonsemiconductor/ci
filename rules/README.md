@@ -72,6 +72,33 @@ secrets:
 Rules are prompts, not a DSL, so a weaker model produces weaker review rather than an error. Worth
 comparing the two on the same pull request before standardising on either.
 
+## Commenting as our own bot
+
+Set `app_id` and pass `app_private_key`, and reviews arrive under our App's name and mark instead of
+`github-actions[bot]`. The App is an IDENTITY only — no webhook, no endpoint, nothing hosted. The same
+pattern `infra-plan.yml` and `release-please.yml` already use for `RELEASE_BOT`.
+
+## Blocking, and what it costs
+
+`inline_from_severity` decides which findings become line-level review threads:
+
+| value      | inline                  | summary            |
+| ---------- | ----------------------- | ------------------ |
+| `none`     | nothing                 | everything         |
+| `critical` | critical                | high, medium, low  |
+| `high`     | critical, high          | medium, low        |
+| `medium`   | critical, high, medium   | low                |
+| `all`      | everything              | nothing            |
+
+A thread is not free where `required_review_thread_resolution` is enabled: each one must be resolved
+by hand before the branch can merge. On the first review this ever ran, it produced one correct finding
+and one confidently wrong one — a `medium` that asserted `timeout-minutes` works on a job calling a
+reusable workflow, which GitHub does not allow and actionlint rejects.
+
+That is the argument for a threshold rather than a switch. `critical` or `high` keeps the categories
+where a false positive is least likely blocking, and leaves the rest as advice. Going straight to `all`
+means the next confidently wrong medium stalls a branch until someone clicks it away.
+
 ## Cost, and why these files are short
 
 Only the FIRST matching rule is sent for a file, and the base text is folded into it — so the base
