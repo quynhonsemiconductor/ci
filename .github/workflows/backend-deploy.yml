@@ -229,7 +229,14 @@ jobs:
           ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
           image-tag: ${{ env.IMAGE_TAG }}
-          extra-tags: latest
+          # No `extra-tags: latest` (§11, task 0.8). Every main build already pushes its
+          # immutable `sha-<commit>` tag as `image-tag`; a moving `:latest` is what let a
+          # develop build reach a production task definition
+          # (qnsc-kb-backend/infra/live/prod/main.tf:104 records that incident), and it is
+          # the ONE tag republished on every build. Removing it here is step (a) of 0.8 and
+          # MUST land before the repositories flip to IMMUTABLE — IMMUTABLE rejects a second
+          # push of an existing tag, so a pipeline still publishing `:latest` fails on its
+          # next run. `sha-` and `v` tags are never republished, so they are unaffected.
           build-target: ${{ matrix.service }}
           cache-scope: ${{ matrix.service }}
           cache-backend: ${{ inputs.cache_backend }}
