@@ -114,19 +114,57 @@ jobs:
             names="$names,$p"
           done
 
-          # Concatenate the `rules` arrays. The format has no include mechanism, so composition
-          # happens here: generic rules in base, specific ones in the profile, one file at the end.
+          # Compose the ruleset. This is NOT a concatenation, because of how the tool resolves a
+          # rule for a file: patterns are checked in order and THE FIRST MATCH WINS, and
+          # `merge_system_rule` merges the winner with the tool's built-in rule for that file — not
+          # with our other rules.
+          #
+          # So a naive concatenation with `base` first would have made every language rule
+          # unreachable: `**/*` matches everything, wins, and nothing after it is ever consulted.
+          # Instead the base text is folded INTO each specific rule, and base is also emitted last as
+          # the catch-all for files no profile claims. Profile order is preserved, and within each
+          # profile the broad pattern is listed last for the same reason.
           python3 - "$work" "$names" <<'PY'
           import json, os, sys
+
           work, names = sys.argv[1], sys.argv[2].split(',')
-          merged = []
-          for n in names:
-              with open(os.path.join(work, f'{n}.json'), encoding='utf-8') as fh:
-                  merged.extend(json.load(fh).get('rules', []))
+
+          def rules_of(name):
+              with open(os.path.join(work, f'{name}.json'), encoding='utf-8') as fh:
+                  return json.load(fh).get('rules', [])
+
+          base_rules = rules_of('base')
+          base_text = '\n\n'.join(r['rule'] for r in base_rules)
+
+          composed = []
+          for name in names:
+              if name == 'base':
+                  continue
+              for r in rules_of(name):
+                  composed.append({
+                      'path': r['path'],
+                      'merge_system_rule': r.get('merge_system_rule', True),
+                      # Specific rule first: it is the reason this file matched. The org-wide rules
+                      # follow, present in full because no later pattern will be consulted.
+                      'rule': f"{r['rule']}\n\n---\n\n{base_text}",
+                  })
+
+          # Test-file rules are hoisted to the front, so the order a caller lists profiles in cannot
+          # decide whether a test is reviewed as a test. Without this, `profiles: frontend,typescript`
+          # sends `app-popover.test.tsx` to the `**/*.tsx` rule, and the rules written specifically
+          # about tests that cannot fail never run on a test.
+          composed.sort(key=lambda r: 0 if ('test' in r['path'] or 'spec' in r['path']) else 1)
+
+          # Catch-all last: files no profile claims still get the org-wide rules.
+          composed.extend(base_rules)
+
           out = os.path.join(work, 'merged.json')
           with open(out, 'w', encoding='utf-8') as fh:
-              json.dump({'rules': merged}, fh, indent=2, ensure_ascii=False)
-          print(f'{len(merged)} rules from {len(names)} profile(s) -> {out}')
+              json.dump({'rules': composed}, fh, indent=2, ensure_ascii=False)
+
+          print(f'{len(composed)} rules composed from {len(names)} profile(s)')
+          for r in composed:
+              print(f"  {r['path']}  ({len(r['rule'])} chars)")
           PY
 
           echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"

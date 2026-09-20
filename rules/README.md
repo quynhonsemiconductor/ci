@@ -27,8 +27,12 @@ our release mechanics, and the specific mistakes this organisation has already m
 | `dockerfile` | any repo shipping an image                              |
 | `dart`       | solodesk                                                |
 | `workflows`  | any repo; pair with another profile                     |
+| `frontend`   | rova web, qnsc-kb-frontend, qnsc-landing, ceo-suite     |
 
-A caller may name several: `profiles: typescript,sql,dockerfile,workflows`.
+A caller may name several: `profiles: typescript,frontend,sql,dockerfile,workflows`.
+
+`frontend` exists because there is no accessibility linter in the web applications and roughly fifty
+UI files write `aria` attributes by hand, so review is the only guard on it.
 
 ## Where the built-ins already cover us
 
