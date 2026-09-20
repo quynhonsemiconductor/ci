@@ -60,14 +60,23 @@ on:
         required: false
         type: string
         default: '{"thinking": {"type": "disabled"}}'
-      inline_comments:
+      inline_from_severity:
         description: >
-          Post line-level review threads as well as the summary. Left off by default: with
-          `required_review_thread_resolution` enabled, every thread must be resolved by hand before a
-          merge, so inline findings have a cost beyond reading them.
+          Lowest severity that becomes a line-level review thread. Everything below it goes to the
+          summary instead.
+
+          `none` (default) sends everything to the summary. `high` makes high and critical findings
+          inline. `all` makes every finding inline.
+
+          This is a threshold rather than a switch because of what a thread costs where
+          `required_review_thread_resolution` is enabled: each one must be resolved by hand before the
+          branch can merge. On the first review this reviewer ever ran it produced one correct finding
+          and one that was confidently wrong — a `medium` — and a wrong finding that blocks a merge is
+          worse than one that is merely read. Keeping medium and low in the summary means being wrong
+          costs attention, not a stalled branch.
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'none'
       language:
         description: 'Language for the review text.'
         required: false
@@ -103,10 +112,21 @@ on:
         required: false
         type: string
         default: '400000'
+      app_id:
+        description: >
+          App id of a GitHub App to comment as, so reviews carry our name and mark rather than
+          `github-actions[bot]`. Identity only — no webhook and nothing to host. Omit to comment as the
+          default Actions bot.
+        required: false
+        type: string
+        default: ''
     secrets:
       llm_token:
         description: 'API key for the model. Set once as an organisation secret.'
         required: true
+      app_private_key:
+        description: 'Private key for `app_id`. Required when `app_id` is set.'
+        required: false
 
 permissions:
   contents: read
@@ -213,6 +233,16 @@ jobs:
 
           echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
 
+      - name: Mint a token for our own App
+        # Only when an app id was given. The App is used purely as an identity: comments carry its name
+        # and avatar, and there is no webhook, no endpoint and nothing running anywhere.
+        if: inputs.app_id != ''
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
       - name: Review
         # Pinned by commit, and not exposed as an input: `uses:` is resolved before expressions are
         # evaluated, so a caller-supplied ref is impossible here. Bumping is an edit to this line,
@@ -220,6 +250,9 @@ jobs:
         # answers on the same code.
         uses: quynhonsemiconductor/code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681 # v1.12.7
         with:
+          # The App's token when one was minted, so the comment carries our identity; otherwise the
+          # default Actions token.
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
           llm_url: ${{ inputs.llm_url }}
           llm_auth_token: ${{ secrets.llm_token }}
           llm_model: ${{ inputs.model }}
@@ -230,12 +263,16 @@ jobs:
           # One summary comment, updated in place on each push, rather than a growing pile.
           sticky_summary: 'true'
           max_tokens_budget: ${{ inputs.max_tokens_budget }}
-          # With inline comments off, every severity is routed into that summary instead of becoming
-          # a review thread that must be resolved before the branch can merge. `critical` is the top
-          # severity and routing is at-or-below, so this covers all of them.
+          # Routing is at-or-below the threshold, so the value here is one step BELOW what should stay
+          # inline: to keep high and critical inline, medium and everything under it is routed.
           #
           # One gap worth knowing: a finding whose severity the model leaves empty is never routed by
           # this policy, so it can still arrive inline. Routing fails open by design — it would rather
           # post a finding in the wrong place than drop it.
-          route_severity_below: ${{ inputs.inline_comments && '' || 'critical' }}
+          route_severity_below: >-
+            ${{ inputs.inline_from_severity == 'all' && ''
+             || inputs.inline_from_severity == 'critical' && 'high'
+             || inputs.inline_from_severity == 'high' && 'medium'
+             || inputs.inline_from_severity == 'medium' && 'low'
+             || 'critical' }}
           resolve_outdated: ${{ inputs.resolve_outdated }}
