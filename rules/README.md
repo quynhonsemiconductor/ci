@@ -40,8 +40,38 @@ UI files write `aria` attributes by hand, so review is the only guard on it.
 `.github/workflows`, and Verilog/VHDL among others. `sql`, `Dockerfile` and `dart` have **no**
 built-in rules, which is why those three profiles carry more of the basics than the rest.
 
+## Cost, and why these files are short
+
+Only the FIRST matching rule is sent for a file, and the base text is folded into it — so the base
+file is a multiplier paid on every reviewed file, not a one-off. It was 5,955 characters and is now
+1,949, which halved the per-file rule cost:
+
+| profile     | before      | after       |
+| ----------- | ----------- | ----------- |
+| typescript  | ~2,036 tok  | ~1,034 tok  |
+| frontend    | ~2,544 tok  | ~1,077 tok  |
+| sql         | ~2,043 tok  | ~1,042 tok  |
+| terraform   | ~1,709 tok  | ~707 tok    |
+
+The saving came from deleting, not compressing. Gone: hardcoding, secrets-in-code, dependency
+review and pull request titles — the built-in rules cover the first two, `osv-scanner` and Renovate
+the third, and a required check already enforces the fourth. A rule that repeats another guard costs
+tokens on every file and changes no outcome.
+
+This is also a quality argument, not only a cost one. The tool's own design states that matching
+rules narrowly exists to eliminate noise and keep the model's attention focused; a long rule file
+works against the thing that makes its precision better than a general-purpose agent's. Fewer, sharper
+rules produce fewer confident-sounding findings about things nobody asked about.
+
+`max_tokens_budget` on the workflow is the hard ceiling — a run cannot exceed it, and skipped files
+are reported rather than silently dropped.
+
 ## Editing
 
-Keep a rule specific enough to be actionable and short enough to read. A rule that restates a
-built-in one costs tokens on every review and changes no outcome. Prefer naming the failure that
+Keep a rule specific enough to be actionable and short enough to read, and treat adding one as
+spending tokens on every future review of every matching file.
+
+Two questions before adding anything: does a built-in rule, a linter or a required check already
+cover it, and would a competent reviewer who had never seen this codebase know it? If the answer to
+either is yes, leave it out. Prefer naming the failure that
 prompted the rule — a reviewer given the reason reports the problem rather than the pattern.

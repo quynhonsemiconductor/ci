@@ -59,6 +59,15 @@ on:
         required: false
         type: string
         default: 'v1'
+      max_tokens_budget:
+        description: >
+          Hard ceiling on total input plus output tokens for one review. Checked before every round:
+          a group already over budget gets one final round to report what it has, remaining groups are
+          skipped and reported rather than silently dropped. This is the cost control — a rule file
+          cannot run away with a large pull request if the run cannot exceed a number you chose.
+        required: false
+        type: string
+        default: '400000'
     secrets:
       llm_token:
         description: 'API key for the model. Set once as an organisation secret.'
@@ -184,6 +193,7 @@ jobs:
           rule: ${{ env.QNSC_RULE_FILE }}
           # One summary comment, updated in place on each push, rather than a growing pile.
           sticky_summary: 'true'
+          max_tokens_budget: ${{ inputs.max_tokens_budget }}
           # With inline comments off, findings are routed into that summary instead of becoming
           # review threads that each need resolving before the branch can merge.
           route_severity_below: ${{ inputs.inline_comments && '' || 'critical' }}
