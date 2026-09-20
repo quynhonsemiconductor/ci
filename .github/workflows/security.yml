@@ -8,7 +8,7 @@
 #     security:
 #       uses: quynhonsemiconductor/ci/.github/workflows/security.yml@v1
 #       with:
-#         product: rally
+#         product: rova
 #       secrets: inherit
 #
 # All gates run on the FREE GitHub plan (no GitHub Advanced Security needed).
@@ -31,7 +31,7 @@ on:
   workflow_call:
     inputs:
       product:
-        description: Product name, used for the scan image tag (e.g. rally, opshub).
+        description: Product name, used for the scan image tag (e.g. rova, opshub).
         required: true
         type: string
       image_target:
