@@ -1,0 +1,82 @@
+name: plan-guard
+description: >
+  Refuse a plan that destroys or replaces a data resource unless the stack's
+  `.allow-data-destroy` file names it. Task 0.3, §17b.
+
+  This is the estate's answer to "nothing stops a green plan from deleting a
+  database", and it is deliberately NOT `lifecycle { prevent_destroy }`. Three
+  reasons, each learned on 2026-09-19/20:
+
+    * prevent_destroy CANNOT take a variable on this estate — every workflow pins
+      OpenTofu 1.9.1 and that is a later feature. An attempt to ship it was
+      reverted after CI rejected it with "Variables not allowed".
+    * hardcoding `true` blocks REPLACEMENT as well as deletion, which breaks two
+      documented operations: the RDS rebuild in
+      infra/docs/rova-subnet-group-rebuild.md, and develop's secrets
+      destroy-and-redeploy cycle.
+    * it lives in tf-modules, so protecting a type means a module release plus a
+      caller bump in four repositories — and it protects by TYPE forever rather
+      than by what a change is about to do.
+
+  This reads the actual proposed change instead, so it is version-independent,
+  blocks nothing, covers resources nobody has added yet, and fails at PLAN time —
+  which is the gap `deletion_protection` leaves. §17b's 2026-09-14 incident
+  happened WITH deletion_protection on: the destroy was authorised and protection
+  was turned off first, in the same change.
+
+inputs:
+  plan-file:
+    description: The binary plan produced by `tofu plan -out=<file>`.
+    required: false
+    default: tfplan
+  working-directory:
+    description: >
+      The stack directory. `.allow-data-destroy` is read from here, so it sits
+      beside the stack it governs rather than in one estate-wide list nobody
+      compares to anything.
+    required: false
+    default: "."
+  python-version:
+    description: Python for the guard. Only the standard library is used.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # `tofu show -json` on the SAVED plan, not a fresh one. Re-planning here would
+    # read a different state — the guard must judge exactly the plan the reviewer
+    # is about to see, not a second opinion taken moments later.
+    - name: Render the plan as JSON
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PLAN_FILE: ${{ inputs.plan-file }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$PLAN_FILE" ]; then
+          echo "::error title=plan-guard::No plan file at '$PLAN_FILE'. This action must run \
+        AFTER a \`tofu plan -out=$PLAN_FILE\` in the same job and directory. A missing plan is \
+        NOT an empty plan, and passing here would be a clean verdict on nothing."
+          exit 1
+        fi
+        tofu show -json "$PLAN_FILE" > plan.json
+        # A zero-byte render means `tofu show` failed quietly. Catch it here rather
+        # than letting the guard report "0 changes read" and pass.
+        [ -s plan.json ] || {
+          echo "::error title=plan-guard::\`tofu show -json\` produced an empty document."
+          exit 1
+        }
+
+    - name: Refuse a plan that destroys data
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GUARD: ${{ github.action_path }}/plan_guard.py
+      run: |
+        set -euo pipefail
+        python3 "$GUARD" plan.json
