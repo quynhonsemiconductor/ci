@@ -292,7 +292,8 @@ jobs:
           ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
           image-name: rova-api
           image-tag: ${{ env.IMAGE_TAG }}
-          extra-tags: latest
+          # No `extra-tags: latest` — a moving tag defeats immutable pins (§11, task 0.8).
+          # The immutable `sha-<commit>` / `v<version>` `image-tag` is the only tag pushed.
           build-target: api
           cache-scope: api
 

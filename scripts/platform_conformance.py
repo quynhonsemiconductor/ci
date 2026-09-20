@@ -324,12 +324,150 @@ def check_module_refs(e: Estate) -> list[Finding]:
     return out
 
 
+def check_schedulable(e: Estate) -> list[Finding]:
+    """§2, §4b Axis 5/6 — every nodeSelector the estate renders must be satisfiable
+    by a node pool the estate actually creates.
+
+    THIS CONTRACT EXISTS BECAUSE THE ESTATE FAILED IT. `cluster-{dev,prod}` enable
+    EKS Auto Mode with `node_pools = ["general-purpose"]`, and AWS documents that
+    built-in pool as amd64-only, on-demand-only, and NOT MODIFIABLE. Every workload
+    in `values/` asks for `arch: arm64`, and ArgoCD, ESO, KEDA, Alloy, Envoy Gateway
+    and cloudflared all ask for `capacity-type: spot`. Applying the cluster as it
+    stood would have produced a cluster on which ArgoCD itself never scheduled — so
+    nothing would have been running to reconcile `apps/root.yaml`, the one thing
+    installed by hand.
+
+    It is the same shape as every other contract here: two repositories, each
+    internally valid. `tofu validate` passes because a node pool name is a string.
+    `helm lint` and `helm unittest` pass because a nodeSelector is a map. The
+    manifests are correct, the cluster is correct, and no pod ever runs.
+
+    The failure is also invisible until apply and reads as someone else's bug:
+    `0/N nodes are available: node(s) didn't match Pod's node affinity/selector`
+    looks like a broken manifest, not a missing pool.
+    """
+    out = []
+    compute = e.gitops / "platform" / "compute"
+
+    def selectors() -> Iterator[tuple[str, dict]]:
+        """Every `nodeSelector` anywhere under rendered/ and platform/.
+
+        Walks arbitrary nesting on purpose. The golden render puts it at
+        `spec.template.spec.nodeSelector`; ArgoCD's chart values put it under
+        `global`; Envoy Gateway's put it under `provider.kubernetes.envoyDeployment
+        .pod`. A check that knew the paths would miss the next one.
+        """
+        roots = [e.gitops / "rendered", e.gitops / "platform"]
+        for root in roots:
+            for f in sorted(root.rglob("*.yaml")):
+                if f.is_relative_to(compute):
+                    continue  # the pools themselves
+                try:
+                    docs = list(yaml.safe_load_all(f.read_text()))
+                except yaml.YAMLError as exc:
+                    out.append(Finding("schedulable", str(f.relative_to(e.gitops)),
+                                       f"not parseable, so its constraints were NOT checked: {exc}"))
+                    continue
+                for doc in docs:
+                    yield from _walk(doc, f.relative_to(e.gitops))
+
+    def _walk(node, where) -> Iterator[tuple[str, dict]]:
+        if isinstance(node, dict):
+            sel = node.get("nodeSelector")
+            if isinstance(sel, dict) and sel:
+                yield str(where), sel
+            for v in node.values():
+                yield from _walk(v, where)
+        elif isinstance(node, list):
+            for v in node:
+                yield from _walk(v, where)
+
+    # ── The pools that will exist ──────────────────────────────────────────
+    # (arch values, capacity-type values, whether it is tainted)
+    pools: dict[str, tuple[set[str], set[str], bool]] = {}
+
+    if compute.is_dir():
+        for f in sorted(compute.glob("*.yaml")):
+            for doc in yaml.safe_load_all(f.read_text()):
+                if not doc or doc.get("kind") != "NodePool":
+                    continue
+                spec = doc["spec"]["template"]["spec"]
+                reqs = {r["key"]: r for r in spec.get("requirements", [])}
+
+                def vals(key: str, default: set[str]) -> set[str]:
+                    r = reqs.get(key)
+                    if not r:
+                        return default  # unconstrained: the pool allows anything
+                    return set(r["values"]) if r.get("operator") == "In" else default
+
+                pools[doc["metadata"]["name"]] = (
+                    vals("kubernetes.io/arch", {"amd64", "arm64"}),
+                    vals("karpenter.sh/capacity-type", {"spot", "on-demand", "reserved"}),
+                    bool(spec.get("taints")),
+                )
+    else:
+        out.append(Finding("schedulable", "gitops/platform/compute",
+                           "directory absent — no custom NodePool exists, so only Auto Mode's "
+                           "built-in pools can schedule anything. See this contract's docstring."))
+
+    # AWS's built-in pools, as enabled by the cluster stacks. Their properties are
+    # FIXED by AWS and cannot be modified, only enabled or disabled:
+    #   general-purpose  amd64 only, on-demand only
+    #   system           amd64+arm64, on-demand only, CriticalAddonsOnly taint
+    builtin = {
+        "general-purpose": ({"amd64"}, {"on-demand"}, False),
+        "system": ({"amd64", "arm64"}, {"on-demand"}, True),
+    }
+    enabled_builtins: set[str] = set()
+    for stack in sorted(e.live.glob("cluster-*")):
+        block = re.search(r"node_pools\s*=\s*\[([^\]]*)\]", e.hcl(stack))
+        if block:
+            enabled_builtins |= set(re.findall(r'"([a-z-]+)"', block.group(1)))
+    for name in sorted(enabled_builtins & set(builtin)):
+        pools[name] = builtin[name]
+
+    # ── The check ──────────────────────────────────────────────────────────
+    # Only these two keys are node-pool properties. Anything else in a
+    # nodeSelector is a label something must apply to the node, and nothing in
+    # this estate does — so an unrecognised key is reported rather than ignored,
+    # because ignoring it is how this contract would pass while a new axis
+    # silently stops scheduling.
+    known = {"kubernetes.io/arch", "karpenter.sh/capacity-type"}
+
+    for where, sel in selectors():
+        for key in sorted(set(sel) - known):
+            out.append(Finding("schedulable", where,
+                               f"nodeSelector key {key!r} is not a node-pool property and nothing "
+                               f"labels nodes with it — the pod would stay Pending"))
+
+        arch = sel.get("kubernetes.io/arch")
+        cap = sel.get("karpenter.sh/capacity-type")
+        if arch is None and cap is None:
+            continue
+
+        matching = sorted(
+            name for name, (arches, caps, tainted) in pools.items()
+            # A tainted pool cannot take a pod that does not tolerate the taint,
+            # and nothing in this estate sets `CriticalAddonsOnly`.
+            if not tainted
+            and (arch is None or arch in arches)
+            and (cap is None or cap in caps)
+        )
+        if not matching:
+            asked = ", ".join(f"{k}={v}" for k, v in sorted(sel.items()) if k in known)
+            out.append(Finding("schedulable", where,
+                               f"asks for {asked} — NO node pool can provide it. "
+                               f"Pools available: {', '.join(sorted(pools)) or 'NONE'}"))
+    return out
+
+
 CONTRACTS: dict[str, tuple[str, Check]] = {
     "size":         ("§7c — the one fact declared twice", check_size),
     "services":     ("chart ServiceAccounts vs product-profile IRSA roles", check_services),
     "remote-state": ("stack reads vs stack outputs", check_remote_state),
     "secret-refs":  ("§8 — references vs definitions", check_secret_refs),
     "module-refs":  ("live stack sources vs tf-modules tags", check_module_refs),
+    "schedulable":  ("§2 — rendered nodeSelectors vs node pools that exist", check_schedulable),
 }
 
 

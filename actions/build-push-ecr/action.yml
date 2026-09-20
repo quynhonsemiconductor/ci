@@ -90,10 +90,17 @@ inputs:
       cache in ECR at all. Nothing else changes between the three.
 
       Registry mode requires a MUTABLE ECR repository, because each build overwrites the
-      `buildcache` tag. That is not a new constraint: this action already pushes `latest`
-      via `extra-tags`, which needs mutability for the same reason — a product whose
-      repositories are IMMUTABLE (the ecr module's default) is already incompatible with
-      this pipeline before cache enters it. rally, qnsc-kb and opshub all pass MUTABLE.
+      `buildcache` tag. As of task 0.8 the image repositories are IMMUTABLE (the ecr
+      module's default), so `registry` cache is INCOMPATIBLE with them — a `buildcache`
+      overwrite is rejected exactly as a second `:latest` push would be. That is why the
+      products moved off it: rally and opshub use `gha`, qnsc-kb uses `none`. Do not set
+      `registry` against an IMMUTABLE repository; use `gha` or `none`, or a self-hosted
+      in-VPC runner if registry cache is ever genuinely wanted (see the egress note above).
+
+      (Historical: this action used to push a moving `:latest` via `extra-tags`, which
+      needed mutability for the same reason. That push was removed in 0.8 — §11 — and the
+      repositories flipped to IMMUTABLE, so both the tag and the cache constraint changed
+      together.)
 
       The ECR lifecycle policy leaves `buildcache` alone: its rules key on the `v` and
       `sha-` prefixes and on untagged images, and `buildcache` matches neither. So
