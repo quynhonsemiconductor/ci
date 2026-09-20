@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "path": "**/*.{ts,tsx}",
+      "merge_system_rule": true,
+      "rule": "QNSC TypeScript conventions, on top of the built-in TypeScript rules.\n\n## Layering\n\nThe backend services follow ports-and-adapters: `interface/` (HTTP, DTOs) -> `application/`\n(services) -> `domain/` (types, ports) -> `infrastructure/` (repositories). A dependency\npointing the wrong way is the defect that makes a module impossible to test.\n\n- Flag a `domain/` file importing from `infrastructure/` or `interface/`.\n- Flag HTTP concerns (request objects, status codes, headers) appearing in `application/`.\n- Flag SQL or an ORM call outside `infrastructure/`.\n\n## A repository that whitelists columns must include the new one\n\nUpdate methods here list every column they set. A field added to a DTO and to the domain type\nbut not to that list is accepted by the API, validated, and silently discarded. This has\nhappened: a key could be sent, passed validation, and never reach the row.\n\n- When a pull request adds a field to an update path, verify it is present in EVERY layer\n  between the schema and the row, and name the layer that is missing.\n\n## Optionality must be read through the helper, not guessed from the field list\n\nFields are often built by named helpers whose suffix carries the optionality. Judging a field\nrequired because the schema line looks required produces false findings.\n\n- Before reporting a field as required or optional, follow the helper it is built from.\n\n## Errors\n\n- An error message must say what the caller should do differently. `PERMISSION_DENIED` on a\n  request whose real fault was a missing query parameter sends the reader to the wrong place.\n- Flag a thrown error whose message names neither the offending value nor the remedy.\n- Flag a caught error that is swallowed without logging or rethrowing.\n\n## Tests\n\n- A new branch needs a test that fails without it.\n- Prefer asserting on observable behaviour over internal calls, except where the defect being\n  guarded is precisely that a call was missing.\n"
+    },
+    {
+      "path": "**/*.test.ts",
+      "merge_system_rule": true,
+      "rule": "Tests are the guard, so a test that cannot fail is the worst defect in the change.\n\n- Flag a test asserting a value it also computed.\n- Flag a mock so permissive that the assertion holds regardless of the code under test.\n- Flag a test that depends on ambient environment (a real `.env`, a live network, the clock)\n  where an injected value was available — an environment-dependent test passes on the author's\n  machine and proves nothing in CI.\n- Flag a queue-style fake that runs out of responses mid-test: once it returns a default, the\n  remaining assertions describe the fake, not the code.\n"
+    },
+    {
+      "path": "**/{api,client,http}*.ts",
+      "merge_system_rule": true,
+      "rule": "Outbound calls.\n\n- Every request needs a timeout and an explicit failure path.\n- A write must send `Content-Type`; at least one provider rejects a body without it and the\n  error names the body, not the header.\n- Paginated endpoints differ: some take a page number, some a cursor. Sending the wrong one is\n  accepted and silently returns the first page forever.\n- Flag a response parsed without checking status.\n"
+    }
+  ]
+}

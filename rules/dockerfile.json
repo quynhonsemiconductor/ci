@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": "**/Dockerfile*",
+      "merge_system_rule": true,
+      "rule": "Container images. There is no built-in ruleset for Dockerfiles.\n\n- Pin base images by digest, or at minimum an exact tag; `:latest` makes a build unreproducible\n  and a rebuild a silent upgrade.\n- A secret passed as a build argument is recorded in the image history. Use a build mount or\n  inject at runtime, and flag `ARG` names that look like credentials.\n- Run as a non-root user unless there is a stated reason.\n- Flag `apt-get install` or `apk add` without a cleanup of the package cache in the same layer;\n  a separate `RUN` cannot shrink the earlier layer.\n- Flag `COPY . .` where a `.dockerignore` does not exist: it copies `.git`, `node_modules` and\n  any local `.env` into the image.\n- Multi-stage builds should not carry build tooling into the final stage.\n- `HEALTHCHECK` and an explicit `EXPOSE` make the container's contract legible.\n"
+    }
+  ]
+}

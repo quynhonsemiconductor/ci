@@ -1,0 +1,152 @@
+# =============================================================================
+# Reusable code review — AI review of a pull request against QNSC's rules.
+#
+# The reviewing is done by our fork of open-code-review, pinned by commit. The fork exists so the
+# action cannot change or disappear under us: a pinned SHA protects against a moved tag, but not
+# against a repository being deleted, and Actions resolves `uses:` from GitHub at run time.
+#
+# The fork is deliberately UNMODIFIED. Everything specific to us lives in `rules/` here and in the
+# inputs below, so syncing upstream stays a button rather than a merge.
+#
+# NOT BLOCKING BY DEFAULT, and the default matters more than usual. Our product repositories set
+# `required_review_thread_resolution: true`, which means an unresolved review thread blocks a merge
+# outright — a green pull request that refuses to merge, reporting only that the base branch policy
+# prohibits it. An agent that finds ten things per pull request would turn that into a merge tax, so
+# findings go to a single summary comment unless a caller asks otherwise.
+# =============================================================================
+
+name: Code review
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Repository or product name, for the summary comment and logs.'
+        required: true
+        type: string
+      profiles:
+        description: >
+          Comma-separated rule profiles from `rules/` to merge on top of `base.json` — for example
+          `typescript,sql,workflows`. `base` is always included and does not need naming.
+        required: false
+        type: string
+        default: ''
+      model:
+        description: 'Model to review with.'
+        required: false
+        type: string
+        default: 'claude-sonnet-4-5'
+      llm_url:
+        description: 'Messages endpoint for the model.'
+        required: false
+        type: string
+        default: 'https://api.anthropic.com/v1/messages'
+      inline_comments:
+        description: >
+          Post line-level review threads as well as the summary. Left off by default: with
+          `required_review_thread_resolution` enabled, every thread must be resolved by hand before a
+          merge, so inline findings have a cost beyond reading them.
+        required: false
+        type: boolean
+        default: false
+      language:
+        description: 'Language for the review text.'
+        required: false
+        type: string
+        default: 'English'
+      rules_ref:
+        description: 'Ref of this repository to read `rules/` from. Keep in step with the workflow ref.'
+        required: false
+        type: string
+        default: 'v1'
+    secrets:
+      llm_token:
+        description: 'API key for the model. Set once as an organisation secret.'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Code review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Assemble the ruleset
+        # The rules live in this repository while the workflow runs in the caller's checkout, so they
+        # are fetched rather than checked out: `actions/checkout` would have to land inside the
+        # caller's workspace, and the review action does its own checkouts of base and head there.
+        #
+        # Downloaded from the same ref the caller pinned the workflow to, so rules and workflow move
+        # together. A missing profile fails the step rather than reviewing with silently fewer rules
+        # than the caller asked for.
+        env:
+          PROFILES: ${{ inputs.profiles }}
+          RULES_REF: ${{ inputs.rules_ref }}
+        run: |
+          set -euo pipefail
+          base='https://raw.githubusercontent.com/quynhonsemiconductor/ci'
+          work="$RUNNER_TEMP/qnsc-rules"
+          mkdir -p "$work"
+
+          fetch() {
+            local name="$1"
+            if ! curl -fsSL "$base/$RULES_REF/rules/$name.json" -o "$work/$name.json"; then
+              echo "::error::rule profile '$name' not found at $RULES_REF — check the name against ci/rules/"
+              exit 1
+            fi
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$work/$name.json" \
+              || { echo "::error::rule profile '$name' is not valid JSON"; exit 1; }
+            echo "  loaded $name"
+          }
+
+          echo "Assembling rules from ci@$RULES_REF"
+          fetch base
+          names='base'
+          IFS=',' read -ra requested <<< "${PROFILES:-}"
+          for p in "${requested[@]:-}"; do
+            p="$(echo "$p" | tr -d '[:space:]')"
+            [ -z "$p" ] && continue
+            [ "$p" = 'base' ] && continue
+            fetch "$p"
+            names="$names,$p"
+          done
+
+          # Concatenate the `rules` arrays. The format has no include mechanism, so composition
+          # happens here: generic rules in base, specific ones in the profile, one file at the end.
+          python3 - "$work" "$names" <<'PY'
+          import json, os, sys
+          work, names = sys.argv[1], sys.argv[2].split(',')
+          merged = []
+          for n in names:
+              with open(os.path.join(work, f'{n}.json'), encoding='utf-8') as fh:
+                  merged.extend(json.load(fh).get('rules', []))
+          out = os.path.join(work, 'merged.json')
+          with open(out, 'w', encoding='utf-8') as fh:
+              json.dump({'rules': merged}, fh, indent=2, ensure_ascii=False)
+          print(f'{len(merged)} rules from {len(names)} profile(s) -> {out}')
+          PY
+
+          echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
+
+      - name: Review
+        # Pinned by commit, and not exposed as an input: `uses:` is resolved before expressions are
+        # evaluated, so a caller-supplied ref is impossible here. Bumping is an edit to this line,
+        # which is the right place for it — a review bot that changed per caller would give different
+        # answers on the same code.
+        uses: quynhonsemiconductor/code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681 # v1.12.7
+        with:
+          llm_url: ${{ inputs.llm_url }}
+          llm_auth_token: ${{ secrets.llm_token }}
+          llm_model: ${{ inputs.model }}
+          llm_use_anthropic: 'true'
+          language: ${{ inputs.language }}
+          rule: ${{ env.QNSC_RULE_FILE }}
+          # One summary comment, updated in place on each push, rather than a growing pile.
+          sticky_summary: 'true'
+          # With inline comments off, findings are routed into that summary instead of becoming
+          # review threads that each need resolving before the branch can merge.
+          route_severity_below: ${{ inputs.inline_comments && '' || 'critical' }}
+          resolve_outdated: 'true'

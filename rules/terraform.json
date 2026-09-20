@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": "**/*.{tf,tfvars}",
+      "merge_system_rule": true,
+      "rule": "QNSC Terraform conventions, on top of the built-in Terraform rules.\n\n- This organisation's live stacks are composed from shared modules. Flag a resource declared\n  inline in a `live/` stack where a module for that resource already exists, and name it.\n- Flag a hardcoded region, account id, VPC id, subnet id or AMI id; these belong in variables or\n  data sources.\n- Every variable needs a type and a description; every output a description.\n- Flag a resource that stores a secret in state without `sensitive = true`.\n- Flag a change to a resource that forces replacement (identity, name, subnet) without a comment\n  acknowledging it: for a database or a load balancer, replacement is an outage.\n- Provider versions must be constrained. An unconstrained provider makes a plan unreproducible.\n- Flag an IAM policy with `Action: \"*\"` or `Resource: \"*\"` unless justified in a comment.\n"
+    }
+  ]
+}
