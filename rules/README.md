@@ -40,6 +40,38 @@ UI files write `aria` attributes by hand, so review is the only guard on it.
 `.github/workflows`, and Verilog/VHDL among others. `sql`, `Dockerfile` and `dart` have **no**
 built-in rules, which is why those three profiles carry more of the basics than the rest.
 
+## Choosing the model
+
+The reviewer is provider-agnostic; the tool ships around thirty providers. Two shapes matter.
+
+Anthropic is the default and needs nothing:
+
+```yaml
+with:
+  product: rova
+  profiles: typescript,sql
+secrets:
+  llm_token: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+GLM speaks the OpenAI protocol rather than Anthropic's, so it needs three overrides. Sending an
+Anthropic-shaped request to a GLM endpoint fails on the request body, which does not name the cause:
+
+```yaml
+with:
+  product: rova
+  profiles: typescript,sql
+  llm_url: https://open.bigmodel.cn/api/paas/v4   # coding plan: .../api/coding/paas/v4
+  use_anthropic_protocol: 'false'
+  llm_extra_body: '{}'                            # the default disables Anthropic thinking
+  model: glm-5.2                                  # glm-5.3, 5.2, 5.1, 5, 5-turbo are recognised
+secrets:
+  llm_token: ${{ secrets.Z_AI_API_KEY }}
+```
+
+Rules are prompts, not a DSL, so a weaker model produces weaker review rather than an error. Worth
+comparing the two on the same pull request before standardising on either.
+
 ## Cost, and why these files are short
 
 Only the FIRST matching rule is sent for a file, and the base text is folded into it — so the base

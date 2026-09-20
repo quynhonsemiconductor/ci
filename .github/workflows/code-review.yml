@@ -37,10 +37,29 @@ on:
         type: string
         default: 'claude-sonnet-4-5'
       llm_url:
-        description: 'Messages endpoint for the model.'
+        description: >
+          Endpoint for the model. Anthropic wants the messages path; an OpenAI-protocol provider wants
+          its base URL. For GLM that is `https://open.bigmodel.cn/api/paas/v4`, or
+          `https://open.bigmodel.cn/api/coding/paas/v4` on a coding plan.
         required: false
         type: string
         default: 'https://api.anthropic.com/v1/messages'
+      use_anthropic_protocol:
+        description: >
+          Whether the endpoint speaks Anthropic's protocol. Set to 'false' for an OpenAI-compatible
+          provider, which includes GLM: the tool ships `z-ai` and `z-ai-coding` as OpenAI chat
+          completions, so leaving this true against a GLM URL fails on the shape of the request rather
+          than on anything that names the cause.
+        required: false
+        type: string
+        default: 'true'
+      llm_extra_body:
+        description: >
+          Extra JSON merged into the request body. The default disables Anthropic's thinking block and
+          is Anthropic-shaped, so an OpenAI-protocol provider wants '{}' here.
+        required: false
+        type: string
+        default: '{"thinking": {"type": "disabled"}}'
       inline_comments:
         description: >
           Post line-level review threads as well as the summary. Left off by default: with
@@ -204,7 +223,8 @@ jobs:
           llm_url: ${{ inputs.llm_url }}
           llm_auth_token: ${{ secrets.llm_token }}
           llm_model: ${{ inputs.model }}
-          llm_use_anthropic: 'true'
+          llm_use_anthropic: ${{ inputs.use_anthropic_protocol }}
+          llm_extra_body: ${{ inputs.llm_extra_body }}
           language: ${{ inputs.language }}
           rule: ${{ env.QNSC_RULE_FILE }}
           # One summary comment, updated in place on each push, rather than a growing pile.
