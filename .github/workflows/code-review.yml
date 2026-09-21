@@ -103,6 +103,18 @@ on:
         required: false
         type: string
         default: 'false'
+      llm_timeout:
+        description: >
+          Per-request timeout in seconds. The action defaults to 300, which is too short for a model that
+          reasons before answering: GLM-5.3 has always-on reasoning and one review here spent 5m56s —
+          356 seconds — so every file was cut off at 300 and the run reported "all 3 file review(s)
+          failed — check your LLM configuration and API key". The configuration was correct and the key
+          was valid; 26k tokens and five successful tool calls had already been spent by the time it gave
+          up. Nothing in that message points at a timeout, which is why this is an input with the reason
+          written down.
+        required: false
+        type: string
+        default: '900'
       max_tokens_budget:
         description: >
           Hard ceiling on total input plus output tokens for one review. Checked before every round:
@@ -280,6 +292,7 @@ jobs:
           rule: ${{ env.QNSC_RULE_FILE }}
           # One summary comment, updated in place on each push, rather than a growing pile.
           sticky_summary: 'true'
+          llm_timeout: ${{ inputs.llm_timeout }}
           max_tokens_budget: ${{ inputs.max_tokens_budget }}
           # Routing is at-or-below the threshold, so the value here is one step BELOW what should stay
           # inline: to keep high and critical inline, medium and everything under it is routed.
