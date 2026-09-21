@@ -269,8 +269,14 @@ jobs:
           # One gap worth knowing: a finding whose severity the model leaves empty is never routed by
           # this policy, so it can still arrive inline. Routing fails open by design — it would rather
           # post a finding in the wrong place than drop it.
+          # `all` maps to a deliberately unknown value rather than an empty string. An empty string is
+          # what disables routing, but `X && ''` in an Actions expression evaluates to '' — which is
+          # FALSY — so that branch fell through the `||` chain and landed on `critical`, routing every
+          # finding to the summary. `all` could never fire. The action documents that an empty OR
+          # unknown value disables routing, so a word it does not recognise does the job and cannot be
+          # mistaken for a missing value.
           route_severity_below: >-
-            ${{ inputs.inline_from_severity == 'all' && ''
+            ${{ inputs.inline_from_severity == 'all' && 'routing-disabled'
              || inputs.inline_from_severity == 'critical' && 'high'
              || inputs.inline_from_severity == 'high' && 'medium'
              || inputs.inline_from_severity == 'medium' && 'low'
