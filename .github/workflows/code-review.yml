@@ -261,6 +261,7 @@ jobs:
           private-key: ${{ secrets.app_private_key }}
 
       - name: Review
+        id: review
         # Pinned by commit, and not exposed as an input: `uses:` is resolved before expressions are
         # evaluated, so a caller-supplied ref is impossible here. Bumping is an edit to this line,
         # which is the right place for it — a review bot that changed per caller would give different
@@ -294,3 +295,60 @@ jobs:
           # mistaken for a missing value.
           route_severity_below: ${{ env.QNSC_ROUTE_BELOW }}
           resolve_outdated: ${{ inputs.resolve_outdated }}
+
+      - name: Say whether anything is blocking
+        # The action publishes a summary of what it FOUND. It does not say whether the review was
+        # complete, and it says nothing at all when a reader most wants reassurance — when there is
+        # nothing to report. Silence and "not run" look identical on a pull request.
+        #
+        # This step turns the action's own outputs into one sentence. A reader should not have to open a
+        # run log to learn whether the reviewer finished.
+        if: always() && steps.review.conclusion != 'skipped'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          TOTAL: ${{ steps.review.outputs.comments_total }}
+          INLINE: ${{ steps.review.outputs.comments_inline }}
+          FAILED: ${{ steps.review.outputs.comments_failed }}
+          ROUTED: ${{ steps.review.outputs.comments_routed }}
+          RANGE: ${{ steps.review.outputs.range_summary }}
+          OUTCOME: ${{ steps.review.conclusion }}
+        run: |
+          set -euo pipefail
+          [ -z "${PR:-}" ] && { echo "not a pull request; nothing to post"; exit 0; }
+
+          marker='<!-- qnsc-review-verdict -->'
+          inline="${INLINE:-0}"; total="${TOTAL:-0}"; failed="${FAILED:-0}"
+
+          if [ "$OUTCOME" != 'success' ]; then
+            body="$marker
+          ⚠️ **QNSC code review did not finish** (\`$OUTCOME\`). Nothing here should be read as approval —
+          the absence of findings below is the absence of a review, not a clean result."
+          elif [ "${failed:-0}" != '0' ]; then
+            body="$marker
+          ⚠️ **QNSC code review finished, but $failed comment(s) failed to post.** Findings may be missing
+          from this pull request. Range reviewed: \`${RANGE:-unknown}\`."
+          elif [ "${inline:-0}" = '0' ]; then
+            body="$marker
+          ✅ **QNSC code review found nothing blocking.** Nothing needs resolving before merge.
+
+          Reviewed: \`${RANGE:-full}\`. $total finding(s) in total, ${ROUTED:-0} of them advisory and
+          collected in the summary comment above rather than as threads."
+          else
+            body="$marker
+          🔎 **QNSC code review opened $inline thread(s) that need an answer before merge.**
+
+          Reviewed: \`${RANGE:-full}\`. Resolving a thread with a reply explaining why a finding is wrong
+          is a valid answer — the reply is the record."
+          fi
+
+          # One comment, updated in place, so a pull request does not collect a verdict per push.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.body | contains(\"$marker\")) | .id] | first // empty" 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -f body="$body" >/dev/null
+            echo "updated verdict comment $existing"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" >/dev/null
+            echo "posted verdict comment"
+          fi
