@@ -149,6 +149,7 @@ jobs:
         env:
           PROFILES: ${{ inputs.profiles }}
           RULES_REF: ${{ inputs.rules_ref }}
+          INLINE_FROM: ${{ inputs.inline_from_severity }}
         run: |
           set -euo pipefail
           base='https://raw.githubusercontent.com/quynhonsemiconductor/ci'
@@ -233,6 +234,22 @@ jobs:
 
           echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
 
+          # Severity routing threshold, computed here rather than in an `if`-expression on the step
+          # below. Routing is at-or-below the value, and the value must be EMPTY to route nothing —
+          # but an Actions expression cannot yield an empty string inside a `||` chain, because
+          # `X && ''` evaluates to '' which is falsy and falls through to the next branch. That is not
+          # a hypothetical: the `all` case silently became `critical`, so every finding went to the
+          # summary and no inline thread was ever created. A shell variable can simply be empty.
+          case "${INLINE_FROM:-none}" in
+            all)      below='' ;;
+            critical) below='high' ;;
+            high)     below='medium' ;;
+            medium)   below='low' ;;
+            *)        below='critical' ;;
+          esac
+          echo "QNSC_ROUTE_BELOW=$below" >> "$GITHUB_ENV"
+          echo "severity routing: inline_from_severity='${INLINE_FROM:-none}' -> route_severity_below='$below'"
+
       - name: Mint a token for our own App
         # Only when an app id was given. The App is used purely as an identity: comments carry its name
         # and avatar, and there is no webhook, no endpoint and nothing running anywhere.
@@ -275,10 +292,5 @@ jobs:
           # finding to the summary. `all` could never fire. The action documents that an empty OR
           # unknown value disables routing, so a word it does not recognise does the job and cannot be
           # mistaken for a missing value.
-          route_severity_below: >-
-            ${{ inputs.inline_from_severity == 'all' && 'routing-disabled'
-             || inputs.inline_from_severity == 'critical' && 'high'
-             || inputs.inline_from_severity == 'high' && 'medium'
-             || inputs.inline_from_severity == 'medium' && 'low'
-             || 'critical' }}
+          route_severity_below: ${{ env.QNSC_ROUTE_BELOW }}
           resolve_outdated: ${{ inputs.resolve_outdated }}
