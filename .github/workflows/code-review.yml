@@ -35,7 +35,7 @@ on:
         description: 'Model to review with.'
         required: false
         type: string
-        default: 'claude-sonnet-4-5'
+        default: 'glm-5.3'
       llm_url:
         description: >
           Endpoint for the model. Anthropic wants the messages path; an OpenAI-protocol provider wants
@@ -43,7 +43,7 @@ on:
           `https://open.bigmodel.cn/api/coding/paas/v4` on a coding plan.
         required: false
         type: string
-        default: 'https://api.anthropic.com/v1/messages'
+        default: 'https://open.bigmodel.cn/api/coding/paas/v4'
       use_anthropic_protocol:
         description: >
           Whether the endpoint speaks Anthropic's protocol. Set to 'false' for an OpenAI-compatible
@@ -52,14 +52,14 @@ on:
           than on anything that names the cause.
         required: false
         type: string
-        default: 'true'
+        default: 'false'
       llm_extra_body:
         description: >
           Extra JSON merged into the request body. The default disables Anthropic's thinking block and
           is Anthropic-shaped, so an OpenAI-protocol provider wants '{}' here.
         required: false
         type: string
-        default: '{"thinking": {"type": "disabled"}}'
+        default: '{}'
       inline_from_severity:
         description: >
           Lowest severity that becomes a line-level review thread. Everything below it goes to the
@@ -76,7 +76,7 @@ on:
           costs attention, not a stalled branch.
         required: false
         type: string
-        default: 'none'
+        default: 'high'
       language:
         description: 'Language for the review text.'
         required: false
@@ -124,14 +124,6 @@ on:
         required: false
         type: string
         default: '400000'
-      app_id:
-        description: >
-          App id of a GitHub App to comment as, so reviews carry our name and mark rather than
-          `github-actions[bot]`. Identity only — no webhook and nothing to host. Omit to comment as the
-          default Actions bot.
-        required: false
-        type: string
-        default: ''
     secrets:
       llm_token:
         description: 'API key for the model. Set once as an organisation secret.'
@@ -147,6 +139,15 @@ permissions:
 jobs:
   review:
     name: Code review
+    # Skip pull requests a bot opened, which in practice means Renovate. A dependency bump changes a
+    # manifest and a lockfile, and nothing in the rules speaks to that: they are about layering, tenant
+    # scoping, accessibility, migrations and the shape of a comment. The risk a bump carries is covered by
+    # osv-scanner, Semgrep and Renovate's own `minimumReleaseAge`, which is why dependency review was
+    # deliberately removed from base.json rather than written there.
+    #
+    # Here rather than in each caller: it is a policy, not a per-repository choice, and a policy repeated
+    # in twenty files is one that will disagree with itself.
+    if: github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -263,13 +264,16 @@ jobs:
           echo "severity routing: inline_from_severity='${INLINE_FROM:-none}' -> route_severity_below='$below'"
 
       - name: Mint a token for our own App
-        # Only when an app id was given. The App is used purely as an identity: comments carry its name
+        # Only when the organisation variable is set. Read from the CALLER's context — a reusable
+        # workflow sees the caller's `vars`, which is how infra-plan.yml already resolves
+        # QNSC_AUTOMATION_APP_ID — so no repository needs to pass an id that is the same everywhere.
+        # Only when the variable is set. The App is used purely as an identity: comments carry its name
         # and avatar, and there is no webhook, no endpoint and nothing running anywhere.
-        if: inputs.app_id != ''
+        if: vars.CODE_REVIEW_APP_ID != ''
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ inputs.app_id }}
+          app-id: ${{ vars.CODE_REVIEW_APP_ID }}
           private-key: ${{ secrets.app_private_key }}
 
       - name: Review
