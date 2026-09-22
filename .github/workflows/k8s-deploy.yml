@@ -103,6 +103,28 @@ concurrency:
 jobs:
   build:
     runs-on: ${{ inputs.build_runner }}
+    # ── `packages: read` IS NOT OPTIONAL, AND NOT INHERITED ────────────────────
+    #
+    # The Dockerfile's `pnpm install` pulls private @quynhonsemiconductor/* packages
+    # from GitHub Packages with the job's GITHUB_TOKEN. Without this the build died at
+    #
+    #     ERR_PNPM_FETCH_403  GET https://npm.pkg.github.com/download/
+    #                              @quynhonsemiconductor/identity/7.1.0
+    #
+    # WHY THE CALLER'S GRANT DID NOT REACH HERE, which is the part worth recording:
+    # rova's calling job DOES grant `packages: read`. But this workflow declares
+    # WORKFLOW-LEVEL permissions, and those replace the inherited set rather than
+    # adding to it — so the token arrived with Contents, Metadata and Attestations
+    # only. The caller's grant is a ceiling, not a floor.
+    #
+    # A job-level block replaces the workflow-level one outright, so all four are
+    # restated here. `backend-deploy.yml` does exactly this on its build job, with the
+    # same one-line reason; this workflow was written later and did not carry it over.
+    permissions:
+      contents: read
+      id-token: write      # OIDC to AWS — no long-lived access keys
+      attestations: write  # build provenance
+      packages: read       # private @quynhonsemiconductor/* from GitHub Packages
     strategy:
       # One image per service. A product is N services sharing a repository, and
       # each gets its own ECR repository named <product>-<service> (§7c).
