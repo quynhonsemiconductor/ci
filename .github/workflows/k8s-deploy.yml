@@ -169,6 +169,24 @@ jobs:
           image-tag: ${{ steps.tag.outputs.tag }}
           platforms: ${{ inputs.platforms }}
           dockerfile: ${{ inputs.dockerfile }}
+          # ── WITHOUT THIS, ALL THREE IMAGES ARE THE SAME IMAGE ────────────────
+          # rova's Dockerfile has one stage per service — `api`, `worker`, `migrator` —
+          # and with no target Docker builds the LAST one. So `rova-api` and
+          # `rova-worker` were byte-identical copies of the MIGRATOR, and every api pod
+          # ran `node dist/db/migrate.js`:
+          #
+          #     Running migrations...
+          #     ❌ Migration failed: permission denied for database rova
+          #
+          # which reads as a database permission problem, and the permission is
+          # correct — the app role must not create schemas. Nothing pointed at the
+          # image being the wrong one. The migrator Job worked throughout, because the
+          # migrator image is what every repository actually held.
+          #
+          # `backend-deploy.yml` passes this and always has. Fourth thing this workflow
+          # was missing that its ECS predecessor had, after the native arm64 runner,
+          # `packages: read` and digest-based attestation.
+          build-target: ${{ matrix.service }}
           # NOT the `registry` backend. August's ECR bill was ~94% data transfer.
           cache-backend: gha
           cache-scope: ${{ inputs.product }}-${{ matrix.service }}
