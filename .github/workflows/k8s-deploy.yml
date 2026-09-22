@@ -47,6 +47,32 @@ on:
           split lands (§4c) — that one line is worth ~$35/month.
         type: string
         default: linux/arm64
+      build_runner:
+        description: >
+          BUILD ON THE TARGET ARCHITECTURE, NOT UNDER EMULATION.
+
+          `platforms` defaults to linux/arm64 while this workflow hardcoded
+          `runs-on: ubuntu-latest` (amd64), so every build cross-compiled under QEMU —
+          and for a pnpm + Nest compile that does not merely get slow, it FAILS:
+          `process "/dev/.buildkit_qemu_emulator /bin/sh -c ... pnpm install" did not
+          complete successfully`. Consistently rather than flakily: three retries,
+          three failures, for api, worker and migrator alike. The error names buildkit
+          and the emulator, so it reads like a Dockerfile fault rather than a runner
+          mismatch.
+
+          `backend-deploy.yml` already learnt this and says so in its own inputs:
+          "Build on a runner of the same architecture rather than cross-building… QEMU
+          emulation also works but multiplies build minutes on a pnpm + Nest compile by
+          enough to outweigh the Fargate saving." It passes
+          `build_runner: ubuntu-24.04-arm` and succeeds; this workflow was written
+          later and did not carry the lesson across.
+
+          THE DEFAULT PAIRS WITH `platforms`: both arm64, because setting one without
+          the other yields either an emulated build or an image that cannot start
+          ("Manifest does not contain descriptor matching platform"). Targeting amd64
+          means setting both.
+        type: string
+        default: ubuntu-24.04-arm
       dockerfile:
         type: string
         default: Dockerfile
@@ -76,7 +102,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.build_runner }}
     strategy:
       # One image per service. A product is N services sharing a repository, and
       # each gets its own ECR repository named <product>-<service> (§7c).
