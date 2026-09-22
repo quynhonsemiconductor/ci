@@ -176,7 +176,26 @@ jobs:
       - name: Attest
         uses: quynhonsemiconductor/ci/actions/attest-image@main
         with:
-          image-ref: ${{ steps.build.outputs.image-uri }}
+          # ── A DIGEST REFERENCE, NOT A TAG ────────────────────────────────────
+          # This passed `image-uri`, which is `<registry>/<name>:<tag>`, and the
+          # attestation refused it:
+          #
+          #   Error: subject-digest has unsupported algorithm
+          #          "<registry>/rova-migrator"
+          #
+          # — it splits on `:` expecting `sha256:<hex>` and found a registry host.
+          # The image had already BUILT AND PUSHED; only the attestation failed, so
+          # every image existed while the job went red and `deploy-dev` was skipped.
+          #
+          # An attestation must also bind to a digest rather than a tag on principle:
+          # a tag can be moved (not here — ECR is immutable — but the guarantee should
+          # not depend on that), while a digest names exactly the bytes that were
+          # built.
+          #
+          # `backend-deploy.yml` has always done it this way. That is the THIRD thing
+          # this newer workflow was missing that its ECS predecessor already had, after
+          # the native arm64 runner and `packages: read`.
+          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.build.outputs.image-digest }}
 
 
   deploy-dev:
