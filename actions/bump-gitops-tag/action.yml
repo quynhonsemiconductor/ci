@@ -112,7 +112,8 @@ runs:
         before=$(sha256sum "$file" | cut -d' ' -f1)
         for svc in $SERVICES; do
           # The tag arrives as a yq STRVAR rather than inside the expression, for
-          # the same reason it arrives here as an env var rather than as `${{ }}`:
+          # the same reason it arrives here as an env var rather than as a workflow
+          # expression (braces omitted deliberately — see below):
           # yq has its own expression language, and interpolating into it is the
           # same bug one layer down.
           TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
