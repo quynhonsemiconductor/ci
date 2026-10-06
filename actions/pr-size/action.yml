@@ -1,0 +1,127 @@
+name: PR size
+description: >
+  Label a pull request `size/XS` … `size/XXL` by the lines of CODE it changes, and comment when it
+  is large enough that review quality suffers.
+
+  Tests, docs and machine-written files (lockfiles, generated clients, migration metadata,
+  snapshots) are reported but not counted. Advisory by default: `fail-above` turns the largest
+  pull requests into a failure, with `override-label` as the documented way past it. See
+  `pr_size.py` for why each threshold is where it is.
+
+  One comment per pull request, updated in place, and deleted once the pull request is back under
+  the threshold — a split pull request should not keep a warning about its former self.
+
+  Labelling and commenting fail OPEN: a token that cannot write (a fork pull request) produces a
+  warning, not a failed check. Only `fail-above` can fail the job.
+
+inputs:
+  github-token:
+    description: "Token with `pull-requests: write` on the caller's repository."
+    required: false
+    default: ${{ github.token }}
+  warn-above:
+    description: Lines of code above which the pull request gets a comment suggesting a split.
+    required: false
+    default: '1000'
+  large-above:
+    description: >
+      Lines of code above which the comment says the pull request is too large to review in one
+      pass. Kept equal to the code review workflow's `large_pr_lines` (2,500).
+    required: false
+    default: '2500'
+  fail-above:
+    description: Lines of code above which the check FAILS. `0` (default) never fails.
+    required: false
+    default: '0'
+  override-label:
+    description: A label that lets a pull request past `fail-above`. The reason belongs in the body.
+    required: false
+    default: 'size/approved-large'
+
+outputs:
+  label:
+    description: The size label applied, e.g. `size/M`.
+    value: ${{ steps.measure.outputs.label }}
+  code-lines:
+    description: Lines of code counted.
+    value: ${{ steps.measure.outputs.code_lines }}
+  level:
+    description: '`none`, `warn`, `large` or `fail`.'
+    value: ${{ steps.measure.outputs.level }}
+
+runs:
+  using: composite
+  steps:
+    - name: Measure
+      id: measure
+      shell: bash
+      # Values through the environment, never interpolated into the script: a label name is
+      # user-controlled text.
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        WARN_ABOVE: ${{ inputs.warn-above }}
+        LARGE_ABOVE: ${{ inputs.large-above }}
+        FAIL_ABOVE: ${{ inputs.fail-above }}
+        OVERRIDE_LABEL: ${{ inputs.override-label }}
+      run: |
+        set -euo pipefail
+        [ -n "${PR:-}" ] || { echo "::error::pr-size runs on pull_request events only"; exit 1; }
+        files="$RUNNER_TEMP/pr-size-files.jsonl"
+        gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+          --jq '.[] | {filename, additions, deletions}' > "$files"
+        python3 "$GITHUB_ACTION_PATH/pr_size.py" --files "$files" --body-out "$RUNNER_TEMP/pr-size.md"
+
+    - name: Label and comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        LABEL: ${{ steps.measure.outputs.label }}
+        OVERRIDE_LABEL: ${{ inputs.override-label }}
+      run: |
+        set -uo pipefail
+        repo="repos/$GITHUB_REPOSITORY"
+        warn() { echo "::warning::pr-size: $1 (a fork pull request's token cannot write; the size is in the job summary)"; }
+
+        # Exactly one size label: drop the others, keep the override, add the current one.
+        IFS=',' read -ra current <<< "${PR_LABELS:-}"
+        for l in "${current[@]:-}"; do
+          if [[ "$l" == size/* && "$l" != "$LABEL" && "$l" != "$OVERRIDE_LABEL" ]]; then
+            gh api --method DELETE "$repo/issues/$PR/labels/$(jq -rn --arg l "$l" '$l|@uri')" \
+              >/dev/null 2>&1 || warn "could not remove $l"
+          fi
+        done
+        gh api --method POST "$repo/issues/$PR/labels" -f "labels[]=$LABEL" >/dev/null \
+          || warn "could not add $LABEL"
+
+        marker='<!-- qnsc-pr-size -->'
+        existing=$(gh api "$repo/issues/$PR/comments" --paginate \
+          --jq "[.[] | select(.body | contains(\"$marker\")) | .id] | first // empty" 2>/dev/null || true)
+        body="$RUNNER_TEMP/pr-size.md"
+        if [ -s "$body" ]; then
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "$repo/issues/comments/$existing" -F body=@"$body" >/dev/null \
+              || warn "could not update the size comment"
+          else
+            gh api --method POST "$repo/issues/$PR/comments" -F body=@"$body" >/dev/null \
+              || warn "could not post the size comment"
+          fi
+        elif [ -n "$existing" ]; then
+          gh api --method DELETE "$repo/issues/comments/$existing" >/dev/null \
+            || warn "could not remove the outdated size comment"
+        fi
+        exit 0
+
+    - name: Enforce
+      if: steps.measure.outputs.fail == 'true'
+      shell: bash
+      env:
+        CODE_LINES: ${{ steps.measure.outputs.code_lines }}
+        FAIL_ABOVE: ${{ inputs.fail-above }}
+        OVERRIDE_LABEL: ${{ inputs.override-label }}
+      run: |
+        echo "::error::${CODE_LINES} lines of code changed, above ${FAIL_ABOVE}: split the pull request, or add '${OVERRIDE_LABEL}' with the reason in its description"
+        exit 1
