@@ -4,9 +4,10 @@ Rule files for `quynhonsemiconductor/code-review` (our fork of `alibaba/open-cod
 
 ## How they combine
 
-`base.json` is merged with one profile by the `code-review.yml` reusable workflow, so a caller
-names a profile and gets the org-wide rules for free. The merge is a concatenation of the `rules`
-arrays; there is no include mechanism in the format itself.
+`base.json` is composed with the profiles a caller names by the `code-review.yml` reusable workflow,
+so a caller names a profile and gets the org-wide rules for free. It is not a plain concatenation:
+the first matching rule wins, so the base text is folded into every profile rule and base is emitted
+last as the catch-all (see the comments in the workflow).
 
 Every rule sets `merge_system_rule: true`, which keeps the tool's built-in rules in play. Those
 already cover hardcoding, magic values, dead code, null handling, React hook misuse, mutable
@@ -122,8 +123,48 @@ rules narrowly exists to eliminate noise and keep the model's attention focused;
 works against the thing that makes its precision better than a general-purpose agent's. Fewer, sharper
 rules produce fewer confident-sounding findings about things nobody asked about.
 
-`max_tokens_budget` on the workflow is the hard ceiling — a run cannot exceed it, and skipped files
-are reported rather than silently dropped.
+`max_tokens_budget` on the workflow is NOT a hard ceiling. It is checked when a group is dispatched
+and between rounds, so every group in flight finishes its round: at concurrency 8 a 400,000 budget
+spent 930,000–985,000 on rova#653. What actually bounds cost is listed below.
+
+## What a review costs, and what bounds it
+
+The model plan's quota is the constraint, not tokens: on 2026-10-06 one pull request reviewed in full
+six times in a day exhausted it, and every review in the organisation then failed with HTTP 429. In
+the order they save quota:
+
+| control | effect |
+| --- | --- |
+| `checkpoint_range` | a push reviews only the commits since the last COMPLETE review, not the whole branch |
+| dependency-only skip | a PR of lockfiles and version bumps is not reviewed at all (osv-scanner covers it) |
+| `large_pr_lines` (2,500) | a PR too large to complete is reviewed on open / ready, not on every push |
+| drafts skipped | review when marked ready, not while the branch is still moving |
+| `effort: low` | one review round per group instead of two |
+| `review_concurrency: 4` | half the burst, half the overshoot of the budget |
+| `exclude` | lockfiles, generated code and migration metadata are never selected |
+| the probe | a spent quota costs one request and a clear comment, not 630 refused attempts |
+
+Excludes and includes live in the profile files as top-level `exclude` / `include` arrays and are
+UNIONED across profiles (excludes also take the caller's `exclude:` input). OCR reads include/exclude
+from one layer only — the highest that sets any — so they replace a repository's own
+`.opencodereview/rule.json` ones; put those in `exclude:`.
+
+Two settings are part of the checkpoint fingerprint and invalidate every open pull request's
+checkpoint when they change: `max_tokens_budget`, `effort` (as are the model, the rules and the OCR
+version). Change them org-wide and deliberately.
+
+OCR's built-in excludes skip `*.test.*` and `*.spec.*`. That stays the default: across fourteen recent
+rova pull requests test lines were 1.1× source lines, so reviewing every test would roughly double
+what a review costs, and an LLM is a weak judge of whether a test can fail — `agent-forge-test-guard`
+and coverage floors guard that better.
+
+The exception is ratchets, `**/*.ratchet.{spec,test}.{ts,tsx}` (`typescript.json` → `include`; the
+backend names them `.spec.ts`, the web app `.test.ts`). Ratchets hold the boundaries rova and opshub
+have instead of database-level isolation — workspace scope, route policy, permission reachability —
+so a ratchet that passes but proves nothing is a security defect, which is exactly what the test rule
+asks about. rova has 10 and opshub 15, about 2,800 lines each, touched 40 and 51 times in 90 days: a
+small, bounded cost. On rova's #429 this selects 4 ratchets of the 66 test files changed. `include` is
+an override, not a whitelist; an `exclude` still wins over it.
 
 ## Editing
 

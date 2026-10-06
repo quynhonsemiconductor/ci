@@ -117,13 +117,64 @@ on:
         default: '900'
       max_tokens_budget:
         description: >
-          Hard ceiling on total input plus output tokens for one review. Checked before every round:
-          a group already over budget gets one final round to report what it has, remaining groups are
-          skipped and reported rather than silently dropped. This is the cost control — a rule file
-          cannot run away with a large pull request if the run cannot exceed a number you chose.
+          Token budget for one review. NOT a hard ceiling, whatever its name suggests: it is checked
+          when a group is DISPATCHED and before each further round, so every group already in flight
+          finishes its round. With concurrency 8 a 400,000 budget routinely spent 930,000–985,000
+          (rova#653, 2026-10-05). `review_concurrency` bounds the overshoot, not this number.
+
+          Part of the checkpoint fingerprint: changing it makes the next run on every open pull
+          request a full review. Change it org-wide, deliberately, not per caller.
         required: false
         type: string
         default: '400000'
+      effort:
+        description: >
+          OCR review effort: `low` = one review round per group, `medium` = two, `high` = three.
+
+          `low` because the binding constraint is the model plan's quota, not review depth: rova#653
+          drew 37, 19 and 27 findings in three consecutive runs at `medium`, every one of which the
+          author answered by hand. A second round mostly adds more of the same. Part of the
+          checkpoint fingerprint, like `max_tokens_budget`.
+        required: false
+        type: string
+        default: 'low'
+      review_concurrency:
+        description: >
+          Groups reviewed in parallel. OCR defaults to 8, which is eight simultaneous requests to a
+          coding-plan endpoint — a burst that both trips per-minute rate limits (Z.AI 1302) and
+          multiplies how far a run overshoots `max_tokens_budget`.
+        required: false
+        type: string
+        default: '4'
+      ocr_version:
+        description: >
+          OpenCodeReview CLI version. Pinned: the action's default is `latest`, so the reviewer
+          changed under every caller whenever upstream published (v1.12.11 → v1.12.12 between two
+          runs of the same pull request), and the version is part of the checkpoint fingerprint, so
+          each release also forced a full re-review of every open pull request.
+        required: false
+        type: string
+        default: '1.12.12'
+      large_pr_lines:
+        description: >
+          Changed lines in REVIEWABLE files (after excludes, as `ocr review --preview` counts them)
+          above which a pull request is "large". A large pull request is reviewed when it is opened,
+          reopened or marked ready for review, and not on every push.
+
+          The reason is the checkpoint: it only advances after a COMPLETE review, and a large pull
+          request never completes inside the budget — rova#653 (75 files) was reviewed in full six
+          times in one day, 12–19 files each time, about 950,000 tokens a run. Without this, every
+          push to a large branch pays for a fresh partial review of the same files. `0` disables.
+        required: false
+        type: string
+        default: '2500'
+      exclude:
+        description: >
+          Extra comma-separated gitignore-style patterns this repository never wants reviewed, on top
+          of the ones the profiles declare (lockfiles, generated code, migration metadata).
+        required: false
+        type: string
+        default: ''
     secrets:
       llm_token:
         description: 'API key for the model. Set once as an organisation secret.'
@@ -147,7 +198,14 @@ jobs:
     #
     # Here rather than in each caller: it is a policy, not a per-repository choice, and a policy repeated
     # in twenty files is one that will disagree with itself.
-    if: github.event.pull_request.user.type != 'Bot'
+    #
+    # Drafts are skipped for the same reason a large pull request is not re-reviewed per push: a
+    # draft is still moving, and every review of it spends quota on code that will change. It is
+    # reviewed when marked ready — on `ready_for_review` where the caller subscribes to it, otherwise
+    # on the first push after.
+    if: >-
+      github.event.pull_request.user.type != 'Bot'
+      && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -163,6 +221,7 @@ jobs:
           PROFILES: ${{ inputs.profiles }}
           RULES_REF: ${{ inputs.rules_ref }}
           INLINE_FROM: ${{ inputs.inline_from_severity }}
+          EXTRA_EXCLUDE: ${{ inputs.exclude }}
         run: |
           set -euo pipefail
           base='https://raw.githubusercontent.com/quynhonsemiconductor/ci'
@@ -236,14 +295,43 @@ jobs:
           # Catch-all last: files no profile claims still get the org-wide rules.
           composed.extend(base_rules)
 
+          # Excludes are a UNION across profiles plus the caller's own: a file one profile says is
+          # never worth reviewing (a lockfile, a generated client) is not worth it under any other.
+          # Top-level in the rule file, where OCR reads them (`ProjectRule.Exclude`). Note that OCR
+          # takes include/exclude from ONE layer only — the highest that sets any — so these replace,
+          # not extend, a repository's own `.opencodereview/rule.json` excludes; `exclude:` is the
+          # input for those.
+          excludes = []
+          includes = []
+          for name in names:
+              with open(os.path.join(work, f'{name}.json'), encoding='utf-8') as fh:
+                  doc = json.load(fh)
+              excludes += doc.get('exclude', [])
+              # `include` is an OVERRIDE, not a whitelist: in OCR a matching file skips the built-in
+              # default-path and extension excludes (exclude still wins over it), and files that
+              # match nothing are selected exactly as before. That is how a test that holds a
+              # security boundary is reviewed while the other test files stay out.
+              includes += doc.get('include', [])
+          excludes += [p.strip() for p in os.environ.get('EXTRA_EXCLUDE', '').split(',') if p.strip()]
+          excludes = list(dict.fromkeys(excludes))
+          includes = list(dict.fromkeys(includes))
+
           out = os.path.join(work, 'merged.json')
           with open(out, 'w', encoding='utf-8') as fh:
-              json.dump({'rules': composed}, fh, indent=2, ensure_ascii=False)
+              json.dump({'rules': composed, 'exclude': excludes, 'include': includes}, fh,
+                        indent=2, ensure_ascii=False)
 
           print(f'{len(composed)} rules composed from {len(names)} profile(s)')
           for r in composed:
               print(f"  {r['path']}  ({len(r['rule'])} chars)")
+          print(f'{len(excludes)} exclude pattern(s): {", ".join(excludes)}')
+          print(f'{len(includes)} include pattern(s): {", ".join(includes) or "none"}')
           PY
+
+          # The gate script, from the same ref as the rules, for the same reason.
+          curl -fsSL "$base/$RULES_REF/scripts/code_review_gate.py" -o "$work/gate.py" \
+            || { echo "::error::scripts/code_review_gate.py not found at $RULES_REF"; exit 1; }
+          echo "QNSC_GATE=$work/gate.py" >> "$GITHUB_ENV"
 
           echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
 
@@ -267,17 +355,110 @@ jobs:
         # Only when the organisation variable is set. Read from the CALLER's context — a reusable
         # workflow sees the caller's `vars`, which is how infra-plan.yml already resolves
         # QNSC_AUTOMATION_APP_ID — so no repository needs to pass an id that is the same everywhere.
-        # Only when the variable is set. The App is used purely as an identity: comments carry its name
-        # and avatar, and there is no webhook, no endpoint and nothing running anywhere.
+        # The App is used purely as an identity: comments carry its name and avatar, and there is no
+        # webhook, no endpoint and nothing running anywhere.
         if: vars.CODE_REVIEW_APP_ID != ''
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ vars.CODE_REVIEW_APP_ID }}
           private-key: ${{ secrets.app_private_key }}
+          # Exactly what the `qnsc-code-review` installation grants, named so the token cannot widen
+          # if the App is ever given more. Comments on a pull request are `pull_requests: write`.
+          permission-contents: read
+          permission-pull-requests: write
+
+      # ── Decide whether to spend a review ─────────────────────────────────────
+      #
+      # Everything up to `Review` is free: GitHub's API, git, and OCR's `--preview`, none of which
+      # call the model. The quota is spent only after each of these has said yes, and each one fails
+      # OPEN — a question it cannot answer leaves the review running as it did before.
+
+      - name: Is this a dependency-only change?
+        # A bump PR a person opens is not skipped by the Bot check above. Its lockfile is never
+        # selected for review, but the agent READS it for context: rova#652 (package.json,
+        # pnpm-workspace.yaml, pnpm-lock.yaml) spent 509,506 tokens paging through a 13,000-line
+        # lockfile and stopped on the budget with nothing reviewed.
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          files="$RUNNER_TEMP/pr-files.jsonl"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+            --jq '.[] | {filename, patch}' > "$files" || : > "$files"
+          python3 "$QNSC_GATE" scope --files "$files"
+
+      - name: Check out for the size check
+        if: steps.scope.outputs.dependency_only != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: How large is it?
+        # `ocr review --preview` selects files exactly as the review will — built-in excludes,
+        # ours, the extension allowlist — and makes no model call. Installed at the pinned version
+        # the review uses, so the preview and the review cannot disagree about what is selected.
+        if: steps.scope.outputs.dependency_only != 'true'
+        id: size
+        env:
+          OCR_VERSION: ${{ inputs.ocr_version }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LARGE_PR_LINES: ${{ inputs.large_pr_lines }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          set -uo pipefail
+          preview="$RUNNER_TEMP/ocr-preview.json"
+          # No fetch: the checkout above (full history, the PR's merge ref) already holds the base
+          # branch and the head commit, and has no credentials left to fetch more with.
+          # An exact version, the same one the action installs a minute later — there is no lockfile
+          # for a global CLI to install from (zizmor reports this as low-severity adhoc-packages).
+          npm install -g --silent "@alibaba-group/open-code-review@${OCR_VERSION}"
+          installed=$?
+          if [ "$installed" -eq 0 ] \
+             && mb="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")" \
+             && ocr review --from "$mb" --to "$HEAD_SHA" --rule "$QNSC_RULE_FILE" \
+                  --preview --format json > "$preview" 2> "$RUNNER_TEMP/ocr-preview.err"; then
+            :
+          else
+            echo "::warning::review preview failed; reviewing without a size check"
+            cat "$RUNNER_TEMP/ocr-preview.err" 2>/dev/null || true
+            : > "$preview"
+          fi
+          python3 "$QNSC_GATE" size --preview "$preview"
+
+      - name: Can the model be reached?
+        # One request of a few tokens, read for the provider's own error code. Without it, a spent
+        # quota surfaced as 630 failed attempts and "check your LLM configuration and API key".
+        # A rate limit is retried twice (15s, 45s) before it is called unavailable.
+        if: >-
+          steps.scope.outputs.dependency_only != 'true'
+          && steps.size.outputs.defer != 'true'
+          && steps.size.outputs.reviewable != '0'
+        id: probe
+        env:
+          LLM_URL: ${{ inputs.llm_url }}
+          LLM_TOKEN: ${{ secrets.llm_token }}
+          LLM_MODEL: ${{ inputs.model }}
+          USE_ANTHROPIC: ${{ inputs.use_anthropic_protocol }}
+          EXTRA_BODY: ${{ inputs.llm_extra_body }}
+        run: python3 "$QNSC_GATE" probe
 
       - name: Review
         id: review
+        if: >-
+          steps.scope.outputs.dependency_only != 'true'
+          && steps.size.outputs.defer != 'true'
+          && steps.size.outputs.reviewable != '0'
+          && steps.probe.outputs.probe != 'unavailable'
+          && steps.probe.outputs.probe != 'config'
+        # The action fails its own job whenever `ocr` exits non-zero — including when the provider
+        # refused every request. The verdict below reads the result file and decides what that
+        # failure means, so the job's colour is decided in one place, not two.
+        continue-on-error: true
         # Pinned by commit, and not exposed as an input: `uses:` is resolved before expressions are
         # evaluated, so a caller-supplied ref is impossible here. Bumping is an edit to this line,
         # which is the right place for it — a review bot that changed per caller would give different
@@ -285,8 +466,9 @@ jobs:
         uses: quynhonsemiconductor/code-review@85cecfe5f935da2b2aae8f91ce4fee8ed343a681 # v1.12.7
         with:
           # The App's token when one was minted, so the comment carries our identity; otherwise the
-          # default Actions token.
+          # default Actions token. The checkpoint is read back only from a summary THIS token wrote.
           github_token: ${{ steps.app-token.outputs.token || github.token }}
+          ocr_version: ${{ inputs.ocr_version }}
           llm_url: ${{ inputs.llm_url }}
           llm_auth_token: ${{ secrets.llm_token }}
           llm_model: ${{ inputs.model }}
@@ -296,6 +478,13 @@ jobs:
           rule: ${{ env.QNSC_RULE_FILE }}
           # One summary comment, updated in place on each push, rather than a growing pile.
           sticky_summary: 'true'
+          # Review only what changed since the last COMPLETE review, instead of everything from the
+          # merge base on every push. Fail-closed by design: a moved base, a changed config (model,
+          # rules, budget, effort, OCR version) or a force-push reviews the full range again. This is
+          # the largest single saving: rova#653 had six full reviews in one day.
+          checkpoint_range: 'true'
+          effort: ${{ inputs.effort }}
+          review_concurrency: ${{ inputs.review_concurrency }}
           llm_timeout: ${{ inputs.llm_timeout }}
           max_tokens_budget: ${{ inputs.max_tokens_budget }}
           # Routing is at-or-below the threshold, so the value here is one step BELOW what should stay
@@ -313,59 +502,55 @@ jobs:
           route_severity_below: ${{ env.QNSC_ROUTE_BELOW }}
           resolve_outdated: ${{ inputs.resolve_outdated }}
 
-      - name: Say whether anything is blocking
-        # The action publishes a summary of what it FOUND. It does not say whether the review was
-        # complete, and it says nothing at all when a reader most wants reassurance — when there is
-        # nothing to report. Silence and "not run" look identical on a pull request.
+      - name: Say what the review covered
+        # The action publishes what it FOUND. It does not say whether the review was complete — every
+        # review of rova#653 covered 12–19 of 75 files and still read "found nothing blocking" — and
+        # it says nothing when it did not run. Silence, "not run" and "partial" looked identical.
         #
-        # This step turns the action's own outputs into one sentence. A reader should not have to open a
-        # run log to learn whether the reviewer finished.
-        if: always() && steps.review.conclusion != 'skipped'
+        # One comment, updated in place, so a pull request does not collect a verdict per push.
+        id: verdict
+        if: always() && github.event.pull_request.number
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR: ${{ github.event.pull_request.number }}
+          DEPENDENCY_ONLY: ${{ steps.scope.outputs.dependency_only }}
+          DEFER: ${{ steps.size.outputs.defer }}
+          REVIEWABLE: ${{ steps.size.outputs.reviewable }}
+          REVIEW_LINES: ${{ steps.size.outputs.review_lines }}
+          PROBE: ${{ steps.probe.outputs.probe }}
+          PROBE_CODE: ${{ steps.probe.outputs.probe_code }}
+          PROBE_MESSAGE: ${{ steps.probe.outputs.probe_message }}
+          REVIEW_RAN: ${{ steps.review.outcome == 'success' || steps.review.outcome == 'failure' }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
           TOTAL: ${{ steps.review.outputs.comments_total }}
           INLINE: ${{ steps.review.outputs.comments_inline }}
           FAILED: ${{ steps.review.outputs.comments_failed }}
           ROUTED: ${{ steps.review.outputs.comments_routed }}
           RANGE: ${{ steps.review.outputs.range_summary }}
-          OUTCOME: ${{ steps.review.conclusion }}
+          RANGE_REASON: ${{ steps.review.outputs.range_reason }}
         run: |
           set -euo pipefail
-          [ -z "${PR:-}" ] && { echo "not a pull request; nothing to post"; exit 0; }
+          body="$RUNNER_TEMP/verdict.md"
+          python3 "$QNSC_GATE" verdict --result /tmp/ocr-result.json --body-out "$body"
+          [ -s "$body" ] || { echo "same head as the last complete review; verdict unchanged"; exit 0; }
 
           marker='<!-- qnsc-review-verdict -->'
-          inline="${INLINE:-0}"; total="${TOTAL:-0}"; failed="${FAILED:-0}"
-
-          if [ "$OUTCOME" != 'success' ]; then
-            body="$marker
-          ⚠️ **QNSC code review did not finish** (\`$OUTCOME\`). Nothing here should be read as approval —
-          the absence of findings below is the absence of a review, not a clean result."
-          elif [ "${failed:-0}" != '0' ]; then
-            body="$marker
-          ⚠️ **QNSC code review finished, but $failed comment(s) failed to post.** Findings may be missing
-          from this pull request. Range reviewed: \`${RANGE:-unknown}\`."
-          elif [ "${inline:-0}" = '0' ]; then
-            body="$marker
-          ✅ **QNSC code review found nothing blocking.** Nothing needs resolving before merge.
-
-          Reviewed: \`${RANGE:-full}\`. $total finding(s) in total, ${ROUTED:-0} of them advisory and
-          collected in the summary comment above rather than as threads."
-          else
-            body="$marker
-          🔎 **QNSC code review opened $inline thread(s) that need an answer before merge.**
-
-          Reviewed: \`${RANGE:-full}\`. Resolving a thread with a reply explaining why a finding is wrong
-          is a valid answer — the reply is the record."
-          fi
-
-          # One comment, updated in place, so a pull request does not collect a verdict per push.
           existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq "[.[] | select(.body | contains(\"$marker\")) | .id] | first // empty" 2>/dev/null || true)
           if [ -n "$existing" ]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -f body="$body" >/dev/null
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@"$body" >/dev/null
             echo "updated verdict comment $existing"
           else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" >/dev/null
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$body" >/dev/null
             echo "posted verdict comment"
           fi
+
+      - name: Fail only for what someone must fix
+        # A rejected key or plan, or a reviewer that crashed. Not a spent quota, not a partial
+        # review: red for a reason the author cannot act on teaches everyone to ignore red.
+        if: always() && steps.verdict.outputs.fail == 'true'
+        env:
+          STATE: ${{ steps.verdict.outputs.state }}
+        run: |
+          echo "::error::code review ${STATE}; see the verdict comment on the pull request"
+          exit 1
