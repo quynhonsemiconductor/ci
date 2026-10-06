@@ -14,10 +14,10 @@ description: >
   Labelling and commenting fail OPEN: a token that cannot write (a fork pull request) produces a
   warning, not a failed check. Only `fail-above` can fail the job.
 
-  Run it AFTER `actions/labeler`, as a job with `needs:` in the same workflow, never beside it:
-  the labeler replaces the pull request's whole label set (PUT) from a snapshot it took when it
-  started, so a size label added while it ran is silently removed (opshub#348: added 12:00:59,
-  removed 12:01:00).
+  Repositories do not call this directly: the reusable `labeler.yml` runs it as the step after the
+  area labeler, in the same job. Never run it BESIDE actions/labeler — the labeler replaces the
+  pull request's whole label set (PUT) from a snapshot it took when it started, so a size label
+  added while it ran is silently removed (opshub#348: added 12:00:59, removed 12:01:00).
 
 inputs:
   github-token:
