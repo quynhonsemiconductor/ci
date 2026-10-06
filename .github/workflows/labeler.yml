@@ -1,13 +1,31 @@
 # =============================================================================
-# Reusable PR Labeler — applies area/* labels from the caller's changed files.
+# Reusable PR Labeler — every label the organisation puts on a pull request, in one job:
 #
-# Caller:
+#   area/*   from the caller's changed files and its `.github/labeler.yml`
+#   size/*   from the lines of CODE it changes (actions/pr-size: tests, docs, lockfiles and
+#            generated files are reported but not counted; advisory, comments above 1,000)
+#
+# Caller — identical in every repository:
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
 #   jobs:
 #     labeler:
 #       uses: quynhonsemiconductor/ci/.github/workflows/labeler.yml@v1
+#       permissions:
+#         contents: read
+#         pull-requests: write
 #
-# The label map (.github/labeler.yml) stays PRODUCT-LOCAL — it references
-# each repo's own paths. This workflow only provides the shared plumbing.
+# The label MAP (.github/labeler.yml) stays product-local — it names each repo's own paths. A
+# repository without one gets size labels only.
+#
+# ONE JOB, area first and size second, on purpose. actions/labeler replaces the pull request's whole
+# label set (PUT) from a snapshot it takes when it starts, so anything that labels the pull request
+# while it runs is undone: as two workflows, opshub#348's size label was added at 12:00:59 and
+# removed at 12:01:00. Sequential steps cannot race.
+#
+# Advisory, so a reusable workflow is the right shape. If size ever becomes a REQUIRED check, it must
+# move to a job the caller defines (README: a required check must be a composite action).
 # =============================================================================
 name: Reusable · PR Labeler
 
@@ -15,12 +33,19 @@ on:
   workflow_call:
     inputs:
       configuration_path:
-        description: Path to the labeler config in the caller repo.
+        description: Path to the area-label map in the caller repo. Optional — without it, no area labels.
         required: false
         default: .github/labeler.yml
         type: string
       sync_labels:
-        description: Remove labels no longer matching when files change.
+        description: Remove area labels no longer matching when files change.
+        required: false
+        default: true
+        type: boolean
+      size:
+        description: >
+          Apply size/* labels and the size comment. Thresholds are decided once, in actions/pr-size,
+          not per repository — this is an off switch, not a tuning knob.
         required: false
         default: true
         type: boolean
@@ -35,8 +60,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
+      - name: Is there an area-label map?
+        # actions/labeler fails on a missing map. A repository without one should still get size
+        # labels from this same call, rather than need a second workflow that would race the first.
+        id: map
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAP: ${{ inputs.configuration_path }}
+          REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/contents/$MAP?ref=$REF" --silent 2>/dev/null; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no $MAP in this repository; applying size labels only"
+          fi
+
+      - name: Area labels
+        if: steps.map.outputs.present == 'true'
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: ${{ inputs.configuration_path }}
           sync-labels: ${{ inputs.sync_labels }}
+
+      - name: Size label
+        # After the area labeler, and even if it failed: a broken label map is no reason to lose
+        # the size label.
+        if: ${{ !cancelled() && inputs.size }}
+        uses: quynhonsemiconductor/ci/actions/pr-size@v1

@@ -14,6 +14,11 @@ description: >
   Labelling and commenting fail OPEN: a token that cannot write (a fork pull request) produces a
   warning, not a failed check. Only `fail-above` can fail the job.
 
+  Repositories do not call this directly: the reusable `labeler.yml` runs it as the step after the
+  area labeler, in the same job. Never run it BESIDE actions/labeler — the labeler replaces the
+  pull request's whole label set (PUT) from a snapshot it took when it started, so a size label
+  added while it ran is silently removed (opshub#348: added 12:00:59, removed 12:01:00).
+
 inputs:
   github-token:
     description: "Token with `pull-requests: write` on the caller's repository."
@@ -86,8 +91,12 @@ runs:
         repo="repos/$GITHUB_REPOSITORY"
         warn() { echo "::warning::pr-size: $1 (a fork pull request's token cannot write; the size is in the job summary)"; }
 
-        # Exactly one size label: drop the others, keep the override, add the current one.
-        IFS=',' read -ra current <<< "${PR_LABELS:-}"
+        # Exactly one size label: drop the others, keep the override, add the current one. Read the
+        # labels NOW, not from the event payload: a size label a previous run added after this
+        # push's event was created is not in the payload, and would survive beside the new one.
+        live=$(gh api "$repo/issues/$PR/labels" --paginate --jq '.[].name' 2>/dev/null | paste -sd, -) \
+          || live=""
+        IFS=',' read -ra current <<< "${live:-${PR_LABELS:-}}"
         for l in "${current[@]:-}"; do
           if [[ "$l" == size/* && "$l" != "$LABEL" && "$l" != "$OVERRIDE_LABEL" ]]; then
             gh api --method DELETE "$repo/issues/$PR/labels/$(jq -rn --arg l "$l" '$l|@uri')" \
