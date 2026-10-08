@@ -124,8 +124,11 @@ jobs:
         with:
           app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
-          # Least privilege: only needs to read the shared modules repo.
+          # Least privilege: only needs to READ the shared modules repo. Naming the
+          # permission matters as much as naming the repository — the installation
+          # itself can write, and this job runs on pull requests.
           repositories: tf-modules
+          permission-contents: read
 
       - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@v1
         with:

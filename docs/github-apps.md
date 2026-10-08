@@ -1,0 +1,39 @@
+# GitHub Apps in the `quynhonsemiconductor` organisation
+
+The register of every GitHub App installed in the org: what it is for, what it may do, where it is
+installed, which credential it uses, and who owns it. **Update this file in the same change that
+adds, removes or re-scopes an App.**
+
+## Rules
+
+1. **One App per purpose and trust level.** Workflows that run on `pull_request` (any branch pusher
+   controls them) only ever hold a **read-only** App key. Write-capable keys are used only by
+   workflows that run on `push` to `main`, `schedule` or `workflow_dispatch`.
+2. **Install on selected repositories only**, never "All repositories" — except Renovate.
+   No App that sends code to a hosted model, or that can write, is installed on an NDA repository.
+3. **Org secrets holding App private keys use visibility `selected`**, listing only the repositories
+   whose workflows mint a token. Never `all` (that includes public repositories).
+4. **Every token is minted per job and down-scoped** with `actions/create-github-app-token`:
+   `repositories:` (only the repositories the job touches) **and** `permission-*:` (only the
+   permissions the job uses). Checkouts use `persist-credentials: false`.
+5. **No personal access tokens** in workflows.
+6. **Rotate** every private key at least yearly, and immediately after a scope change that removes
+   access from anyone: generate the new key, update the org secret, delete the old key.
+
+## Register
+
+| App | Purpose | Permissions | Installed on | Credential (org) | Used by | Owner |
+|---|---|---|---|---|---|---|
+| `qnsc-automation` | **Write bot.** Release Please (release PRs, tags, Releases); infra-apply writes environment variables (AWS era — removed with the AWS wind-down) | contents: write · pull_requests: write · actions_variables: write (remove after AWS wind-down) · metadata: read | All repositories → **move to selected** | `QNSC_AUTOMATION_APP_ID` (variable) · `QNSC_AUTOMATION_PRIVATE_KEY` (secret, **selected**) | `release-please.yml` (push to main) in app-platform, rova, opshub, qnsc-kb-backend, qnsc-kb-frontend, qnsc-landing, mcp-tools, tf-modules; `infra-apply.yml` in rova, opshub, qnsc-kb-backend | platform-infra |
+| `qnsc-repo-reader` *(to be created)* | **Read bot.** Cross-repository reads from pull-request and scheduled workflows: tf-modules for OpenTofu, platform conformance, app-platform consumer CI | contents: read · metadata: read | Selected: tf-modules, gitops, infra, rova, opshub, solodesk | `QNSC_REPO_READER_APP_ID` · `QNSC_REPO_READER_PRIVATE_KEY` (secret, selected) | `infra-plan.yml`, `platform-conformance.yml`, infra `drift-detection.yml`, app-platform consumer CI | platform-infra |
+| `qnsc-code-review` | Identity for the LLM code-review comments | contents: read · pull_requests: write · metadata: read | All → **selected: rova, opshub, mcp-tools** (the callers of `code-review.yml`). Never NDA repositories | `CODE_REVIEW_APP_ID` · `app_private_key` (passed by callers) | `code-review.yml` | platform-infra |
+| `qnsc-agent-force` | Coding agents open branches and pull requests | contents: write · pull_requests: write · checks: read · statuses: read · metadata: read | All → **selected: the repositories agents work on; never `VLSIT_RTL_Generator_AI_Model`** | held by the agent-forge runtime | agent-forge | platform-infra |
+| `rova-scm-prod` | rova (production) links commits and pull requests to work items | contents: read · pull_requests: read · metadata: read | All → **selected: repositories linked to rova projects** | rova production secrets | rova | rova team |
+| `rova-scm-dev` | Same, for rova's dev environment | contents: read · pull_requests: read · metadata: read | All → **selected: one or two test repositories** | rova dev secrets | rova (dev) | rova team |
+| `renovate` | Dependency update pull requests (Mend-hosted) | as granted by Renovate | All repositories (standard for Renovate) | — | Renovate | platform-infra |
+
+## Change log
+
+| Date | Change |
+|---|---|
+| 2026-10-09 | Register created. Release Please, infra-plan and platform-conformance tokens down-scoped to named repositories and permissions. Planned: `QNSC_AUTOMATION_PRIVATE_KEY` → selected + key rotation; create `qnsc-repo-reader`; move installations to selected repositories |
