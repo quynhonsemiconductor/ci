@@ -25,16 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # `gitops` and `infra` are PRIVATE, and the job token is scoped to this
-      # repository only — a cross-repo checkout with it 404s. Same app and same
-      # pattern infra-plan.yml already uses to let `tofu init` fetch tf-modules,
-      # scoped to the two repositories this reads and nothing else.
+      # repository only — a cross-repo checkout with it 404s. The read-only
+      # qnsc-repo-reader App (contents: read), scoped to the three repositories this
+      # reads and nothing else.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         id: token
         with:
-          app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
+          app-id: ${{ vars.QNSC_REPO_READER_APP_ID }}
+          private-key: ${{ secrets.QNSC_REPO_READER_PRIVATE_KEY }}
           repositories: gitops,infra,tf-modules
-          # Read-only: this job pushes nowhere, and the installation itself can write.
           permission-contents: read
 
       # persist-credentials: false on all three — this job reads three
