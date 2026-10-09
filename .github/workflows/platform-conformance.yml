@@ -34,6 +34,8 @@ jobs:
           app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
           repositories: gitops,infra,tf-modules
+          # Read-only: this job pushes nowhere, and the installation itself can write.
+          permission-contents: read
 
       # persist-credentials: false on all three — this job reads three
       # repositories and pushes to none, so leaving a token in .git/config just
