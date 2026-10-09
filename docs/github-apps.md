@@ -36,5 +36,6 @@ adds, removes or re-scopes an App.**
 
 | Date | Change |
 |---|---|
+| 2026-10-09 | Every infra-plan caller (rova, opshub, qnsc-kb-backend, 9router-pool) and infra's own workflows read tf-modules with `qnsc-repo-reader`; the deprecated `qnsc-automation` fallback is removed from `infra-plan`. No pull-request workflow holds a write-capable key any more |
 | 2026-10-09 | `qnsc-automation` private key rotated; its secret moved to selected (11 repositories). `qnsc-repo-reader` created (contents: read) and installed on selected repositories. `platform-conformance` moved to it; `infra-plan` prefers it, with the `qnsc-automation` key as a deprecated fallback until every caller switches |
 | 2026-10-09 | Register created. Release Please, infra-plan and platform-conformance tokens down-scoped to named repositories and permissions. Planned: `QNSC_AUTOMATION_PRIVATE_KEY` → selected + key rotation; create `qnsc-repo-reader`; move installations to selected repositories |

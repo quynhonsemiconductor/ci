@@ -31,10 +31,6 @@ on:
       # (QNSC_REPO_READER_APP_ID) is read from the caller's variables. This workflow runs on
       # pull requests, so it only ever receives a read-only key (ci docs/github-apps.md).
       QNSC_REPO_READER_PRIVATE_KEY: { required: false }
-      # DEPRECATED — transition only. Callers that still pass the write-capable
-      # qnsc-automation key keep working until they switch; remove once every caller passes
-      # QNSC_REPO_READER_PRIVATE_KEY.
-      QNSC_AUTOMATION_PRIVATE_KEY: { required: false }
 
 permissions:
   id-token: write
@@ -126,12 +122,9 @@ jobs:
         id: module-token
         continue-on-error: true
         with:
-          # Prefer the read-only qnsc-repo-reader App; fall back to qnsc-automation only while a
-          # caller has not switched yet (deprecated). The id and the key always come as a pair.
-          app-id: ${{ secrets.QNSC_REPO_READER_PRIVATE_KEY != '' && vars.QNSC_REPO_READER_APP_ID || vars.QNSC_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.QNSC_REPO_READER_PRIVATE_KEY || secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
-          # Least privilege: only needs to READ the shared modules repo. Naming the
-          # permission keeps the token read-only even on the deprecated fallback.
+          app-id: ${{ vars.QNSC_REPO_READER_APP_ID }}
+          private-key: ${{ secrets.QNSC_REPO_READER_PRIVATE_KEY }}
+          # Least privilege: only needs to READ the shared modules repo.
           repositories: tf-modules
           permission-contents: read
 
