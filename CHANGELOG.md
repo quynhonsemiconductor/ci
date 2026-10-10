@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.22.0](https://github.com/quynhonsemiconductor/ci/compare/v1.21.0...v1.22.0) (2026-10-10)
+
+
+### Features
+
+* **code-review:** spend the model quota only on reviews that can finish ([#175](https://github.com/quynhonsemiconductor/ci/issues/175)) ([c5e36f6](https://github.com/quynhonsemiconductor/ci/commit/c5e36f6165365eaa4d1886b0104ea955b8280e34))
+* **labeler:** apply size labels in the same job as area labels ([#177](https://github.com/quynhonsemiconductor/ci/issues/177)) ([b728e1c](https://github.com/quynhonsemiconductor/ci/commit/b728e1cfc4ba7cd30739093a48d67c7ea967ace3))
+* **pr-size:** label pull requests by lines of code, warn when too large ([#176](https://github.com/quynhonsemiconductor/ci/issues/176)) ([d6445d8](https://github.com/quynhonsemiconductor/ci/commit/d6445d8a2f9ad3ef61bf1d8aa23f67f00a019492))
+* review pull requests against our own rules ([#152](https://github.com/quynhonsemiconductor/ci/issues/152)) ([5f3846b](https://github.com/quynhonsemiconductor/ci/commit/5f3846b0537ea3313e8b4928ed85dbe96d5684dc))
+* say whether anything is blocking, including when nothing is ([#165](https://github.com/quynhonsemiconductor/ci/issues/165)) ([55abee0](https://github.com/quynhonsemiconductor/ci/commit/55abee0eee07da8f61d0a60ad8d31d7dd725ba8a))
+* **workflows:** read cross-repository code with the read-only qnsc-repo-reader App ([#179](https://github.com/quynhonsemiconductor/ci/issues/179)) ([6336b25](https://github.com/quynhonsemiconductor/ci/commit/6336b2540fbe08b65a1ba120ac3e6f106b5c05ef))
+
+
+### Bug Fixes
+
+* a reasoning model needs longer than the 300s default ([#166](https://github.com/quynhonsemiconductor/ci/issues/166)) ([5a7a8df](https://github.com/quynhonsemiconductor/ci/commit/5a7a8df19b0d5e03a0b3546985ebbd010051b998))
+* **actions:** setup-node-pnpm authenticates on pnpm 11 without writing the token anywhere ([#182](https://github.com/quynhonsemiconductor/ci/issues/182)) ([f1dd992](https://github.com/quynhonsemiconductor/ci/commit/f1dd992dc8cc274c210fcc51fb9e30522b47f654))
+* **bump-gitops-tag:** a comment inside run: broke the action template ([#172](https://github.com/quynhonsemiconductor/ci/issues/172)) ([52b7f31](https://github.com/quynhonsemiconductor/ci/commit/52b7f31b217942289ffb7db3ccc839ee9cbb39b2))
+* compute the routing threshold where an empty value is expressible ([#164](https://github.com/quynhonsemiconductor/ci/issues/164)) ([ac4fe8d](https://github.com/quynhonsemiconductor/ci/commit/ac4fe8d3e55a3d143d932e48554097235c17818d))
+* **k8s-deploy:** attest the digest, not the tag ([#170](https://github.com/quynhonsemiconductor/ci/issues/170)) ([639c83d](https://github.com/quynhonsemiconductor/ci/commit/639c83d5bd63e0340a90cae6fe2e07627a95026d))
+* **k8s-deploy:** build arm64 on an arm64 runner, not under QEMU ([#168](https://github.com/quynhonsemiconductor/ci/issues/168)) ([d09f5cf](https://github.com/quynhonsemiconductor/ci/commit/d09f5cff83768f7dea9719ba294da2cce736cc48))
+* **k8s-deploy:** build the right Dockerfile stage per service ([#171](https://github.com/quynhonsemiconductor/ci/issues/171)) ([f339097](https://github.com/quynhonsemiconductor/ci/commit/f339097cf9d2d3b4862ae1ddfc38a78070125b5f))
+* **k8s-deploy:** grant packages:read, which the caller's grant could not supply ([#169](https://github.com/quynhonsemiconductor/ci/issues/169)) ([643be94](https://github.com/quynhonsemiconductor/ci/commit/643be9452658fe07ea843a77db3ce39c96bc9b57))
+* the `all` branch of the severity mapping could never fire ([#163](https://github.com/quynhonsemiconductor/ci/issues/163)) ([8797dbd](https://github.com/quynhonsemiconductor/ci/commit/8797dbd8c91ea050ff68f870c39dea498e9adee3))
+* **workflows:** down-scope GitHub App tokens to named repositories and permissions ([#178](https://github.com/quynhonsemiconductor/ci/issues/178)) ([f8b2ebd](https://github.com/quynhonsemiconductor/ci/commit/f8b2ebdc0659f8154f495152bf77d188e3ee3e29))
+
 ## [1.21.0](https://github.com/quynhonsemiconductor/ci/compare/v1.20.0...v1.21.0) (2026-09-20)
 
 
