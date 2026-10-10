@@ -24,6 +24,61 @@ inputs:
 runs:
   using: composite
   steps:
+    # Registry authentication that works on pnpm 10 AND pnpm 11.
+    #
+    # pnpm 11 ignores `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` in a PROJECT `.npmrc` (the
+    # file is committed, so an environment variable in it could leak the secret to a registry the repo
+    # names) and answers ERR_PNPM_FETCH_401. A USER-level npmrc is still expanded, on both versions. So this
+    # step writes one, outside the workspace, and points NPM_CONFIG_USERCONFIG at it.
+    #
+    #   * The file holds the PLACEHOLDER `${NODE_AUTH_TOKEN}`, expanded by pnpm when it reads the file. This
+    #     action never reads, prints or writes the token: there is no secret at rest, and nothing here can
+    #     echo it. (Whatever the caller exports as NODE_AUTH_TOKEN, at job level or on this step, or even on
+    #     a LATER step, is what the placeholder resolves to.)
+    #   * Only the PATH goes to GITHUB_ENV, so the caller's later steps (`pnpm install` run by hand, `pnpm
+    #     publish`) find the same file. The path is fixed by this step: nothing from the caller or from a
+    #     pull request is interpolated into it.
+    #   * Mode 600 inside a mode 700 directory (umask 077), in $RUNNER_TEMP.
+    #   * Anything the job already had is kept: an existing NPM_CONFIG_USERCONFIG file (what
+    #     actions/setup-node with `registry-url` writes), or else ~/.npmrc. Pointing the variable somewhere
+    #     else would silently drop it. A scope registry or a token line for this host that is already there
+    #     is left alone, not overridden, and calling this action twice in a job adds nothing the second time.
+    #   * Callers keep their project `.npmrc` as it is. On pnpm 10 it still works; on pnpm 11 its token line
+    #     is ignored (a warning) and this file supplies the credential instead.
+    #   * A job with no token (a build of public packages) still installs: the placeholder then resolves to
+    #     nothing and pnpm warns "Failed to replace env in config", exactly as a project `.npmrc` with the
+    #     same line already does.
+    - name: Configure the GitHub Packages registry
+      shell: bash
+      # ACCEPTED, and bounded (`zizmor: ignore[github-env]` on the `run:` line below). The ONE value written to
+      # GITHUB_ENV is the path of a file this step just created with `mktemp -d` under RUNNER_TEMP; nothing
+      # from the caller, an input, a pull request or the token is interpolated into it, and the file holds a
+      # placeholder, never the secret. Callers that set `install-deps: 'false'` and install by hand later
+      # cannot see the file otherwise.
+      run: | # zizmor: ignore[github-env]
+        set -euo pipefail
+        umask 077
+        # RUNNER_TEMP is always set on GitHub-hosted runners; the fallback keeps this action from failing
+        # somewhere it never used to (a local runner harness). `mktemp -d` makes a fresh mode-700 directory.
+        dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/qnsc-npmrc.XXXXXX")"
+        file="$dir/npmrc"
+        base="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+        if [ -f "$base" ]; then
+          cat "$base" > "$file"
+          printf '\n' >> "$file"
+        else
+          : > "$file"
+        fi
+        # Add only what is missing, and never override the job's own choice for either key: a second call of
+        # this action in the same job finds its own lines and adds nothing, and a job that already points the
+        # scope or this host's token somewhere else keeps that.
+        # shellcheck disable=SC2016  # the placeholder is meant to stay literal
+        auth='//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}'
+        grep -q '^@quynhonsemiconductor:registry=' "$file" ||
+          echo '@quynhonsemiconductor:registry=https://npm.pkg.github.com' >> "$file"
+        grep -q '^//npm\.pkg\.github\.com/:_authToken=' "$file" || echo "$auth" >> "$file"
+        echo "NPM_CONFIG_USERCONFIG=$file" >> "$GITHUB_ENV"
+
     - name: Setup pnpm
       uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
       with:

@@ -439,9 +439,34 @@ jobs:
 | Input | Default | Description |
 |---|---|---|
 | `node-version` | `22` | Node.js version |
-| `pnpm-version` | `10.10.0` | pnpm version |
+| `pnpm-version` | `10.33.2` | pnpm version (10 or 11) |
 | `install-deps` | `true` | Run `pnpm install --frozen-lockfile` |
 | `working-directory` | `.` | Working directory |
+
+**Registry authentication (pnpm 10 and 11).** pnpm 11 ignores a token in a *project* `.npmrc` (the
+`//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` line the products commit) and answers `ERR_PNPM_FETCH_401`;
+pnpm 10 still honours it. So the action first writes a **user-level** npmrc, which both versions expand, and exports its
+path as `NPM_CONFIG_USERCONFIG`:
+
+```ini
+@quynhonsemiconductor:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+- **The token is a placeholder**, expanded by pnpm when it reads the file. The action never reads, prints or stores the
+  secret, so there is no secret at rest. Provide `NODE_AUTH_TOKEN` as you do today (job-level `env`, or on the step that
+  installs); the same applies to a later step when you set `install-deps: 'false'`.
+- The file is mode 600 in a mode 700 directory under `$RUNNER_TEMP`. Only its **path** goes to `GITHUB_ENV`.
+- **Nothing to change in a caller.** Keep your project `.npmrc` as it is: on pnpm 10 it still works, on pnpm 11 its token
+  line is ignored (pnpm prints `Ignored project-level auth setting`) and this file supplies the credential.
+- Existing config is kept: if `NPM_CONFIG_USERCONFIG` or `~/.npmrc` already exists its lines are carried over, and a
+  scope registry or token line for `npm.pkg.github.com` that is already there is not overridden.
+- A job with no token (a build of public packages) still installs; pnpm warns `Failed to replace env in config`, as it
+  already does for a project `.npmrc` that has the same line.
+
+Proven by `.github/workflows/setup-node-pnpm-test.yml`, which installs a private `@quynhonsemiconductor` package on pnpm
+10.33.2 and 11.28.5 (token at job level and on the step; clean and legacy project `.npmrc`; no token; `install-deps: 'false'`),
+and includes a control showing that **without** the action pnpm 11 fails and pnpm 10 does not.
 
 ---
 

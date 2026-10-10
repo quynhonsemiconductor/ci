@@ -1,0 +1,258 @@
+# =============================================================================
+# Proof for actions/setup-node-pnpm: it installs a PRIVATE @quynhonsemiconductor package on pnpm 10 AND
+# pnpm 11, without the token ever being written down.
+#
+# WHY THIS EXISTS. pnpm 11 ignores `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}` in a PROJECT
+# `.npmrc` (ERR_PNPM_FETCH_401), which is how rova, opshub and solodesk authenticate today. The action
+# now writes a USER-level npmrc holding the placeholder, which both versions expand. Callers pin `@v1`,
+# which floats with `main`, so a regression here lands in every product's CI at once: this is the gate.
+#
+# What it shows, each on pnpm 10.33.2 and 11.28.5:
+#   * install      the ACTION ITSELF (`install-deps` left at its default) installs a private package from a
+#                  project `.npmrc` that has the registry only, and from the legacy one the products have
+#                  (registry AND the token placeholder), with the token set at job level (rova, solodesk)
+#                  and on the step only (opshub, app-platform);
+#   * public       a job with NO token still installs public packages;
+#   * manual       `install-deps: 'false'` and a later hand-run install, token on that later step only,
+#                  finds the same file;
+#   * control      WITHOUT the action, pnpm 11 fails with the 401 and pnpm 10 does not. A pass above means
+#                  something because this fails;
+#   * hygiene      the file is mode 600, holds the placeholder and not the secret, GITHUB_ENV holds only a
+#                  path, and no line of the action other than the placeholder names the token.
+#
+# Invoked by local path, never @v1: this must exercise the code in the PR, not the code already released.
+# =============================================================================
+name: Actions · setup-node-pnpm on pnpm 10 and 11
+
+on:
+  pull_request:
+    paths:
+      - 'actions/setup-node-pnpm/**'
+      - '.github/fixtures/setup-node-pnpm/**'
+      - '.github/workflows/setup-node-pnpm-test.yml'
+  schedule:
+    - cron: '23 4 * * 1' # Mondays 04:23 UTC: a new pnpm release or a registry change is noticed here first
+  workflow_dispatch:
+
+concurrency:
+  group: setup-node-pnpm-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  FIXTURES: .github/fixtures/setup-node-pnpm
+
+jobs:
+  install:
+    name: install · pnpm ${{ matrix.pnpm }} · ${{ matrix.fixture }} · token on ${{ matrix.placement }}
+    # A fork's pull request has no token that can read the registry.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pnpm: '10.33.2', node: '24', fixture: private-clean, placement: job }
+          - { pnpm: '11.28.5', node: '24', fixture: private-clean, placement: job }
+          - { pnpm: '10.33.2', node: '24', fixture: private-clean, placement: step }
+          - { pnpm: '11.28.5', node: '24', fixture: private-clean, placement: step }
+          - { pnpm: '10.33.2', node: '24', fixture: private-legacy, placement: job }
+          - { pnpm: '11.28.5', node: '24', fixture: private-legacy, placement: job }
+          # The action's default Node version, which a caller that does not pass one gets.
+          - { pnpm: '11.28.5', node: '22', fixture: private-clean, placement: job }
+    env:
+      # Set at JOB level for `placement: job` (rova, solodesk, ci's web-deploy). For `step` the job-level
+      # value is empty and the step below sets it (opshub, app-platform), as in the products.
+      NODE_AUTH_TOKEN: ${{ matrix.placement == 'job' && secrets.GITHUB_TOKEN || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `install-deps` is left at its default ('true'): the action itself runs `pnpm install
+      # --frozen-lockfile` in the fixture, and that is what has to succeed.
+      - name: Set up with the action under test
+        uses: ./actions/setup-node-pnpm
+        with:
+          node-version: ${{ matrix.node }}
+          pnpm-version: ${{ matrix.pnpm }}
+          working-directory: ${{ env.FIXTURES }}/${{ matrix.fixture }}
+        env:
+          NODE_AUTH_TOKEN: ${{ matrix.placement == 'step' && secrets.GITHUB_TOKEN || env.NODE_AUTH_TOKEN }}
+
+      - name: The right pnpm, and the private package really installed
+        working-directory: ${{ env.FIXTURES }}/${{ matrix.fixture }}
+        env:
+          WANT_PNPM: ${{ matrix.pnpm }}
+        run: |
+          set -euo pipefail
+          got="$(pnpm --version)"
+          [ "$got" = "$WANT_PNPM" ] || { echo "::error::wanted pnpm $WANT_PNPM, got $got"; exit 1; }
+          pkg=node_modules/@quynhonsemiconductor/platform-cache/package.json
+          [ -f "$pkg" ] || { echo "::error::the private package was not installed"; exit 1; }
+          echo "pnpm $got installed @quynhonsemiconductor/platform-cache@$(node -p "require('./$pkg').version")"
+
+      - name: The credential file is hygienic
+        # The token is in the environment of this step only so it can be searched FOR. It is never printed.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          f="${NPM_CONFIG_USERCONFIG:?NPM_CONFIG_USERCONFIG was not exported by the action}"
+          [ -f "$f" ] || { echo "::error::$f does not exist"; exit 1; }
+          case "$f" in "$RUNNER_TEMP"/*) ;; *) echo "::error::the file is outside RUNNER_TEMP"; exit 1;; esac
+          [ "$(stat -c '%a' "$f")" = 600 ] || { echo "::error::file mode is not 600"; exit 1; }
+          [ "$(stat -c '%a' "$(dirname "$f")")" = 700 ] || { echo "::error::directory mode is not 700"; exit 1; }
+          # shellcheck disable=SC2016  # the placeholder is meant to stay literal
+          grep -qxF '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' "$f" || { echo "::error::placeholder line missing"; exit 1; }
+          grep -qxF '@quynhonsemiconductor:registry=https://npm.pkg.github.com' "$f" || { echo "::error::scope line missing"; exit 1; }
+          if grep -qF -- "$TOKEN" "$f"; then echo "::error::the token is IN the credential file"; exit 1; fi
+          # GITHUB_ENV carries the path and nothing else.
+          if grep -qF -- "$TOKEN" "$GITHUB_ENV"; then echo "::error::the token is in GITHUB_ENV"; exit 1; fi
+          others="$(grep -vc '^NPM_CONFIG_USERCONFIG=' "$GITHUB_ENV" || true)"
+          [ "$others" = 0 ] || { echo "::error::GITHUB_ENV holds something other than the path"; exit 1; }
+          echo "credential file: mode 600 in a 700 directory under RUNNER_TEMP; placeholder, not the secret"
+
+  public:
+    name: public only, NO token · pnpm ${{ matrix.pnpm }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        pnpm: ['10.33.2', '11.28.5']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No NODE_AUTH_TOKEN anywhere: a web build that only needs public packages must keep working. The
+      # placeholder expands to nothing and pnpm warns, as it already does for a project `.npmrc` that has it.
+      - uses: ./actions/setup-node-pnpm
+        with:
+          node-version: '24'
+          pnpm-version: ${{ matrix.pnpm }}
+          working-directory: ${{ env.FIXTURES }}/public-only
+
+      - name: A public package installed
+        working-directory: ${{ env.FIXTURES }}/public-only
+        run: test -f node_modules/is-odd/package.json && echo "is-odd installed without a token"
+
+  manual:
+    name: install-deps false, then by hand · pnpm ${{ matrix.pnpm }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        pnpm: ['10.33.2', '11.28.5']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The pattern app-platform's consumer job uses: the action only sets up, and a later step installs by
+      # hand with the token on THAT step. The file written by the action must be found through GITHUB_ENV,
+      # and the placeholder must resolve against the later step's environment.
+      - uses: ./actions/setup-node-pnpm
+        with:
+          node-version: '24'
+          pnpm-version: ${{ matrix.pnpm }}
+          install-deps: 'false'
+          working-directory: ${{ env.FIXTURES }}/private-clean
+
+      - name: Install by hand, token on this step only
+        working-directory: ${{ env.FIXTURES }}/private-clean
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm install --frozen-lockfile
+          test -f node_modules/@quynhonsemiconductor/platform-cache/package.json
+          echo "installed by hand on pnpm $(pnpm --version)"
+
+  control:
+    name: control WITHOUT the action · pnpm ${{ matrix.pnpm }} should ${{ matrix.expect }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pnpm: '10.33.2', expect: succeed }
+          - { pnpm: '11.28.5', expect: fail }
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ matrix.pnpm }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      # What the products do today minus this action: the legacy project `.npmrc` and nothing user-level.
+      - name: Install the way the products did before
+        id: bare
+        continue-on-error: true
+        working-directory: ${{ env.FIXTURES }}/private-legacy
+        run: pnpm install --frozen-lockfile
+
+      - name: The outcome is the expected one
+        env:
+          OUTCOME: ${{ steps.bare.outcome }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          set -euo pipefail
+          echo "install without the action: $OUTCOME (expected: $EXPECT)"
+          if [ "$EXPECT" = fail ] && [ "$OUTCOME" = failure ]; then exit 0; fi
+          if [ "$EXPECT" = succeed ] && [ "$OUTCOME" = success ]; then exit 0; fi
+          echo "::error::the control did not behave as the premise says; the other jobs prove less than they seem to"
+          exit 1
+
+  static:
+    name: the action never names the token
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The only executable line that may mention NODE_AUTH_TOKEN is the placeholder; everything else is a
+      # comment. So the action cannot echo, forward or store the value, whatever else changes.
+      - name: Only the placeholder line mentions it
+        run: |
+          set -euo pipefail
+          f=actions/setup-node-pnpm/action.yml
+          hits="$(grep -n 'NODE_AUTH_TOKEN' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+          echo "non-comment lines that mention NODE_AUTH_TOKEN:"; echo "$hits"
+          [ "$(printf '%s' "$hits" | grep -c .)" = 1 ] || { echo "::error::expected exactly one (the placeholder)"; exit 1; }
+          # shellcheck disable=SC2016  # the placeholder is meant to stay literal
+          printf '%s' "$hits" | grep -qF "auth='//npm.pkg.github.com/:_authToken=\${NODE_AUTH_TOKEN}'" || { echo "::error::that line is not the placeholder"; exit 1; }
+          # And nothing in the action writes the secret anywhere: no `secrets.`, no `echo "$...TOKEN`.
+          if grep -nE 'secrets\.|inputs\.[a-z-]*token' "$f" | grep -vE '^[0-9]+:[[:space:]]*#'; then
+            echo "::error::the action reads a secret or a token input"; exit 1
+          fi
+          echo "ok"
