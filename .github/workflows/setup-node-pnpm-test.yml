@@ -20,6 +20,13 @@
 #   * hygiene      the file is mode 600, holds the placeholder and not the secret, GITHUB_ENV holds only a
 #                  path, and no line of the action other than the placeholder names the token.
 #
+# NEEDS A ONE-TIME GRANT. The private package used here (`@quynhonsemiconductor/platform-cache`) belongs to
+# `app-platform`, and a repository's GITHUB_TOKEN can read a private package only if the PACKAGE grants it
+# Actions access (Organisation > Packages > platform-cache > Package settings > Manage Actions access > add
+# this repository, role Read). GitHub has no API for that grant. Without it every private install is a 403
+# (not a 401: the credential is accepted, the package is not), and the `access` job below says so and FAILS,
+# instead of letting the jobs that need it be skipped or, worse, pass for the wrong reason.
+#
 # Invoked by local path, never @v1: this must exercise the code in the PR, not the code already released.
 # =============================================================================
 name: Actions · setup-node-pnpm on pnpm 10 and 11
@@ -44,10 +51,36 @@ env:
   FIXTURES: .github/fixtures/setup-node-pnpm
 
 jobs:
+  # Can this repository's token read the private test package at all? Everything else in this file that
+  # installs it depends on the answer, and a 403 there would look like a failure of the action under test.
+  access:
+    name: this repository can read the private test package
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Read the package's metadata with this repository's GITHUB_TOKEN
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # A file, not a command-line argument: the token must not appear in a process listing.
+          printf '@quynhonsemiconductor:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$TOKEN" > "$RUNNER_TEMP/probe-npmrc"
+          if out="$(NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/probe-npmrc" npm view @quynhonsemiconductor/platform-cache@3.1.1 version 2>&1)"; then
+            echo "readable: platform-cache@$out"
+          else
+            code="$(printf '%s' "$out" | grep -oE 'E(401|403|404)' | head -1 || true)"
+            echo "::error title=No access to the private test package::npm answered ${code:-an error}. A 403 means this repository's GITHUB_TOKEN is not allowed to read @quynhonsemiconductor/platform-cache: add this repository under Organisation > Packages > platform-cache > Package settings > Manage Actions access (role Read). Every private-package job in this workflow depends on it."
+            exit 1
+          fi
+
   install:
     name: install · pnpm ${{ matrix.pnpm }} · ${{ matrix.fixture }} · token on ${{ matrix.placement }}
-    # A fork's pull request has no token that can read the registry.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: access
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -147,7 +180,7 @@ jobs:
 
   manual:
     name: install-deps false, then by hand · pnpm ${{ matrix.pnpm }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: access
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -183,7 +216,7 @@ jobs:
 
   control:
     name: control WITHOUT the action · pnpm ${{ matrix.pnpm }} should ${{ matrix.expect }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: access
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -211,23 +244,33 @@ jobs:
           node-version: '24'
 
       # What the products do today minus this action: the legacy project `.npmrc` and nothing user-level.
+      # The output is kept so the outcome can be checked for the RIGHT reason: a control that "fails" with a
+      # 403 (no package access) or a network error would pass for a reason that has nothing to do with pnpm.
       - name: Install the way the products did before
         id: bare
         continue-on-error: true
         working-directory: ${{ env.FIXTURES }}/private-legacy
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/bare.log"; exit "${PIPESTATUS[0]}"
 
-      - name: The outcome is the expected one
+      - name: The outcome is the expected one, for the expected reason
         env:
           OUTCOME: ${{ steps.bare.outcome }}
           EXPECT: ${{ matrix.expect }}
         run: |
           set -euo pipefail
           echo "install without the action: $OUTCOME (expected: $EXPECT)"
-          if [ "$EXPECT" = fail ] && [ "$OUTCOME" = failure ]; then exit 0; fi
-          if [ "$EXPECT" = succeed ] && [ "$OUTCOME" = success ]; then exit 0; fi
-          echo "::error::the control did not behave as the premise says; the other jobs prove less than they seem to"
-          exit 1
+          if [ "$EXPECT" = succeed ]; then
+            [ "$OUTCOME" = success ] && exit 0
+            echo "::error::pnpm 10 should accept the project .npmrc token and install"; exit 1
+          fi
+          # expect fail: pnpm 11 ignores the project-level token, so the request carries NO credential: 401.
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error::pnpm 11 installed without the action; the premise of this whole file is wrong"; exit 1
+          fi
+          if grep -q 'ERR_PNPM_FETCH_401' "$RUNNER_TEMP/bare.log" && grep -q 'Ignored project-level auth setting' "$RUNNER_TEMP/bare.log"; then
+            echo "failed with ERR_PNPM_FETCH_401 and pnpm said it ignored the project-level token: the premise holds"; exit 0
+          fi
+          echo "::error::it failed, but not with the 401 that this control is about:"; tail -20 "$RUNNER_TEMP/bare.log"; exit 1
 
   static:
     name: the action never names the token
