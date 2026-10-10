@@ -1,0 +1,9 @@
+{
+  "name": "fixture-private-legacy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test fixture for actions/setup-node-pnpm: one PRIVATE @quynhonsemiconductor package, project .npmrc as rova, opshub and solodesk have it today (registry AND a token placeholder).",
+  "dependencies": {
+    "@quynhonsemiconductor/platform-cache": "3.1.1"
+  }
+}

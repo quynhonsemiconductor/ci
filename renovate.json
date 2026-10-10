@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>quynhonsemiconductor/.github:renovate-config"]
+  "extends": ["local>quynhonsemiconductor/.github:renovate-config"],
+  "packageRules": [
+    {
+      "description": "Test inputs for actions/setup-node-pnpm: deliberately pinned, and their only job is to install the same private package on pnpm 10 and 11.",
+      "matchFileNames": [".github/fixtures/setup-node-pnpm/**"],
+      "enabled": false
+    }
+  ]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "fixture-public-only",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test fixture for actions/setup-node-pnpm: a PUBLIC dependency only, installed by a job that has no token at all.",
+  "dependencies": {
+    "is-odd": "3.0.1"
+  }
+}
