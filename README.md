@@ -259,6 +259,7 @@ jobs:
         with:
           current-spec-path: openapi.json
           base-spec-path: base-spec/openapi.json
+          # An intentional break: add the PR label `allow-breaking-api-change` and push (see the action's docs).
 ```
 
 ### Deploy — rova-api (ECS Fargate)
@@ -584,14 +585,32 @@ S3 key convention:
 | Input | Default | Description |
 |---|---|---|
 | `current-spec-path` | `openapi.json` | Current (PR) spec |
-| `base-spec-path` | `base-openapi.json` | Base branch spec to compare against |
-| `fail-on-breaking` | `true` | Fail on ERR-level breaking changes |
-| `oasdiff-version` | `v1.10.24` | oasdiff release to download |
+| `base-spec-path` | `base-openapi.json` | Base branch spec to compare against. A missing file is a **skip with a warning** (a first run has no base yet) |
+| `fail-on-breaking` | `true` | Fail on ERR-level breaking changes. `true` or `false` only; `false` disables the gate for every PR, prefer `allow-breaking` |
+| `allow-breaking` | `false` | Explicit override for ONE intentional break: ERR-level changes pass, but are printed, raised as a warning annotation and written to the job summary. `true` or `false` only |
+| `allow-breaking-label` | `allow-breaking-api-change` | PR label with the same effect as `allow-breaking: true`. Empty disables the label |
+| `pull-request-labels` | *(the PR's labels)* | JSON array of label names; leave empty. It exists so the label path can be tested |
+| `oasdiff-version` | `v1.22.0` | oasdiff release to download (checksum verified) |
 | `format` | `text` | Output format: `text` or `json` |
 
 | Output | Description |
 |---|---|
-| `breaking-found` | `"true"` if ERR-level breaking changes detected |
+| `breaking-found` | `"true"` if ERR-level breaking changes were detected, even when allowed |
+| `breaking-allowed` | `"true"` if they were detected and let through by `allow-breaking` or the label |
+
+**What fails it.** ERR-level changes from `oasdiff breaking` (a removed endpoint or success status, a type change...).
+WARN-level changes are printed and do not fail. A failure of oasdiff itself (a spec that does not load) **always fails**,
+whatever `allow-breaking` and `fail-on-breaking` say. The step passes `--fail-on ERR` *and* counts the ERR-level changes in
+oasdiff's JSON report independently; either one says "breaking" and it is breaking. (`oasdiff breaking` exits 0 whatever it
+prints unless `--fail-on` is given; this action used to rely on exit 1 and so let opshub#354 pass with "2 changes: 2 error".)
+
+**Letting an intentional break through.** Add the label `allow-breaking-api-change` to the pull request **and push**, or
+pass `allow-breaking: 'true'`. The label is read from the event payload of the run, so a label added afterwards is not seen
+by re-running an old run (the action then fails, which is the safe direction); push, or trigger the workflow on `labeled`.
+The job summary lists every change that was let through under "BREAKING CHANGE ALLOWED". Remove the label once the change has
+shipped. If no breaking change is found while the override is set, the action says so; remove it then.
+
+Proven by `.github/workflows/validate-openapi-contract-test.yml` (fixtures in `.github/fixtures/validate-openapi-contract`).
 
 ---
 

@@ -1,0 +1,162 @@
+# =============================================================================
+# Proof for actions/validate-openapi-contract: a breaking change FAILS it, and only an explicit,
+# logged override lets one through.
+#
+# WHY THIS EXISTS. The action used to read `oasdiff breaking`'s exit code and assume that 1 means
+# "ERR-level changes found". `oasdiff breaking` exits 0 whatever it prints unless `--fail-on` is given, so
+# the action printed "2 changes: 2 error" (opshub#354: response-success-status-removed on POST
+# /v1/compliance/shadow-it/scan and POST /v1/security-posture/sync) and then "No breaking changes
+# detected", and the job passed. Callers pin `@v1`, which floats with `main`, so this file is the gate for
+# rova, opshub and qnsc-kb-backend at once.
+#
+# What it shows, each against the fixture pairs in .github/fixtures/validate-openapi-contract:
+#   * cases      a matrix: compatible and WARN-only pairs pass; the opshub#354 pair FAILS; the same pair
+#                passes only with allow-breaking or the label, and fails with a wrong label or a wrong
+#                value; a spec that does not load fails whatever the inputs; no base spec is a skip;
+#   * control    oasdiff on THIS runner: without `--fail-on` it exits 0 on the breaking pair (so the old
+#                logic passes it), with `--fail-on ERR` it exits 1. The premise of the whole file;
+#   * static     the action has no `|| true`, no swallowed pipe on oasdiff, and still passes `--fail-on ERR`.
+#
+# Invoked by local path, never @v1: this must exercise the code in the PR, not the code already released.
+# The override is also logged as a warning annotation and written to the job summary; those are read in the
+# job log of the `allow-breaking` cases, they cannot be asserted from a later step.
+# =============================================================================
+name: Actions · validate-openapi-contract fails on breaking changes
+
+on:
+  pull_request:
+    paths:
+      - 'actions/validate-openapi-contract/**'
+      - '.github/fixtures/validate-openapi-contract/**'
+      - '.github/workflows/validate-openapi-contract-test.yml'
+  schedule:
+    - cron: '37 4 * * 1' # Mondays 04:37 UTC: a changed oasdiff release asset or checksum is noticed here first
+  workflow_dispatch:
+
+concurrency:
+  group: validate-openapi-contract-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  FX: .github/fixtures/validate-openapi-contract
+
+jobs:
+  cases:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # outcome: what the action step must end with. found / allowed: the expected outputs, `-` = not
+        # checked (an input error stops the step before any output exists). Empty allow / fail_on /
+        # label / labels = the action's default.
+        include:
+          - { name: 'compatible change passes',                    base: base.json,      current: compatible.json, outcome: success, found: 'false', allowed: 'false' }
+          - { name: 'WARN-only change passes',                     base: base-warn.json, current: warning.json,    outcome: success, found: 'false', allowed: 'false' }
+          - { name: 'BREAKING change fails (opshub#354 pair)',     base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false' }
+          - { name: 'breaking + format json fails',                base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', format: json }
+          - { name: 'breaking + allow-breaking passes, flagged',   base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  allow: 'true' }
+          - { name: 'breaking + label passes, flagged',            base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  labels: '["bug","allow-breaking-api-change"]' }
+          - { name: 'breaking + custom label passes, flagged',     base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  label: 'api-break-ok', labels: '["api-break-ok"]' }
+          - { name: 'breaking + a different label still fails',    base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', labels: '["allow-breaking"]' }
+          - { name: 'breaking + label disabled still fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', label: '-', labels: '["allow-breaking-api-change"]' }
+          - { name: 'breaking + allow-breaking false fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', allow: 'false' }
+          - { name: 'breaking + allow-breaking typo fails',        base: base.json,      current: breaking.json,   outcome: failure, found: '-',     allowed: '-',     allow: 'True' }
+          - { name: 'breaking + fail-on-breaking typo fails',      base: base.json,      current: breaking.json,   outcome: failure, found: '-',     allowed: '-',     fail_on: '1' }
+          - { name: 'breaking + fail-on-breaking false: not blocking (legacy)', base: base.json, current: breaking.json, outcome: success, found: 'true', allowed: 'false', fail_on: 'false' }
+          - { name: 'spec that does not load fails',               base: base.json,      current: invalid.json,    outcome: failure, found: 'false', allowed: 'false' }
+          - { name: 'unloadable spec fails even with every override', base: base.json,   current: invalid.json,    outcome: failure, found: 'false', allowed: 'false', allow: 'true', fail_on: 'false', labels: '["allow-breaking-api-change"]' }
+          - { name: 'missing current spec fails',                  base: base.json,      current: missing.json,    outcome: failure, found: '-',     allowed: '-' }
+          - { name: 'missing base spec is a skip, not a pass of a comparison', base: absent.json, current: breaking.json, outcome: success, found: 'false', allowed: 'false' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The action under test
+        id: act
+        # The outcome is the point; a failing action must not stop the assertion below.
+        continue-on-error: true
+        uses: ./actions/validate-openapi-contract
+        with:
+          base-spec-path: ${{ env.FX }}/${{ matrix.base }}
+          current-spec-path: ${{ env.FX }}/${{ matrix.current }}
+          format: ${{ matrix.format || 'text' }}
+          allow-breaking: ${{ matrix.allow }}
+          fail-on-breaking: ${{ matrix.fail_on }}
+          allow-breaking-label: ${{ matrix.label == '-' && '' || matrix.label || 'allow-breaking-api-change' }}
+          pull-request-labels: ${{ matrix.labels }}
+
+      - name: The action ended the way this case requires
+        env:
+          OUTCOME: ${{ steps.act.outcome }}
+          FOUND: ${{ steps.act.outputs.breaking-found }}
+          ALLOWED: ${{ steps.act.outputs.breaking-allowed }}
+          WANT_OUTCOME: ${{ matrix.outcome }}
+          WANT_FOUND: ${{ matrix.found }}
+          WANT_ALLOWED: ${{ matrix.allowed }}
+        run: |
+          set -euo pipefail
+          echo "outcome=$OUTCOME (want $WANT_OUTCOME)  breaking-found='$FOUND' (want $WANT_FOUND)  breaking-allowed='$ALLOWED' (want $WANT_ALLOWED)"
+          bad=0
+          if [ "$OUTCOME" != "$WANT_OUTCOME" ]; then echo "::error::the action ended '$OUTCOME', this case requires '$WANT_OUTCOME'"; bad=1; fi
+          if [ "$WANT_FOUND" != "-" ] && [ "$FOUND" != "$WANT_FOUND" ]; then echo "::error::breaking-found is '$FOUND', want '$WANT_FOUND'"; bad=1; fi
+          if [ "$WANT_ALLOWED" != "-" ] && [ "$ALLOWED" != "$WANT_ALLOWED" ]; then echo "::error::breaking-allowed is '$ALLOWED', want '$WANT_ALLOWED'"; bad=1; fi
+          exit "$bad"
+
+  control:
+    name: control · oasdiff exits 0 on the breaking pair unless --fail-on is given
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Only to get the pinned, checksum-verified oasdiff onto the runner.
+      - name: Install oasdiff through the action
+        uses: ./actions/validate-openapi-contract
+        with:
+          base-spec-path: ${{ env.FX }}/base.json
+          current-spec-path: ${{ env.FX }}/compatible.json
+
+      - name: The premise of the old bug, and of the fix
+        run: |
+          set -uo pipefail
+          oasdiff breaking "$FX/base.json" "$FX/breaking.json" > "$RUNNER_TEMP/plain.txt" 2>&1
+          plain=$?
+          oasdiff breaking --fail-on ERR "$FX/base.json" "$FX/breaking.json" > "$RUNNER_TEMP/failon.txt" 2>&1
+          failon=$?
+          cat "$RUNNER_TEMP/plain.txt"
+          echo "without --fail-on: exit $plain; with --fail-on ERR: exit $failon"
+          grep -q '2 changes: 2 error' "$RUNNER_TEMP/plain.txt" || { echo "::error::the breaking fixture no longer yields 2 ERR-level changes"; exit 1; }
+          [ "$plain" -eq 0 ] || { echo "::error::oasdiff now exits $plain without --fail-on: the premise changed, re-read the action"; exit 1; }
+          [ "$failon" -eq 1 ] || { echo "::error::oasdiff exits $failon with --fail-on ERR, the action relies on 1"; exit 1; }
+
+  static:
+    name: the action does not swallow oasdiff's result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: No `|| true`, no pipe on oasdiff, `--fail-on ERR` present
+        run: |
+          set -euo pipefail
+          f=actions/validate-openapi-contract/action.yml
+          code="$(grep -vE '^[[:space:]]*#' "$f")"
+          if grep -nE '\|\|[[:space:]]*(true|:)([[:space:]]|$)' <<< "$code"; then echo "::error::'|| true' (or '|| :') in $f"; exit 1; fi
+          if grep -nE '^[[:space:]]*oasdiff[[:space:]].*\|[^|]|\$\([[:space:]]*oasdiff[^)]*\|[^|]' <<< "$code"; then echo "::error::a pipe on an oasdiff command in $f: its exit code would be the pipe's"; exit 1; fi
+          grep -qE 'oasdiff breaking .*--fail-on ERR' <<< "$code" || { echo "::error::$f no longer passes --fail-on ERR"; exit 1; }
+          echo "ok"
