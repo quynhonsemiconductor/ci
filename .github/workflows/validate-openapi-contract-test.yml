@@ -10,12 +10,17 @@
 # rova, opshub and qnsc-kb-backend at once.
 #
 # What it shows, each against the fixture pairs in .github/fixtures/validate-openapi-contract:
-#   * cases      a matrix: compatible and WARN-only pairs pass; the opshub#354 pair FAILS; the same pair
-#                passes only with allow-breaking or the label, and fails with a wrong label or a wrong
-#                value; a spec that does not load fails whatever the inputs; no base spec is a skip;
+#   * cases      a matrix (each also checks the `message` output): compatible and WARN-only pairs pass;
+#                the opshub#354 pair FAILS; the same pair passes only with allow-breaking or the label, and
+#                fails with a wrong label or a wrong value (saying why); a spec that does not load fails
+#                whatever the inputs and leaves breaking-found empty; no base spec is a skip; a committed
+#                .oasdiff.* config, next to the specs or in the workspace root, fails;
 #   * control    oasdiff on THIS runner: without `--fail-on` it exits 0 on the breaking pair (so the old
-#                logic passes it), with `--fail-on ERR` it exits 1. The premise of the whole file;
-#   * static     the action has no `|| true`, no swallowed pipe on oasdiff, and still passes `--fail-on ERR`.
+#                logic passes it), with `--fail-on ERR` it exits 1; and a `.oasdiff.yaml` with
+#                `unmatch-path: ".*"` in the working directory silences it, `--config <empty>` undoes that.
+#                The premises of the whole file;
+#   * static     the action has no `|| true`, no swallowed pipe on oasdiff, still passes `--fail-on ERR`, and
+#                passes `--config <empty file>` to both of its comparisons.
 #
 # Invoked by local path, never @v1: this must exercise the code in the PR, not the code already released.
 # The override is also logged as a warning annotation and written to the job summary; those are read in the
@@ -52,31 +57,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # outcome: what the action step must end with. found / allowed: the expected outputs, `-` = not
-        # checked (an input error stops the step before any output exists). Empty allow / fail_on /
-        # label / labels = the action's default.
+        # outcome: what the action step must end with. found / allowed: the expected outputs; `-` = not
+        # checked, `<empty>` = must be empty (unknown: an input error or an oasdiff failure stops the step
+        # before the answer exists). msg: a substring of the `message` output. Empty allow / fail_on /
+        # label / labels = the action's default. root_config: plant a .oasdiff.yaml in the workspace root.
         include:
-          - { name: 'compatible change passes',                    base: base.json,      current: compatible.json, outcome: success, found: 'false', allowed: 'false' }
-          - { name: 'WARN-only change passes',                     base: base-warn.json, current: warning.json,    outcome: success, found: 'false', allowed: 'false' }
-          - { name: 'BREAKING change fails (opshub#354 pair)',     base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false' }
-          - { name: 'breaking + format json fails',                base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', format: json }
-          - { name: 'breaking + allow-breaking passes, flagged',   base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  allow: 'true' }
-          - { name: 'breaking + label passes, flagged',            base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  labels: '["bug","allow-breaking-api-change"]' }
-          - { name: 'breaking + custom label passes, flagged',     base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  label: 'api-break-ok', labels: '["api-break-ok"]' }
-          - { name: 'breaking + a different label still fails',    base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', labels: '["allow-breaking"]' }
-          - { name: 'breaking + label disabled still fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', label: '-', labels: '["allow-breaking-api-change"]' }
-          - { name: 'breaking + allow-breaking false fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', allow: 'false' }
-          - { name: 'breaking + allow-breaking typo fails',        base: base.json,      current: breaking.json,   outcome: failure, found: '-',     allowed: '-',     allow: 'True' }
-          - { name: 'breaking + fail-on-breaking typo fails',      base: base.json,      current: breaking.json,   outcome: failure, found: '-',     allowed: '-',     fail_on: '1' }
-          - { name: 'breaking + fail-on-breaking false: not blocking (legacy)', base: base.json, current: breaking.json, outcome: success, found: 'true', allowed: 'false', fail_on: 'false' }
-          - { name: 'spec that does not load fails',               base: base.json,      current: invalid.json,    outcome: failure, found: 'false', allowed: 'false' }
-          - { name: 'unloadable spec fails even with every override', base: base.json,   current: invalid.json,    outcome: failure, found: 'false', allowed: 'false', allow: 'true', fail_on: 'false', labels: '["allow-breaking-api-change"]' }
-          - { name: 'missing current spec fails',                  base: base.json,      current: missing.json,    outcome: failure, found: '-',     allowed: '-' }
-          - { name: 'missing base spec is a skip, not a pass of a comparison', base: absent.json, current: breaking.json, outcome: success, found: 'false', allowed: 'false' }
+          - { name: 'compatible change passes',                    base: base.json,      current: compatible.json, outcome: success, found: 'false', allowed: 'false', msg: 'no breaking changes' }
+          - { name: 'WARN-only change passes',                     base: base-warn.json, current: warning.json,    outcome: success, found: 'false', allowed: 'false', msg: 'no breaking changes' }
+          - { name: 'BREAKING change fails (opshub#354 pair)',     base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', msg: 'Breaking API changes: 2 ERR-level breaking change(s)' }
+          - { name: 'breaking + format json fails',                base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', msg: 'Breaking API changes: 2 ERR-level breaking change(s)', format: json }
+          - { name: 'breaking + allow-breaking passes, flagged',   base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  msg: 'BREAKING CHANGE ALLOWED by the input allow-breaking=true', allow: 'true' }
+          - { name: 'breaking + label passes, flagged',            base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  msg: "BREAKING CHANGE ALLOWED by the pull-request-labels input (label 'allow-breaking-api-change')", labels: '["bug","allow-breaking-api-change"]' }
+          - { name: 'breaking + custom label passes, flagged',     base: base.json,      current: breaking.json,   outcome: success, found: 'true',  allowed: 'true',  msg: "(label 'api-break-ok')", label: 'api-break-ok', labels: '["api-break-ok"]' }
+          - { name: 'breaking + a different label still fails',    base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', msg: 'Breaking API changes', labels: '["allow-breaking"]' }
+          - { name: 'breaking + label disabled still fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', msg: 'Breaking API changes', label: '-', labels: '["allow-breaking-api-change"]' }
+          - { name: 'breaking + allow-breaking false fails',       base: base.json,      current: breaking.json,   outcome: failure, found: 'true',  allowed: 'false', msg: 'Breaking API changes', allow: 'false' }
+          - { name: 'breaking + allow-breaking typo fails, says why', base: base.json,   current: breaking.json,   outcome: failure, found: '<empty>', allowed: '<empty>', msg: "Invalid input: allow-breaking must be 'true' or 'false', got 'True'", allow: 'True' }
+          - { name: 'breaking + fail-on-breaking typo fails, says why', base: base.json, current: breaking.json,   outcome: failure, found: '<empty>', allowed: '<empty>', msg: "Invalid input: fail-on-breaking must be 'true' or 'false', got '1'", fail_on: '1' }
+          - { name: 'breaking + fail-on-breaking false: not blocking (legacy)', base: base.json, current: breaking.json, outcome: success, found: 'true', allowed: 'false', msg: 'not blocking', fail_on: 'false' }
+          - { name: 'spec that does not load fails, found unknown',  base: base.json,     current: invalid.json,    outcome: failure, found: '<empty>', allowed: 'false', msg: 'oasdiff failed: oasdiff exited 102' }
+          - { name: 'unloadable spec fails even with every override', base: base.json,   current: invalid.json,    outcome: failure, found: '<empty>', allowed: 'false', msg: 'oasdiff failed: oasdiff exited 102', allow: 'true', fail_on: 'false', labels: '["allow-breaking-api-change"]' }
+          - { name: 'missing current spec fails',                  base: base.json,      current: missing.json,    outcome: failure, found: '<empty>', allowed: '<empty>', msg: 'Current spec not found' }
+          - { name: 'missing base spec is a skip, not a pass of a comparison', base: absent.json, current: breaking.json, outcome: success, found: 'false', allowed: 'false', msg: 'skipped: no base spec' }
+          - { name: 'oasdiff config next to the specs fails',      base: with-config/base.json, current: with-config/breaking.json, outcome: failure, found: '<empty>', allowed: 'false', msg: 'oasdiff config found' }
+          - { name: 'oasdiff config in the workspace root fails',  base: base.json,      current: breaking.json,   outcome: failure, found: '<empty>', allowed: 'false', msg: 'oasdiff config found', root_config: 'true' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # What a committed config could do: silence both comparisons. The action must notice and refuse.
+      - name: Plant an oasdiff config in the workspace root
+        if: matrix.root_config == 'true'
+        run: |
+          printf 'unmatch-path: ".*"\n' > .oasdiff.yaml
 
       - name: The action under test
         id: act
@@ -97,16 +111,29 @@ jobs:
           OUTCOME: ${{ steps.act.outcome }}
           FOUND: ${{ steps.act.outputs.breaking-found }}
           ALLOWED: ${{ steps.act.outputs.breaking-allowed }}
+          MESSAGE: ${{ steps.act.outputs.message }}
           WANT_OUTCOME: ${{ matrix.outcome }}
           WANT_FOUND: ${{ matrix.found }}
           WANT_ALLOWED: ${{ matrix.allowed }}
+          WANT_MSG: ${{ matrix.msg }}
         run: |
-          set -euo pipefail
-          echo "outcome=$OUTCOME (want $WANT_OUTCOME)  breaking-found='$FOUND' (want $WANT_FOUND)  breaking-allowed='$ALLOWED' (want $WANT_ALLOWED)"
+          set -uo pipefail
+          echo "outcome=$OUTCOME (want $WANT_OUTCOME)"
+          echo "breaking-found='$FOUND' (want $WANT_FOUND)  breaking-allowed='$ALLOWED' (want $WANT_ALLOWED)"
+          echo "message='$MESSAGE'"
+          echo "  want it to contain: $WANT_MSG"
+          same() { # got want
+            case "$2" in
+              -) return 0 ;;
+              '<empty>') [ -z "$1" ] ;;
+              *) [ "$1" = "$2" ] ;;
+            esac
+          }
           bad=0
           if [ "$OUTCOME" != "$WANT_OUTCOME" ]; then echo "::error::the action ended '$OUTCOME', this case requires '$WANT_OUTCOME'"; bad=1; fi
-          if [ "$WANT_FOUND" != "-" ] && [ "$FOUND" != "$WANT_FOUND" ]; then echo "::error::breaking-found is '$FOUND', want '$WANT_FOUND'"; bad=1; fi
-          if [ "$WANT_ALLOWED" != "-" ] && [ "$ALLOWED" != "$WANT_ALLOWED" ]; then echo "::error::breaking-allowed is '$ALLOWED', want '$WANT_ALLOWED'"; bad=1; fi
+          same "$FOUND" "$WANT_FOUND" || { echo "::error::breaking-found is '$FOUND', want $WANT_FOUND"; bad=1; }
+          same "$ALLOWED" "$WANT_ALLOWED" || { echo "::error::breaking-allowed is '$ALLOWED', want $WANT_ALLOWED"; bad=1; }
+          if ! grep -qF -- "$WANT_MSG" <<< "$MESSAGE"; then echo "::error::the message does not contain: $WANT_MSG"; bad=1; fi
           exit "$bad"
 
   control:
@@ -142,6 +169,29 @@ jobs:
           [ "$plain" -eq 0 ] || { echo "::error::oasdiff now exits $plain without --fail-on: the premise changed, re-read the action"; exit 1; }
           [ "$failon" -eq 1 ] || { echo "::error::oasdiff exits $failon with --fail-on ERR, the action relies on 1"; exit 1; }
 
+      # The second hole: oasdiff 1.22 loads a `.oasdiff.*` file from its working directory on its own, and a
+      # committed `unmatch-path: ".*"` makes BOTH of the action's comparisons report nothing. `--config` with
+      # an empty file is what the action passes to be immune; the action also refuses to run while one exists.
+      - name: A committed config silences oasdiff, and --config with an empty file undoes it
+        run: |
+          set +e
+          set -uo pipefail
+          work="$(mktemp -d)"
+          cp "$FX/base.json" "$FX/breaking.json" "$work/"
+          printf 'unmatch-path: ".*"\n' > "$work/.oasdiff.yaml"
+          : > "$work/empty.yaml"
+          cd "$work"
+          oasdiff breaking --fail-on ERR base.json breaking.json > silenced.txt 2>&1
+          silenced=$?
+          oasdiff breaking --config empty.yaml --fail-on ERR base.json breaking.json > immune.txt 2>&1
+          immune=$?
+          oasdiff breaking --fail-on ERR -f json base.json breaking.json > silenced.json 2>&1
+          cat silenced.txt immune.txt
+          echo "config in cwd: exit $silenced; with --config <empty>: exit $immune"
+          [ "$silenced" -eq 0 ] || { echo "::error::oasdiff no longer lets a .oasdiff.yaml in the working directory silence it (exit $silenced): the premise changed"; exit 1; }
+          [ "$(tr -d '[:space:]' < silenced.json)" = "[]" ] || { echo "::error::the JSON report was not silenced by the config either"; exit 1; }
+          [ "$immune" -eq 1 ] || { echo "::error::--config with an empty file did not restore the comparison (exit $immune)"; exit 1; }
+
   static:
     name: the action does not swallow oasdiff's result
     runs-on: ubuntu-latest
@@ -161,4 +211,7 @@ jobs:
           if grep -nE '\|\|[[:space:]]*(true|:)([[:space:]]|$)' <<< "$code"; then echo "::error::'|| true' (or '|| :') in $f"; exit 1; fi
           if grep -nE '^[[:space:]]*oasdiff[[:space:]].*\|[^|]|\$\([[:space:]]*oasdiff[^)]*\|[^|]' <<< "$code"; then echo "::error::a pipe on an oasdiff command in $f: its exit code would be the pipe's"; exit 1; fi
           grep -qE 'oasdiff breaking .*--fail-on ERR' <<< "$code" || { echo "::error::$f no longer passes --fail-on ERR"; exit 1; }
+          # shellcheck disable=SC2016
+          n="$(grep -cE '^[[:space:]]*oasdiff breaking .*--config "\$cfg"' <<< "$code" || true)"
+          [ "$n" -eq 2 ] || { echo "::error::$f runs oasdiff breaking with --config <empty file> $n time(s), want 2 (both comparisons)"; exit 1; }
           echo "ok"

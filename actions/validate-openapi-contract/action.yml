@@ -57,9 +57,9 @@ inputs:
     default: allow-breaking-api-change
   pull-request-labels:
     description: >
-      JSON array of the pull request's label names. Leave empty to use the labels of
-      the pull request that triggered the run; it exists so that the label path can be
-      tested.
+      JSON array of label names to check `allow-breaking-label` against. Leave empty to use the labels
+      of the pull request that triggered the run (the usual case). When set, it REPLACES them, and the
+      job summary says the override came from this input rather than from the pull request.
     required: false
     default: ''
   oasdiff-version:
@@ -73,11 +73,17 @@ inputs:
 
 outputs:
   breaking-found:
-    description: '"true" if ERR-level breaking changes were detected (even when allowed)'
+    description: >
+      "true" if ERR-level breaking changes were detected (even when allowed), "false" if the specs
+      were compared and there are none or nothing was compared (no base spec). EMPTY when oasdiff
+      failed or the input was invalid: nobody knows.
     value: ${{ steps.diff.outputs.breaking-found }}
   breaking-allowed:
     description: '"true" if breaking changes were detected and let through by allow-breaking or the label'
     value: ${{ steps.diff.outputs.breaking-allowed }}
+  message:
+    description: 'One line saying how the action ended, or why it failed (for example "Invalid input: ...")'
+    value: ${{ steps.diff.outputs.message }}
 
 runs:
   using: composite
@@ -117,6 +123,7 @@ runs:
         FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
         ALLOW_BREAKING: ${{ inputs.allow-breaking }}
         ALLOW_LABEL: ${{ inputs.allow-breaking-label }}
+        LABELS_INPUT: ${{ inputs.pull-request-labels }}
         LABELS_JSON: ${{ inputs.pull-request-labels || toJSON(github.event.pull_request.labels.*.name) }}
       run: |
         # No `-e`: GitHub starts this shell as `bash -e -o pipefail`, so it is switched off explicitly
@@ -129,40 +136,90 @@ runs:
         set +e
         set -uo pipefail
 
-        out="$(mktemp)"; err="$(mktemp)"; json="$(mktemp)"; jerr="$(mktemp)"
-        trap 'rm -f "$out" "$err" "$json" "$jerr"' EXIT
+        out="$(mktemp)"; err="$(mktemp)"; json="$(mktemp)"; jerr="$(mktemp)"; cfgdir="$(mktemp -d)"
+        trap 'rm -rf "$out" "$err" "$json" "$jerr" "$cfgdir"' EXIT
+        # $cfg stays EMPTY. oasdiff 1.22 loads a `.oasdiff.*` / `oasdiff.*` config file from its working
+        # directory on its own, and one such file (`unmatch-path: ".*"`) makes BOTH comparisons below
+        # report "No changes detected". `--config <empty file>` replaces that lookup (the extension picks
+        # the parser: a bare mktemp name is rejected with exit 107); the check further down refuses to run
+        # at all while such a file exists, so the situation is visible, not just inert.
+        cfg="$cfgdir/empty.yaml"
+        : > "$cfg"
 
-        # `true`/`false` only. An empty value is the default. Anything else (a typo such as `True` or `1`)
-        # used to disable the gate silently; now it is an error.
-        flag() { # name value default
-          case "$2" in
-            true | false) printf '%s' "$2" ;;
-            '') printf '%s' "$3" ;;
-            *) echo "::error title=Invalid input::$1 must be 'true' or 'false', got '$2'"; return 1 ;;
-          esac
+        set_out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+
+        # One line, no workflow-command injection: the text may contain input values.
+        oneline() { printf '%s' "$1" | tr -d '\r\n' | cut -c1-400; }
+
+        # An error: the annotation AND the `message` output, so that a caller (or a test) can read why.
+        die() { # title message
+          local m
+          m="$(oneline "$2")"
+          echo "::error title=$1::$m"
+          set_out message "$1: $m"
         }
-        FAIL_ON="$(flag fail-on-breaking "$FAIL_ON_BREAKING" true)" || exit 1
-        ALLOW="$(flag allow-breaking "$ALLOW_BREAKING" false)" || exit 1
 
         summary() { # markdown on stdin -> job summary (when there is one)
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat >> "$GITHUB_STEP_SUMMARY"; else cat > /dev/null; fi
         }
 
+        # `true`/`false` only. An empty value is the default. Anything else (a typo such as `True` or `1`)
+        # used to disable the gate silently; now it is an error. The result is a global, NOT the output of a
+        # command substitution: the message must reach the log, not be swallowed with the value.
+        FLAG_VALUE=""
+        flag() { # name value default
+          case "$2" in
+            true | false) FLAG_VALUE="$2" ;;
+            '') FLAG_VALUE="$3" ;;
+            *) die "Invalid input" "$1 must be 'true' or 'false', got '$2'"; return 1 ;;
+          esac
+        }
+        flag fail-on-breaking "$FAIL_ON_BREAKING" true || exit 1
+        FAIL_ON="$FLAG_VALUE"
+        flag allow-breaking "$ALLOW_BREAKING" false || exit 1
+        ALLOW="$FLAG_VALUE"
+
+        # A config file that oasdiff would read (from its working directory) or that a reader would assume
+        # applies (the workspace root, the specs' directories). Refuse to run while one exists.
+        found_configs=""
+        seen=" "
+        for d in "$PWD" "${GITHUB_WORKSPACE:-}" "$(dirname -- "$BASE")" "$(dirname -- "$CURRENT")"; do
+          if [ -z "$d" ] || [ ! -d "$d" ]; then continue; fi
+          real="$(cd "$d" && pwd -P)"
+          case "$seen" in *" $real "*) continue ;; esac
+          seen="$seen$real "
+          for f in "$real"/.oasdiff.* "$real"/oasdiff.*; do
+            if [ ! -f "$f" ]; then continue; fi
+            case "$f" in
+              *.json | *.toml | *.yaml | *.yml | *.properties | *.props | *.prop | *.hcl | *.tfvars | *.dotenv | *.env | *.ini)
+                found_configs="${found_configs:+$found_configs, }$f"
+                ;;
+            esac
+          done
+        done
+        if [ -n "$found_configs" ]; then
+          die "oasdiff config found" "$found_configs. oasdiff reads .oasdiff.* / oasdiff.* from its working directory, and a rule such as unmatch-path \".*\" silently disables the contract check. This action ignores such files (--config with an empty file) and refuses to run while one exists: delete it."
+          printf '### OpenAPI contract: FAILED, oasdiff config file present\n\n`%s`\n\nIt could silence the comparison, so the check refuses to run.\n' "$found_configs" | summary
+          set_out breaking-allowed false
+          exit 1
+        fi
+
         if [ ! -f "$BASE" ]; then
           echo "::warning ::Base spec not found at '$BASE' — skipping contract validation."
           printf '### OpenAPI contract: SKIPPED\n\nNo base spec at `%s`, so nothing was compared.\n' "$BASE" | summary
-          echo "breaking-found=false" >> "$GITHUB_OUTPUT"
-          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+          set_out breaking-found false
+          set_out breaking-allowed false
+          set_out message "skipped: no base spec at $(oneline "$BASE")"
           exit 0
         fi
 
         if [ ! -f "$CURRENT" ]; then
-          echo "::error ::Current spec not found at '$CURRENT'"
+          die "Current spec not found" "no file at '$CURRENT'"
           exit 1
         fi
 
         if ! command -v jq > /dev/null 2>&1; then
-          echo "::error ::jq is required (it is on GitHub-hosted ubuntu runners)"
+          die "jq missing" "jq is required (it is on GitHub-hosted ubuntu runners)"
           exit 1
         fi
 
@@ -172,32 +229,31 @@ runs:
         echo ""
 
         # 1. The report people read, with the exit code that matters: 1 = ERR-level changes found.
-        oasdiff breaking --format "$FORMAT" --fail-on ERR "$BASE" "$CURRENT" > "$out" 2> "$err"
+        oasdiff breaking --config "$cfg" --format "$FORMAT" --fail-on ERR "$BASE" "$CURRENT" > "$out" 2> "$err"
         EXIT=$?
         cat "$out"
         if [ -s "$err" ]; then cat "$err"; fi
 
         # Anything but 0 and 1 is oasdiff failing (102: a spec that does not load), not a verdict about
-        # the API. Never let allow-breaking or fail-on-breaking=false turn that into a pass.
+        # the API. Never let allow-breaking or fail-on-breaking=false turn that into a pass. `breaking-found`
+        # stays EMPTY: nobody knows whether the API broke.
         if [ "$EXIT" -ne 0 ] && [ "$EXIT" -ne 1 ]; then
-          echo "::error title=oasdiff failed::oasdiff exited $EXIT, so the specs were not compared. This is not a breaking-change verdict and is not affected by allow-breaking or fail-on-breaking."
+          die "oasdiff failed" "oasdiff exited $EXIT, so the specs were not compared. This is not a breaking-change verdict and is not affected by allow-breaking or fail-on-breaking."
           printf '### OpenAPI contract: FAILED to compare\n\noasdiff exited `%s`; see the log.\n' "$EXIT" | summary
-          echo "breaking-found=false" >> "$GITHUB_OUTPUT"
-          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+          set_out breaking-allowed false
           exit 1
         fi
 
         # 2. The independent count: ERR is level 3 in oasdiff's JSON report.
-        oasdiff breaking --format json "$BASE" "$CURRENT" > "$json" 2> "$jerr"
+        oasdiff breaking --config "$cfg" --format json "$BASE" "$CURRENT" > "$json" 2> "$jerr"
         JEXIT=$?
         ERRORS=""
         if [ "$JEXIT" -eq 0 ]; then ERRORS="$(jq '[.[] | select(.level == 3)] | length' "$json" 2> /dev/null)"; fi
         case "$ERRORS" in
           '' | *[!0-9]*)
-            echo "::error title=oasdiff failed::could not count the ERR-level changes (exit $JEXIT)."
+            die "oasdiff failed" "could not count the ERR-level changes (exit $JEXIT)."
             cat "$jerr"
-            echo "breaking-found=false" >> "$GITHUB_OUTPUT"
-            echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+            set_out breaking-allowed false
             exit 1
             ;;
         esac
@@ -209,68 +265,95 @@ runs:
           if [ "$EXIT" -eq 0 ]; then
             echo "::warning title=oasdiff exit code disagrees::oasdiff exited 0 but its report has $ERRORS ERR-level change(s). Treating the change as breaking."
           fi
+        elif [ "$EXIT" -eq 1 ]; then
+          echo "::warning title=oasdiff exit code disagrees::oasdiff exited 1 (ERR-level changes) but its JSON report lists none, so the number of changes is unavailable. Treating the change as breaking."
         fi
 
-        # The label, read from this run's event payload.
+        # How many, for messages. When the exit code says breaking and the report lists none, say so
+        # instead of claiming "0 ERR-level changes".
+        if [ "$ERRORS" -gt 0 ]; then
+          COUNT_TXT="$ERRORS ERR-level breaking change(s)"
+        else
+          COUNT_TXT="ERR-level breaking change(s) (count unavailable: oasdiff exited 1 but its JSON report lists none)"
+        fi
+
+        # The label (or the labels input) that allows a break. Read from this run's event payload unless the
+        # `pull-request-labels` input supplies the list.
         LABEL_ALLOWED=false
         if [ -n "$ALLOW_LABEL" ] && [ -n "$LABELS_JSON" ]; then
           if jq -e --arg l "$ALLOW_LABEL" 'type == "array" and (index($l) != null)' <<< "$LABELS_JSON" > /dev/null 2>&1; then
             LABEL_ALLOWED=true
           fi
         fi
+        if [ -n "$LABELS_INPUT" ]; then
+          LABEL_SRC="the pull-request-labels input (label '$ALLOW_LABEL')"
+        else
+          LABEL_SRC="the pull request label '$ALLOW_LABEL'"
+        fi
 
-        # The ERR-level changes as a table for the job summary (at most 50 rows).
+        # The ERR-level changes as a table for the job summary (at most 50 rows). Text that comes from the
+        # spec is escaped: pipes, backticks (which would open a code span) and line breaks.
         changes_table() {
+          if [ "$ERRORS" -eq 0 ]; then
+            echo "The JSON report lists no ERR-level change; see the log above for what oasdiff printed."
+            return
+          fi
           echo "| Change | Operation | What |"
           echo "|---|---|---|"
-          jq -r '[.[] | select(.level == 3)][:50][]
-                 | "| `\(.id)` | `\(.operation // "") \(.path // "")` | \(.text | gsub("\\|"; "\\|")) |"' "$json"
+          jq -r '
+            def cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("`"; "\\`");
+            def code: tostring | gsub("[\r\n`]+"; "\u0027") | gsub("\\|"; "\\|");
+            [.[] | select(.level == 3)][:50][]
+            | "| `\(.id | code)` | `\((.operation // "") | code) \((.path // "") | code)` | \(.text | cell) |"' "$json"
           if [ "$ERRORS" -gt 50 ]; then echo ""; echo "…and $((ERRORS - 50)) more; the full list is in the log."; fi
         }
 
-        echo "breaking-found=$BREAKING" >> "$GITHUB_OUTPUT"
+        set_out breaking-found "$BREAKING"
 
         if [ "$BREAKING" = false ]; then
           echo "✓ No breaking changes detected (oasdiff exit $EXIT, $ERRORS ERR-level changes)"
           if [ "$ALLOW" = true ] || [ "$LABEL_ALLOWED" = true ]; then
             echo "::notice title=allow-breaking not needed::allow-breaking (or the '$ALLOW_LABEL' label) is set but there is no breaking change. Remove it."
           fi
-          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+          set_out breaking-allowed false
+          set_out message "no breaking changes"
           printf '### OpenAPI contract: no breaking changes\n' | summary
           exit 0
         fi
 
         # Breaking from here on.
         if [ "$ALLOW" = true ] || [ "$LABEL_ALLOWED" = true ]; then
-          if [ "$ALLOW" = true ]; then WHY="the input allow-breaking=true"; else WHY="the pull request label '$ALLOW_LABEL'"; fi
+          if [ "$ALLOW" = true ]; then WHY="the input allow-breaking=true"; else WHY="$LABEL_SRC"; fi
           echo ""
-          echo "::warning title=BREAKING API CHANGE ALLOWED::$ERRORS ERR-level breaking change(s) let through by $WHY. Clients of the base API can break. Release notes and a client migration plan are the author's responsibility."
+          echo "::warning title=BREAKING API CHANGE ALLOWED::$COUNT_TXT let through by $WHY. Clients of the base API can break. Release notes and a client migration plan are the author's responsibility."
           {
             printf '### ⚠️ OpenAPI contract: BREAKING CHANGE ALLOWED\n\n'
-            printf '%s ERR-level breaking change(s) were let through by %s.\n\n' "$ERRORS" "$WHY"
+            printf '%s were let through by %s.\n\n' "$COUNT_TXT" "$WHY"
             changes_table
             printf '\nThis is an intentional break: callers of the base API can fail. Remove the override once the change has shipped.\n'
           } | summary
-          echo "breaking-allowed=true" >> "$GITHUB_OUTPUT"
+          set_out breaking-allowed true
+          set_out message "BREAKING CHANGE ALLOWED by $(oneline "$WHY"): $COUNT_TXT"
           exit 0
         fi
 
-        echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+        set_out breaking-allowed false
 
         if [ "$FAIL_ON" = false ]; then
           echo "::warning ::Breaking API changes detected (fail-on-breaking=false — not blocking)."
           {
             printf '### ⚠️ OpenAPI contract: breaking changes, NOT blocking\n\n'
-            printf '`fail-on-breaking` is `false`, so %s ERR-level change(s) do not fail this job.\n\n' "$ERRORS"
+            printf '`fail-on-breaking` is `false`, so %s do not fail this job.\n\n' "$COUNT_TXT"
             changes_table
           } | summary
+          set_out message "breaking changes, not blocking (fail-on-breaking=false): $COUNT_TXT"
           exit 0
         fi
 
         echo ""
-        echo "::error title=Breaking API changes::$ERRORS ERR-level breaking change(s). Fix them, or, if the break is intentional, set allow-breaking: 'true' or add the label '${ALLOW_LABEL:-<none configured>}' and push."
+        die "Breaking API changes" "$COUNT_TXT. Fix them, or, if the break is intentional, set allow-breaking: 'true' or add the label '${ALLOW_LABEL:-<none configured>}' and push."
         {
-          printf '### ❌ OpenAPI contract: %s breaking change(s)\n\n' "$ERRORS"
+          printf '### ❌ OpenAPI contract: breaking changes\n\n%s.\n\n' "$COUNT_TXT"
           changes_table
           printf '\nIf the break is intentional: add the label `%s` and push (or set `allow-breaking: true`). It will be logged here as allowed.\n' "${ALLOW_LABEL:-<none configured>}"
         } | summary

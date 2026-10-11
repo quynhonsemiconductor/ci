@@ -589,14 +589,15 @@ S3 key convention:
 | `fail-on-breaking` | `true` | Fail on ERR-level breaking changes. `true` or `false` only; `false` disables the gate for every PR, prefer `allow-breaking` |
 | `allow-breaking` | `false` | Explicit override for ONE intentional break: ERR-level changes pass, but are printed, raised as a warning annotation and written to the job summary. `true` or `false` only |
 | `allow-breaking-label` | `allow-breaking-api-change` | PR label with the same effect as `allow-breaking: true`. Empty disables the label |
-| `pull-request-labels` | *(the PR's labels)* | JSON array of label names; leave empty. It exists so the label path can be tested |
+| `pull-request-labels` | *(the PR's labels)* | JSON array of label names; leave empty. When set it replaces the PR's labels, and the job summary then says the override came from this input, not from the pull request |
 | `oasdiff-version` | `v1.22.0` | oasdiff release to download (checksum verified) |
 | `format` | `text` | Output format: `text` or `json` |
 
 | Output | Description |
 |---|---|
-| `breaking-found` | `"true"` if ERR-level breaking changes were detected, even when allowed |
+| `breaking-found` | `"true"` if ERR-level breaking changes were detected, even when allowed; `"false"` if there are none or nothing was compared (no base spec); **empty** when oasdiff failed or the input was invalid (unknown) |
 | `breaking-allowed` | `"true"` if they were detected and let through by `allow-breaking` or the label |
+| `message` | One line: how it ended, or why it failed (`Invalid input: ...`, `oasdiff config found: ...`) |
 
 **What fails it.** ERR-level changes from `oasdiff breaking` (a removed endpoint or success status, a type change...).
 WARN-level changes are printed and do not fail. A failure of oasdiff itself (a spec that does not load) **always fails**,
@@ -609,6 +610,11 @@ pass `allow-breaking: 'true'`. The label is read from the event payload of the r
 by re-running an old run (the action then fails, which is the safe direction); push, or trigger the workflow on `labeled`.
 The job summary lists every change that was let through under "BREAKING CHANGE ALLOWED". Remove the label once the change has
 shipped. If no breaking change is found while the override is set, the action says so; remove it then.
+
+**A committed oasdiff config is refused.** oasdiff 1.22 loads `.oasdiff.*` / `oasdiff.*` from its working directory on its own,
+and one such file (`unmatch-path: ".*"`) makes every comparison report nothing. The action passes `--config` with an empty file
+to both of its runs, and **fails** while such a file exists in the working directory, the workspace root or the directory of
+either spec, so a silenced gate is visible instead of inert. Delete the file (or move the rule into the spec).
 
 Proven by `.github/workflows/validate-openapi-contract-test.yml` (fixtures in `.github/fixtures/validate-openapi-contract`).
 

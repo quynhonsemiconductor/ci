@@ -7,3 +7,6 @@ none is a real product spec. All pairs compare against a base:
 | `base.json` -> `compatible.json` | only INFO (a media type and an endpoint were added) | passes |
 | `base-warn.json` -> `warning.json` | 1 WARN `response-optional-property-removed` | passes, nothing breaking |
 | `base.json` -> `invalid.json` | cannot load (exit 102) | fails, whatever the inputs |
+| `with-config/base.json` -> `with-config/breaking.json` | the same ERR pair, next to a `.oasdiff.yaml` with `unmatch-path: ".*"` that would make oasdiff report nothing | fails: the action refuses to run beside an oasdiff config |
+
+The "config in the workspace root" case plants the same `.oasdiff.yaml` at run time, in the checkout's root.
