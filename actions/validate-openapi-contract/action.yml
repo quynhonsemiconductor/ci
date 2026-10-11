@@ -4,11 +4,16 @@ description: >
   (usually the spec on the target branch for PRs).
 
   Uses `oasdiff` — "OpenAPI diff" — to compare specs and flag backwards-
-  incompatible changes (removed endpoints, renamed fields, type changes, etc.)
-  before they reach production and break clients.
+  incompatible changes (removed endpoints, renamed fields, type changes, removed
+  success statuses, etc.) before they reach production and break clients.
 
-  Breaking changes at ERR severity fail this action by default.
-  WARNING severity changes are printed but do not fail.
+  ERR-level breaking changes FAIL this action. WARNING-level changes are printed
+  but do not fail. An intentional breaking change is let through only on purpose:
+  `allow-breaking: 'true'`, or the PR label named by `allow-breaking-label`. Either
+  way it is logged as a warning and written to the job summary, never silent.
+
+  A failure of oasdiff itself (a spec that does not parse, a missing binary)
+  always fails the action, whatever the inputs say.
 
   In CI: download the base branch spec as an artifact from the previous build,
   then run this action against it before merging.
@@ -24,13 +29,39 @@ inputs:
     description: >
       Path to the base (reference) OpenAPI spec to compare against.
       Download this from the `openapi` artifact on the base branch before calling
-      this action.
+      this action. When the file does not exist the comparison is SKIPPED, with a
+      warning (a first run has no base yet).
     required: false
     default: base-openapi.json
   fail-on-breaking:
-    description: Fail the action if ERR-level breaking changes are detected
+    description: >
+      Fail the action if ERR-level breaking changes are detected. `true` or `false`.
+      `false` turns the gate into a warning for every pull request: prefer
+      `allow-breaking` for one intentional change.
     required: false
     default: 'true'
+  allow-breaking:
+    description: >
+      Explicit, per-change escape hatch for an INTENTIONAL breaking change: `true` lets
+      ERR-level changes pass. They are still printed, raised as a warning annotation and
+      written to the job summary. `true` or `false`.
+    required: false
+    default: 'false'
+  allow-breaking-label:
+    description: >
+      Name of a pull request label that has the same effect as `allow-breaking: 'true'`.
+      Read from the event payload of THIS run: add the label and push (or trigger on
+      `labeled`); re-running an old run does not see a label added afterwards, and then
+      the action fails, which is the safe direction. Empty disables the label.
+    required: false
+    default: allow-breaking-api-change
+  pull-request-labels:
+    description: >
+      JSON array of the pull request's label names. Leave empty to use the labels of
+      the pull request that triggered the run; it exists so that the label path can be
+      tested.
+    required: false
+    default: ''
   oasdiff-version:
     description: oasdiff release tag to download (e.g. v1.22.0)
     required: false
@@ -42,8 +73,11 @@ inputs:
 
 outputs:
   breaking-found:
-    description: '"true" if breaking changes were detected'
+    description: '"true" if ERR-level breaking changes were detected (even when allowed)'
     value: ${{ steps.diff.outputs.breaking-found }}
+  breaking-allowed:
+    description: '"true" if breaking changes were detected and let through by allow-breaking or the label'
+    value: ${{ steps.diff.outputs.breaking-allowed }}
 
 runs:
   using: composite
@@ -53,18 +87,20 @@ runs:
       env:
         VERSION: ${{ inputs.oasdiff-version }}
       run: |
+        set -euo pipefail
         OS="linux"
         ARCH="amd64"
         BASE="https://github.com/Tufin/oasdiff/releases/download/${VERSION}"
         TARBALL="oasdiff_${VERSION#v}_${OS}_${ARCH}.tar.gz"
         echo "Downloading oasdiff ${VERSION}..."
-        curl -sSL "${BASE}/${TARBALL}"          -o /tmp/oasdiff.tar.gz
-        curl -sSL "${BASE}/checksums.txt"       -o /tmp/oasdiff-checksums.txt
+        # -f: an HTTP error must stop here, not become an empty file that fails later for another reason.
+        curl -fsSL "${BASE}/${TARBALL}"          -o /tmp/oasdiff.tar.gz
+        curl -fsSL "${BASE}/checksums.txt"       -o /tmp/oasdiff-checksums.txt
         # Verify SHA-256 before extracting
-        EXPECTED=$(grep "${TARBALL}" /tmp/oasdiff-checksums.txt | awk '{print $1}')
+        EXPECTED=$(grep -F "${TARBALL}" /tmp/oasdiff-checksums.txt | awk '{print $1}')
         ACTUAL=$(sha256sum /tmp/oasdiff.tar.gz | awk '{print $1}')
-        if [ "$EXPECTED" != "$ACTUAL" ]; then
-          echo "::error ::Checksum mismatch for ${TARBALL}: expected=${EXPECTED} got=${ACTUAL}"
+        if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+          echo "::error ::Checksum mismatch for ${TARBALL}: expected=${EXPECTED:-<none listed>} got=${ACTUAL}"
           exit 1
         fi
         tar -xz -C /usr/local/bin -f /tmp/oasdiff.tar.gz oasdiff
@@ -79,10 +115,44 @@ runs:
         BASE: ${{ inputs.base-spec-path }}
         FORMAT: ${{ inputs.format }}
         FAIL_ON_BREAKING: ${{ inputs.fail-on-breaking }}
+        ALLOW_BREAKING: ${{ inputs.allow-breaking }}
+        ALLOW_LABEL: ${{ inputs.allow-breaking-label }}
+        LABELS_JSON: ${{ inputs.pull-request-labels || toJSON(github.event.pull_request.labels.*.name) }}
       run: |
+        # No `-e`: GitHub starts this shell as `bash -e -o pipefail`, so it is switched off explicitly
+        # (`set +e` below); every oasdiff exit code is read and acted on instead. The previous version of this step
+        # assumed that `oasdiff breaking` exits 1 when it finds ERR-level changes. It does not: without
+        # `--fail-on` it exits 0 whatever it prints (opshub#354: "2 changes: 2 error" followed by
+        # "No breaking changes detected", job green). Two defences, so one wrong assumption cannot
+        # reopen that hole: `--fail-on ERR` for the exit code, and an independent count of ERR-level
+        # changes from the JSON report. Either one says "breaking" and it is breaking.
+        set +e
+        set -uo pipefail
+
+        out="$(mktemp)"; err="$(mktemp)"; json="$(mktemp)"; jerr="$(mktemp)"
+        trap 'rm -f "$out" "$err" "$json" "$jerr"' EXIT
+
+        # `true`/`false` only. An empty value is the default. Anything else (a typo such as `True` or `1`)
+        # used to disable the gate silently; now it is an error.
+        flag() { # name value default
+          case "$2" in
+            true | false) printf '%s' "$2" ;;
+            '') printf '%s' "$3" ;;
+            *) echo "::error title=Invalid input::$1 must be 'true' or 'false', got '$2'"; return 1 ;;
+          esac
+        }
+        FAIL_ON="$(flag fail-on-breaking "$FAIL_ON_BREAKING" true)" || exit 1
+        ALLOW="$(flag allow-breaking "$ALLOW_BREAKING" false)" || exit 1
+
+        summary() { # markdown on stdin -> job summary (when there is one)
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat >> "$GITHUB_STEP_SUMMARY"; else cat > /dev/null; fi
+        }
+
         if [ ! -f "$BASE" ]; then
           echo "::warning ::Base spec not found at '$BASE' — skipping contract validation."
+          printf '### OpenAPI contract: SKIPPED\n\nNo base spec at `%s`, so nothing was compared.\n' "$BASE" | summary
           echo "breaking-found=false" >> "$GITHUB_OUTPUT"
+          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -91,28 +161,117 @@ runs:
           exit 1
         fi
 
+        if ! command -v jq > /dev/null 2>&1; then
+          echo "::error ::jq is required (it is on GitHub-hosted ubuntu runners)"
+          exit 1
+        fi
+
         echo "Comparing:"
         echo "  base:    $BASE"
         echo "  current: $CURRENT"
         echo ""
 
-        # Run oasdiff breaking — exits 1 if ERR-level breaking changes found
-        BREAKING_OUTPUT=$(oasdiff breaking \
-          --format "$FORMAT" \
-          "$BASE" "$CURRENT" 2>&1) || BREAKING_EXIT=$?
+        # 1. The report people read, with the exit code that matters: 1 = ERR-level changes found.
+        oasdiff breaking --format "$FORMAT" --fail-on ERR "$BASE" "$CURRENT" > "$out" 2> "$err"
+        EXIT=$?
+        cat "$out"
+        if [ -s "$err" ]; then cat "$err"; fi
 
-        echo "$BREAKING_OUTPUT"
-
-        if [ "${BREAKING_EXIT:-0}" -ne 0 ]; then
-          echo ""
-          echo "breaking-found=true" >> "$GITHUB_OUTPUT"
-          if [ "$FAIL_ON_BREAKING" = "true" ]; then
-            echo "::error ::Breaking API changes detected. Review the diff above before merging."
-            exit 1
-          else
-            echo "::warning ::Breaking API changes detected (fail-on-breaking=false — not blocking)."
-          fi
-        else
-          echo "✓ No breaking changes detected"
+        # Anything but 0 and 1 is oasdiff failing (102: a spec that does not load), not a verdict about
+        # the API. Never let allow-breaking or fail-on-breaking=false turn that into a pass.
+        if [ "$EXIT" -ne 0 ] && [ "$EXIT" -ne 1 ]; then
+          echo "::error title=oasdiff failed::oasdiff exited $EXIT, so the specs were not compared. This is not a breaking-change verdict and is not affected by allow-breaking or fail-on-breaking."
+          printf '### OpenAPI contract: FAILED to compare\n\noasdiff exited `%s`; see the log.\n' "$EXIT" | summary
           echo "breaking-found=false" >> "$GITHUB_OUTPUT"
+          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+          exit 1
         fi
+
+        # 2. The independent count: ERR is level 3 in oasdiff's JSON report.
+        oasdiff breaking --format json "$BASE" "$CURRENT" > "$json" 2> "$jerr"
+        JEXIT=$?
+        ERRORS=""
+        if [ "$JEXIT" -eq 0 ]; then ERRORS="$(jq '[.[] | select(.level == 3)] | length' "$json" 2> /dev/null)"; fi
+        case "$ERRORS" in
+          '' | *[!0-9]*)
+            echo "::error title=oasdiff failed::could not count the ERR-level changes (exit $JEXIT)."
+            cat "$jerr"
+            echo "breaking-found=false" >> "$GITHUB_OUTPUT"
+            echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+            ;;
+        esac
+
+        BREAKING=false
+        if [ "$EXIT" -eq 1 ]; then BREAKING=true; fi
+        if [ "$ERRORS" -gt 0 ]; then
+          BREAKING=true
+          if [ "$EXIT" -eq 0 ]; then
+            echo "::warning title=oasdiff exit code disagrees::oasdiff exited 0 but its report has $ERRORS ERR-level change(s). Treating the change as breaking."
+          fi
+        fi
+
+        # The label, read from this run's event payload.
+        LABEL_ALLOWED=false
+        if [ -n "$ALLOW_LABEL" ] && [ -n "$LABELS_JSON" ]; then
+          if jq -e --arg l "$ALLOW_LABEL" 'type == "array" and (index($l) != null)' <<< "$LABELS_JSON" > /dev/null 2>&1; then
+            LABEL_ALLOWED=true
+          fi
+        fi
+
+        # The ERR-level changes as a table for the job summary (at most 50 rows).
+        changes_table() {
+          echo "| Change | Operation | What |"
+          echo "|---|---|---|"
+          jq -r '[.[] | select(.level == 3)][:50][]
+                 | "| `\(.id)` | `\(.operation // "") \(.path // "")` | \(.text | gsub("\\|"; "\\|")) |"' "$json"
+          if [ "$ERRORS" -gt 50 ]; then echo ""; echo "…and $((ERRORS - 50)) more; the full list is in the log."; fi
+        }
+
+        echo "breaking-found=$BREAKING" >> "$GITHUB_OUTPUT"
+
+        if [ "$BREAKING" = false ]; then
+          echo "✓ No breaking changes detected (oasdiff exit $EXIT, $ERRORS ERR-level changes)"
+          if [ "$ALLOW" = true ] || [ "$LABEL_ALLOWED" = true ]; then
+            echo "::notice title=allow-breaking not needed::allow-breaking (or the '$ALLOW_LABEL' label) is set but there is no breaking change. Remove it."
+          fi
+          echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+          printf '### OpenAPI contract: no breaking changes\n' | summary
+          exit 0
+        fi
+
+        # Breaking from here on.
+        if [ "$ALLOW" = true ] || [ "$LABEL_ALLOWED" = true ]; then
+          if [ "$ALLOW" = true ]; then WHY="the input allow-breaking=true"; else WHY="the pull request label '$ALLOW_LABEL'"; fi
+          echo ""
+          echo "::warning title=BREAKING API CHANGE ALLOWED::$ERRORS ERR-level breaking change(s) let through by $WHY. Clients of the base API can break. Release notes and a client migration plan are the author's responsibility."
+          {
+            printf '### ⚠️ OpenAPI contract: BREAKING CHANGE ALLOWED\n\n'
+            printf '%s ERR-level breaking change(s) were let through by %s.\n\n' "$ERRORS" "$WHY"
+            changes_table
+            printf '\nThis is an intentional break: callers of the base API can fail. Remove the override once the change has shipped.\n'
+          } | summary
+          echo "breaking-allowed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "breaking-allowed=false" >> "$GITHUB_OUTPUT"
+
+        if [ "$FAIL_ON" = false ]; then
+          echo "::warning ::Breaking API changes detected (fail-on-breaking=false — not blocking)."
+          {
+            printf '### ⚠️ OpenAPI contract: breaking changes, NOT blocking\n\n'
+            printf '`fail-on-breaking` is `false`, so %s ERR-level change(s) do not fail this job.\n\n' "$ERRORS"
+            changes_table
+          } | summary
+          exit 0
+        fi
+
+        echo ""
+        echo "::error title=Breaking API changes::$ERRORS ERR-level breaking change(s). Fix them, or, if the break is intentional, set allow-breaking: 'true' or add the label '${ALLOW_LABEL:-<none configured>}' and push."
+        {
+          printf '### ❌ OpenAPI contract: %s breaking change(s)\n\n' "$ERRORS"
+          changes_table
+          printf '\nIf the break is intentional: add the label `%s` and push (or set `allow-breaking: true`). It will be logged here as allowed.\n' "${ALLOW_LABEL:-<none configured>}"
+        } | summary
+        exit 1
