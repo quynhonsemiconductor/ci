@@ -119,12 +119,14 @@ runs:
         ALLOW_LABEL: ${{ inputs.allow-breaking-label }}
         LABELS_JSON: ${{ inputs.pull-request-labels || toJSON(github.event.pull_request.labels.*.name) }}
       run: |
-        # No `-e`: every oasdiff exit code is read and acted on below. The previous version of this step
+        # No `-e`: GitHub starts this shell as `bash -e -o pipefail`, so it is switched off explicitly
+        # (`set +e` below); every oasdiff exit code is read and acted on instead. The previous version of this step
         # assumed that `oasdiff breaking` exits 1 when it finds ERR-level changes. It does not: without
         # `--fail-on` it exits 0 whatever it prints (opshub#354: "2 changes: 2 error" followed by
         # "No breaking changes detected", job green). Two defences, so one wrong assumption cannot
         # reopen that hole: `--fail-on ERR` for the exit code, and an independent count of ERR-level
         # changes from the JSON report. Either one says "breaking" and it is breaking.
+        set +e
         set -uo pipefail
 
         out="$(mktemp)"; err="$(mktemp)"; json="$(mktemp)"; jerr="$(mktemp)"

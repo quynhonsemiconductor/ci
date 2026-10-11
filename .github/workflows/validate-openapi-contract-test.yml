@@ -129,6 +129,8 @@ jobs:
 
       - name: The premise of the old bug, and of the fix
         run: |
+          # The runner starts this shell with -e; the exit codes are the subject here.
+          set +e
           set -uo pipefail
           oasdiff breaking "$FX/base.json" "$FX/breaking.json" > "$RUNNER_TEMP/plain.txt" 2>&1
           plain=$?
