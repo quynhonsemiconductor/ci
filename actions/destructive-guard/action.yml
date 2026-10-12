@@ -56,6 +56,18 @@ outputs:
 runs:
   using: composite
   steps:
+    # `mode` is validated, case-sensitively, before anything else: a typo ('Drift', 'plan ') would otherwise select neither
+    # branch's step guard cleanly and could skip the guard while the job stays green. Fail closed.
+    - name: Validate mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        case "$MODE" in
+          plan|drift) ;;
+          *) echo "::error title=destructive-guard::unknown mode '$MODE' (expected exactly 'plan' or 'drift')"; exit 1;;
+        esac
+
     - name: Classify external drift
       id: drift
       if: ${{ inputs.mode == 'drift' }}
