@@ -1,0 +1,87 @@
+name: destructive-guard
+description: >
+  Fail the job when the saved OpenTofu plan DELETES or REPLACES a DNS, edge, mail-identity, certificate or key resource
+  (Cloudflare records, Pages, R2, tunnels; Route 53; SES; ACM; KMS; the CI OIDC roles), unless the pull request that is
+  being planned or merged carries the label `allow-dns-destroy` (or a manual dispatch passed `dispatch-allow: true`).
+
+  Why it exists: on 2026-10-09 a provider lock-file bump was merged with a green check; the plan printed in the PR said
+  nine resources 'must be replaced' (zone_id -> null) and the apply workflow applied exactly that plan, unreviewed. The
+  destroys succeeded, the re-creates could not, and a landing site, SES DKIM and an ACM validation record were down for
+  three days. `plan-guard` covers DATA types; this covers what serves traffic and who we are. See
+  infra/docs/incidents/2026-10-09-edge-dns.md.
+
+  It is a LABEL, not plan-guard's committed file, on purpose: the plan can turn destructive with no file in the
+  repository edited (a lock bump, an empty variable, a provider upgrade), so the decision has to attach to the PR being
+  merged. The label is read LIVE from the API, because re-running a failed job reuses the original event payload and a
+  label added after the failure would otherwise be invisible. If the lookup fails the guard refuses; it never opens.
+  The allowed addresses are written to the job summary, so the record outlives the label.
+
+  Needs `pull-requests: read` on the calling job. Run it after `tofu plan -out=<file>` and BEFORE `tofu apply`.
+
+inputs:
+  working-directory:
+    description: The stack directory holding the saved plan.
+    required: true
+  plan-file:
+    description: The binary plan produced by `tofu plan -out=<file>`, relative to the working directory.
+    required: false
+    default: tfplan
+  pr-number:
+    description: "Pull request number (plan workflow). Leave empty on a push; the PR is then found from the commit."
+    required: false
+    default: ""
+  dispatch-allow:
+    description: "'true' when a manual workflow_dispatch passed an allow input."
+    required: false
+    default: "false"
+  label:
+    description: The label that allows a destroy.
+    required: false
+    default: allow-dns-destroy
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the allow label
+      id: label
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+        PR: ${{ inputs.pr-number }}
+        DISPATCH_ALLOW: ${{ inputs.dispatch-allow }}
+        EVENT: ${{ github.event_name }}
+        WANT: ${{ inputs.label }}
+      run: |
+        set -uo pipefail
+        allow=false
+        labels=""
+        if [ "$EVENT" = workflow_dispatch ]; then
+          [ "$DISPATCH_ALLOW" = true ] && allow=true
+        elif [ -n "$PR" ]; then
+          labels="$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | join(",")' 2>/dev/null || true)"
+        else
+          labels="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[].labels[].name] | join(",")' 2>/dev/null || true)"
+        fi
+        # an API failure leaves labels empty: the guard then FAILS CLOSED (refuses), never opens
+        case ",$labels," in *",$WANT,"*) allow=true;; esac
+        echo "labels: [${labels}]  allow=$allow"
+        echo "allow=$allow" >> "$GITHUB_OUTPUT"
+
+    - name: Refuse to delete or replace DNS / identity resources
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PLAN_FILE: ${{ inputs.plan-file }}
+        ALLOW: ${{ steps.label.outputs.allow }}
+        GUARD: ${{ github.action_path }}/destructive_guard.py
+      run: |
+        set -euo pipefail
+        if [ ! -f "$PLAN_FILE" ]; then
+          echo "::error title=destructive-guard::No plan file at '$PLAN_FILE'. Run this AFTER 'tofu plan -out=$PLAN_FILE' in the same job. A missing plan is not an empty plan."
+          exit 1
+        fi
+        flag=""; [ "$ALLOW" = true ] && flag="--allow"
+        # straight into the guard: the JSON carries the prior state and is never written to disk
+        tofu show -json "$PLAN_FILE" | python3 "$GUARD" $flag
