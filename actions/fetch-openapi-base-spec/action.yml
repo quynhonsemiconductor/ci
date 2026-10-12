@@ -1,0 +1,216 @@
+name: Fetch OpenAPI base spec
+description: >
+  Download the OpenAPI spec of a pull request's BASE commit, as uploaded by the base branch's own push
+  run (`publish-openapi-spec` with `artifact-name: openapi-spec-<sha>`), so that `validate-openapi-contract`
+  has something to compare with.
+
+  What it decides, in order:
+    1. The base branch has no successful PUSH run of the workflow: there is no baseline (a stacked PR aimed
+       at another PR's branch, a brand-new repository). It says so and succeeds with `found=false`; the
+       contract check then skips, loudly.
+    2. Otherwise a baseline is REQUIRED. The action looks for the artifact of the base commit itself and,
+       if that commit has none, of its nearest ancestor within `max-ancestors` commits, and says which one
+       it used and how far back. None found is a FAILURE, never a skip.
+    3. Only an artifact uploaded by a run on the base branch itself, in this repository, for exactly the
+       commit it is named after, is accepted, so a pull request cannot plant a spec under a commit's name.
+
+  Why the ancestor fallback: a workflow that cancels in-progress runs per ref leaves some commits without a
+  spec (a quick second merge cancels the first commit's run), and a pull request opened while the merge's
+  own push run is still going has a base commit whose spec is not uploaded yet. Without the fallback each of
+  those is either a skip (the gate silently off) or a failure that has nothing to do with the pull request.
+
+  This replaced a `dawidd6/action-download-artifact` step whose failure was ignored. That action takes
+  the latest SUCCESSFUL run on the branch, which is the PREVIOUS commit in the second case above, so the
+  artifact name never matched and the failure was swallowed (opshub runs 37887725836 and 37887654403); with
+  a wrong workflow name it was a swallowed 404 and the gate never ran at all (rova run 38143249232).
+
+  Needs `actions: read` only if the repository is private; the default token of a public repository can read
+  its own runs and artifacts, as the callers' jobs already do.
+
+inputs:
+  workflow:
+    description: >
+      File name of the workflow that uploads the specs, for example `backend-ci.yml`. A name that does not
+      exist is an ERROR (the API answers 404), not "no baseline".
+    required: true
+  artifact-prefix:
+    description: The artifact is named `<artifact-prefix><commit sha>`.
+    required: false
+    default: openapi-spec-
+  path:
+    description: Directory to download the artifact into, relative to the workspace.
+    required: false
+    default: base-spec
+  max-ancestors:
+    description: How many commits, counting the base commit itself, to try (1 to 100).
+    required: false
+    default: '30'
+  base-ref:
+    description: The base branch. Defaults to the pull request's.
+    required: false
+    default: ${{ github.base_ref }}
+  base-sha:
+    description: The base commit (40 hex characters). Defaults to the pull request's.
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  repository:
+    description: Repository that holds the runs and artifacts, as `owner/name`.
+    required: false
+    default: ${{ github.repository }}
+  token:
+    description: Token used to read runs and artifacts. The default is the job's `GITHUB_TOKEN`.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  found:
+    description: >
+      "true" if a spec was downloaded; "false" if the base branch has no baseline (skip); EMPTY if the
+      action failed.
+    value: ${{ steps.fetch.outputs.found }}
+  commit:
+    description: The commit whose spec was downloaded (the base commit, or an ancestor).
+    value: ${{ steps.fetch.outputs.commit }}
+  distance:
+    description: How many commits before the base commit that is (0 = the base commit itself).
+    value: ${{ steps.fetch.outputs.distance }}
+  run-id:
+    description: Id of the run that uploaded the artifact.
+    value: ${{ steps.fetch.outputs.run-id }}
+  path:
+    description: Directory the spec was downloaded into (empty when found is not "true").
+    value: ${{ steps.fetch.outputs.path }}
+  message:
+    description: One line saying what happened, or why it failed.
+    value: ${{ steps.fetch.outputs.message }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch the base spec
+      id: fetch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ inputs.repository }}
+        WORKFLOW: ${{ inputs.workflow }}
+        PREFIX: ${{ inputs.artifact-prefix }}
+        DEST: ${{ inputs.path }}
+        MAX: ${{ inputs.max-ancestors }}
+        BASE_REF: ${{ inputs.base-ref }}
+        BASE_SHA: ${{ inputs.base-sha }}
+      run: |
+        set -euo pipefail
+
+        set_out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+        summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat >> "$GITHUB_STEP_SUMMARY"; else cat > /dev/null; fi; }
+        # One line, so that a value that came from an input cannot start a workflow command of its own.
+        oneline() { printf '%s' "$1" | tr -d '\r\n' | cut -c1-400; }
+
+        die() { # message
+          local m
+          m="$(oneline "$1")"
+          # stderr: `die` also runs inside command substitutions, where stdout would be captured and the
+          # message lost (a bad input once failed with only "exit code 1").
+          echo "::error title=Base spec::$m" >&2
+          set_out message "$m"
+          printf '### OpenAPI base spec: FAILED\n\n%s\n' "$m" | summary
+          exit 1
+        }
+
+        # Inputs are data, never code: they reach the shell only through the environment, are checked here,
+        # and reach jq only as --arg.
+        [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "repository must be owner/name, got '$REPO'"
+        [[ "$WORKFLOW" =~ ^[A-Za-z0-9_.-]+$ ]] || die "workflow must be a workflow file name such as backend-ci.yml, got '$WORKFLOW'"
+        [[ "$PREFIX" =~ ^[A-Za-z0-9_.-]*$ ]] || die "artifact-prefix has characters that an artifact name cannot have: '$PREFIX'"
+        [[ "$MAX" =~ ^[0-9]+$ ]] && [ "$MAX" -ge 1 ] && [ "$MAX" -le 100 ] || die "max-ancestors must be 1 to 100, got '$MAX'"
+        [ -n "$BASE_REF" ] || die "base-ref is empty: this is not a pull_request run, pass base-ref and base-sha"
+        [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || die "base-sha must be 40 hex characters, got '$BASE_SHA' (not a pull_request run? pass base-ref and base-sha)"
+        case "$DEST" in
+          '' | /* | .. | ../* | */.. | */../*) die "path must be a relative directory inside the workspace, got '$DEST'" ;;
+        esac
+        command -v jq > /dev/null 2>&1 || die "jq is required (it is on GitHub-hosted ubuntu runners)"
+        command -v gh > /dev/null 2>&1 || die "gh is required (it is on GitHub-hosted ubuntu runners)"
+
+        errf="$(mktemp)"
+        trap 'rm -f "$errf"' EXIT
+
+        # `gh api`, retried on a server error or a network failure only. Any other error (a 404 for a
+        # workflow that does not exist, a 403) is final, and it is an error, not "nothing found".
+        ghapi() {
+          local n=0 out
+          until out="$(gh api "$@" 2> "$errf")"; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ] || ! grep -qiE 'HTTP 5[0-9][0-9]|timeout|timed out|connection|EOF|reset by peer' "$errf"; then
+              die "GitHub API call failed: $(tr '\n' ' ' < "$errf")"
+            fi
+            sleep $((n * 3))
+          done
+          printf '%s' "$out"
+        }
+
+        # 1. Is there a baseline at all?
+        successes="$(ghapi -X GET "repos/$REPO/actions/workflows/$WORKFLOW/runs" \
+          -f branch="$BASE_REF" -f event=push -f status=success -F per_page=1 | jq -r '.total_count')"
+        [[ "$successes" =~ ^[0-9]+$ ]] || die "unexpected answer from the workflow runs API: '$successes'"
+        if [ "$successes" -eq 0 ]; then
+          m="no baseline: '$(oneline "$BASE_REF")' has no successful push run of $WORKFLOW, so there is no base spec to compare with"
+          echo "::warning title=No baseline::$m. The contract check will be skipped."
+          printf '### OpenAPI base spec: no baseline\n\n%s.\n' "$m" | summary
+          set_out found false
+          set_out message "$m"
+          exit 0
+        fi
+
+        # 2. The base commit, then its ancestors, newest first.
+        commits="$(ghapi -X GET "repos/$REPO/commits" -f sha="$BASE_SHA" -F per_page="$MAX" | jq -r '.[].sha')"
+        [ -n "$commits" ] || die "the commits API returned no commits for $BASE_SHA"
+
+        found=""
+        run_id=""
+        distance=0
+        for sha in $commits; do
+          # Only an artifact of THIS repository, uploaded by a run on the base branch, whose head commit is
+          # the commit the artifact is named after. The branch name and the sha reach jq as arguments.
+          run_id="$(ghapi -X GET "repos/$REPO/actions/artifacts" -f name="$PREFIX$sha" -F per_page=10 \
+            | jq -r --arg ref "$BASE_REF" --arg sha "$sha" '
+                [.artifacts[]
+                 | select(.expired == false
+                          and .workflow_run.head_branch == $ref
+                          and .workflow_run.head_sha == $sha
+                          and .workflow_run.head_repository_id == .workflow_run.repository_id)][0]
+                | .workflow_run.id // empty')"
+          if [ -n "$run_id" ]; then found="$sha"; break; fi
+          distance=$((distance + 1))
+        done
+
+        if [ -z "$found" ]; then
+          die "'$(oneline "$BASE_REF")' has successful runs of $WORKFLOW, yet none of the $MAX commits up to ${BASE_SHA:0:7} has a live $PREFIX<sha> artifact uploaded by a run on that branch (artifacts expire; a run may have been cancelled). Not skipping: that would turn the contract check off silently. Re-run $WORKFLOW on '$(oneline "$BASE_REF")', or rebase."
+        fi
+
+        # 3. Download it.
+        mkdir -p "$DEST"
+        n=0
+        until gh run download "$run_id" -R "$REPO" -n "$PREFIX$found" -D "$DEST" 2> "$errf"; do
+          n=$((n + 1))
+          if [ "$n" -ge 3 ] || ! grep -qiE 'HTTP 5[0-9][0-9]|timeout|timed out|connection|EOF|reset by peer' "$errf"; then
+            die "could not download artifact $PREFIX${found:0:7} of run $run_id: $(tr '\n' ' ' < "$errf")"
+          fi
+          sleep $((n * 3))
+        done
+        [ -n "$(find "$DEST" -type f -print -quit)" ] || die "artifact $PREFIX${found:0:7} of run $run_id is empty"
+
+        set_out found true
+        set_out commit "$found"
+        set_out distance "$distance"
+        set_out run-id "$run_id"
+        set_out path "$DEST"
+        if [ "$distance" -eq 0 ]; then
+          m="spec of the base commit ${found:0:7} (run $run_id)"
+          echo "Base spec: $m"
+        else
+          m="no spec for the base commit ${BASE_SHA:0:7} (its run was cancelled or is still going); using ${found:0:7}, $distance commit(s) earlier (run $run_id)"
+          echo "::warning title=Base spec is from an older commit::$m"
+          printf '### OpenAPI base spec: from %s commit(s) earlier\n\n%s.\n' "$distance" "$m" | summary
+        fi
+        set_out message "$m"

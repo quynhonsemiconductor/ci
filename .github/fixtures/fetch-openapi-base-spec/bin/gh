@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# A stand-in for `gh` in the tests of actions/fetch-openapi-base-spec. It answers the three calls the action
+# makes from canned files in $FAKE_GH_DIR, in the shape the real API uses (checked against the live API:
+# `workflow_run` carries id, repository_id, head_repository_id, head_branch, head_sha), and refuses anything
+# else, so a change in the action's calls fails the tests instead of being answered by accident.
+#
+#   FAKE_GH_DIR       directory with runs.<branch>.json, commits.json, artifacts/<name>.json, download/<name>/
+#   FAKE_GH_WORKFLOW  the only workflow file name that "exists"; any other is a 404, like the real API
+#   FAKE_GH_FLAKY=1   every distinct call fails once with "HTTP 502" before it succeeds
+#   FAKE_GH_LOG       file that receives one line per call
+set -euo pipefail
+
+dir="${FAKE_GH_DIR:?FAKE_GH_DIR is not set}"
+echo "gh $*" >> "${FAKE_GH_LOG:-/dev/null}"
+
+if [ "${FAKE_GH_FLAKY:-}" = 1 ]; then
+  marker="$dir/.flaky-$(printf '%s' "$*" | cksum | cut -d' ' -f1)"
+  if [ ! -e "$marker" ]; then
+    : > "$marker"
+    echo "gh: HTTP 502: Bad Gateway" >&2
+    exit 1
+  fi
+fi
+
+notfound() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+
+case "${1:-}" in
+  api)
+    shift
+    endpoint=""
+    method=""
+    q_branch=""; q_event=""; q_status=""; q_sha=""; q_name=""; q_per_page=""
+    jqexpr=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -X) method="$2"; shift 2 ;;
+        -f | -F)
+          case "${2%%=*}" in
+            branch) q_branch="${2#*=}" ;;
+            event) q_event="${2#*=}" ;;
+            status) q_status="${2#*=}" ;;
+            sha) q_sha="${2#*=}" ;;
+            name) q_name="${2#*=}" ;;
+            per_page) q_per_page="${2#*=}" ;;
+            *) echo "fake gh: unexpected field ${2%%=*}" >&2; exit 64 ;;
+          esac
+          shift 2
+          ;;
+        --jq) jqexpr="$2"; shift 2 ;;
+        -*) echo "fake gh: unsupported flag $1" >&2; exit 64 ;;
+        *) endpoint="$1"; shift ;;
+      esac
+    done
+    [ "$method" = GET ] || { echo "fake gh: the action must pass -X GET with its -f/-F fields (got '$method')" >&2; exit 64; }
+    out=""
+    case "$endpoint" in
+      repos/*/actions/workflows/*/runs)
+        wf="${endpoint#repos/*/actions/workflows/}"; wf="${wf%/runs}"
+        [ "$wf" = "${FAKE_GH_WORKFLOW:?}" ] || notfound
+        [ "$q_event" = push ] && [ "$q_status" = success ] || { echo "fake gh: the runs query must ask for event=push and status=success" >&2; exit 64; }
+        f="$dir/runs.$(printf '%s' "$q_branch" | tr -c 'A-Za-z0-9._-' '_').json"
+        if [ -f "$f" ]; then out="$(cat "$f")"; else out='{"total_count":0,"workflow_runs":[]}'; fi
+        ;;
+      repos/*/commits)
+        [ "$(jq -r '.[0].sha' "$dir/commits.json")" = "$q_sha" ] || { echo "gh: No commit found for SHA: $q_sha (HTTP 422)" >&2; exit 1; }
+        out="$(jq -c --argjson n "${q_per_page:-30}" '.[:$n]' "$dir/commits.json")"
+        ;;
+      repos/*/actions/artifacts)
+        [ -n "$q_name" ] || { echo "fake gh: the artifacts query needs a name" >&2; exit 64; }
+        f="$dir/artifacts/$q_name.json"
+        if [ -f "$f" ]; then out="$(cat "$f")"; else out='{"total_count":0,"artifacts":[]}'; fi
+        ;;
+      *) echo "fake gh: unexpected endpoint '$endpoint'" >&2; exit 64 ;;
+    esac
+    if [ -n "$jqexpr" ]; then printf '%s' "$out" | jq -r "$jqexpr"; else printf '%s' "$out"; fi
+    ;;
+  run)
+    shift
+    [ "${1:-}" = download ] || { echo "fake gh: only 'run download' is supported" >&2; exit 64; }
+    shift
+    shift # the run id: the fixtures are keyed by artifact name
+    name=""; dest=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -R) shift 2 ;;
+        -n) name="$2"; shift 2 ;;
+        -D) dest="$2"; shift 2 ;;
+        *) echo "fake gh: unsupported flag $1" >&2; exit 64 ;;
+      esac
+    done
+    [ -d "$dir/download/$name" ] || { echo "no valid artifacts found to download" >&2; exit 1; }
+    mkdir -p "$dest"
+    cp -R "$dir/download/$name/." "$dest/"
+    ;;
+  *) echo "fake gh: unsupported command '${1:-}'" >&2; exit 64 ;;
+esac

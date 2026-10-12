@@ -1,0 +1,17 @@
+{
+  "total_count": 1,
+  "artifacts": [
+    {
+      "id": 90020,
+      "name": "openapi-spec-c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+      "expired": false,
+      "workflow_run": {
+        "id": 9002,
+        "repository_id": 111,
+        "head_repository_id": 111,
+        "head_branch": "main",
+        "head_sha": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+      }
+    }
+  ]
+}

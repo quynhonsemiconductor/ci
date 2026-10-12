@@ -40,6 +40,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 |---|---|
 | [`publish-openapi-spec`](actions/publish-openapi-spec/action.yml) | Upload generated spec as artifact + optionally to S3 for cross-repo codegen |
 | [`validate-openapi-contract`](actions/validate-openapi-contract/action.yml) | oasdiff breaking-change detection between two OpenAPI specs |
+| [`fetch-openapi-base-spec`](actions/fetch-openapi-base-spec/action.yml) | Download the OpenAPI spec of a pull request's base commit (or its nearest ancestor), failing rather than skipping when it is missing |
 
 ### Security / Quality
 | Action | Description |
@@ -617,6 +618,57 @@ to both of its runs, and **fails** while such a file exists in the working direc
 either spec, so a silenced gate is visible instead of inert. Delete the file (or move the rule into the spec).
 
 Proven by `.github/workflows/validate-openapi-contract-test.yml` (fixtures in `.github/fixtures/validate-openapi-contract`).
+
+---
+
+### `fetch-openapi-base-spec`
+Gives `validate-openapi-contract` its baseline: the spec that the base branch's own push run uploaded
+(`publish-openapi-spec` with `artifact-name: openapi-spec-<sha>`) for the pull request's base commit.
+
+```yaml
+- name: Fetch the base spec
+  if: github.event_name == 'pull_request'
+  id: base
+  uses: quynhonsemiconductor/ci/actions/fetch-openapi-base-spec@v1
+  with:
+    workflow: backend-ci.yml           # the workflow that uploads the specs
+- name: Breaking change check
+  if: github.event_name == 'pull_request'
+  uses: quynhonsemiconductor/ci/actions/validate-openapi-contract@v1
+  with:
+    current-spec-path: openapi.json
+    base-spec-path: base-spec/openapi.json
+```
+
+| Input | Default | Description |
+|---|---|---|
+| `workflow` | **required** | File name of the workflow that uploads the specs. A name that does not exist is an **error** (404), not "no baseline" |
+| `artifact-prefix` | `openapi-spec-` | The artifact is `<prefix><commit sha>` |
+| `path` | `base-spec` | Directory to download into (relative to the workspace) |
+| `max-ancestors` | `30` | Commits to try, counting the base commit (1 to 100) |
+| `base-ref`, `base-sha` | the PR's | Override for tests or non-`pull_request` events |
+| `repository`, `token` | this repo, `github.token` | Where the runs and artifacts live |
+
+| Output | Description |
+|---|---|
+| `found` | `true` a spec was downloaded; `false` the base branch has no baseline (skip); **empty** the action failed |
+| `commit`, `distance` | The commit whose spec was used, and how many commits before the base commit it is (0 = the base commit) |
+| `run-id`, `path`, `message` | The run that uploaded it, the directory, and one line saying what happened |
+
+**Decisions.** (1) The base branch has no successful *push* run of the workflow (a stacked PR aimed at another PR's branch, a new
+repository): no baseline, `found=false`, the contract check skips with a warning. (2) Otherwise a baseline is **required**: the
+base commit's spec, else the nearest ancestor within `max-ancestors` with a warning naming it, else the action **fails**. The
+fallback exists because a workflow that cancels in-progress runs per ref leaves some commits without a spec, and a PR opened while
+the merge's own push run is still going has a base commit whose spec is not uploaded yet. (3) Only an artifact uploaded by a run
+**on the base branch, in this repository, whose head commit is the commit it is named after** counts, so a pull request cannot plant
+a spec under a commit's name.
+
+Replaces a `dawidd6/action-download-artifact` step with `continue-on-error`, which skipped the check silently in two ways (a wrong
+workflow name was a swallowed 404; and it took the latest *successful* run, which is the previous commit while the merge's own run
+is still going). The base branch's history is read through the commits API, so the caller needs no `fetch-depth: 0`; for a
+squash-merge history this is the same list as `git rev-list --first-parent`.
+
+Proven by `.github/workflows/fetch-openapi-base-spec-test.yml`.
 
 ---
 
