@@ -1,0 +1,287 @@
+name: Fetch OpenAPI base spec
+description: >
+  Download the OpenAPI spec of a pull request's BASE commit, as uploaded by the base branch's own push
+  run (`publish-openapi-spec` with `artifact-name: openapi-spec-<sha>`), so that `validate-openapi-contract`
+  has something to compare with.
+
+  What it decides, in order:
+    1. The base branch has no successful PUSH run of the workflow: there is no baseline (a stacked PR aimed
+       at another PR's branch, a brand-new repository). It says so and succeeds with `found=false`; the
+       contract check then skips, loudly.
+    2. Otherwise a baseline is REQUIRED. It walks the base branch's FIRST-PARENT chain from the base commit,
+       at most `max-ancestors` commits (the base commit included), and takes the first commit that has a
+       spec, saying which one and how many first-parent steps back. None found is a FAILURE, never a skip.
+    3. A commit has a spec only if ALL of these hold: a run of THIS workflow file
+       (`.github/workflows/<workflow>`) triggered by a push to the base branch, in this repository (not a
+       fork's run), built exactly that commit and concluded `success`; and that run uploaded an artifact
+       named `<artifact-prefix><sha>` that has not expired. A pull request cannot plant a spec under a
+       commit's name: it would have to be a successful push run of this workflow on the base branch.
+       Only commits on the first-parent chain are ever looked up, so a commit that was merged in from a side
+       branch (even one a tag named like the base branch points at) is never a candidate.
+    4. The download goes into a directory that is absent or empty (a checkout of the pull request cannot have
+       planted one), and the expected file must be there afterwards.
+
+  Why the ancestor fallback: a workflow that cancels in-progress runs per ref leaves some commits without a
+  spec (a quick second merge cancels the first commit's run), and a pull request opened while the merge's
+  own push run is still going has a base commit whose run has not succeeded yet. Without the fallback each
+  of those is either a skip (the gate silently off) or a failure that has nothing to do with the pull request.
+
+  A push `paths:` filter on the uploading workflow has the same effect for every commit it skips. If more than
+  `max-ancestors` commits in a row (at most 100) are skipped, every pull request fails here: raise
+  `max-ancestors`, or drop the filter, or have the workflow upload a spec on every push.
+
+  This replaced a `dawidd6/action-download-artifact` step whose failure was ignored. That action takes the
+  latest SUCCESSFUL run on the branch, which is the PREVIOUS commit in the second case above, so the artifact
+  name never matched and the failure was swallowed (opshub runs 37887725836 and 37887654403); with a wrong
+  workflow name it was a swallowed 404 and the gate never ran at all (rova run 38143249232).
+
+  Needs `actions: read` only if the repository is private; the default token of a public repository can read
+  its own runs and artifacts, as the callers' jobs already do.
+
+inputs:
+  workflow:
+    description: >
+      File name of the workflow that uploads the specs, for example `backend-ci.yml`. A name that does not
+      exist is an ERROR (the API answers 404), not "no baseline".
+    required: true
+  artifact-prefix:
+    description: The artifact is named `<artifact-prefix><commit sha>`.
+    required: false
+    default: openapi-spec-
+  file:
+    description: The file the artifact must contain, which is also what `spec-path` points at.
+    required: false
+    default: openapi.json
+  path:
+    description: >
+      Directory to download into, relative to the workspace. It must be absent or an empty directory (not a
+      symbolic link), and must resolve inside the workspace.
+    required: false
+    default: base-spec
+  max-ancestors:
+    description: How many commits to try along the first-parent chain, the base commit included (1 to 100).
+    required: false
+    default: '30'
+  base-ref:
+    description: The base branch. Defaults to the pull request's.
+    required: false
+    default: ${{ github.base_ref }}
+  base-sha:
+    description: The base commit (40 hex characters). Defaults to the pull request's.
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  repository:
+    description: Repository that holds the runs and artifacts, as `owner/name`.
+    required: false
+    default: ${{ github.repository }}
+  token:
+    description: Token used to read runs and artifacts. The default is the job's `GITHUB_TOKEN`.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  found:
+    description: >
+      "true" if a spec was downloaded; "false" if the base branch has no baseline (skip); EMPTY if the
+      action failed.
+    value: ${{ steps.fetch.outputs.found }}
+  commit:
+    description: The commit whose spec was downloaded (the base commit, or a first-parent ancestor).
+    value: ${{ steps.fetch.outputs.commit }}
+  distance:
+    description: How many first-parent steps before the base commit that is (0 = the base commit itself).
+    value: ${{ steps.fetch.outputs.distance }}
+  run-id:
+    description: Id of the run that uploaded the artifact.
+    value: ${{ steps.fetch.outputs.run-id }}
+  path:
+    description: Directory the spec was downloaded into (empty when found is not "true").
+    value: ${{ steps.fetch.outputs.path }}
+  spec-path:
+    description: Path of the downloaded spec file, `<path>/<file>` (empty when found is not "true").
+    value: ${{ steps.fetch.outputs.spec-path }}
+  message:
+    description: One line saying what happened, or why it failed.
+    value: ${{ steps.fetch.outputs.message }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch the base spec
+      id: fetch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ inputs.repository }}
+        WORKFLOW: ${{ inputs.workflow }}
+        PREFIX: ${{ inputs.artifact-prefix }}
+        FILE: ${{ inputs.file }}
+        DEST: ${{ inputs.path }}
+        MAX: ${{ inputs.max-ancestors }}
+        BASE_REF: ${{ inputs.base-ref }}
+        BASE_SHA: ${{ inputs.base-sha }}
+      run: |
+        set -euo pipefail
+
+        set_out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+        summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat >> "$GITHUB_STEP_SUMMARY"; else cat > /dev/null; fi; }
+        # One line, so that a value that came from an input cannot start a workflow command of its own.
+        oneline() { printf '%s' "$1" | tr -d '\r\n' | cut -c1-400; }
+
+        die() { # message
+          local m
+          m="$(oneline "$1")"
+          # stderr: `die` also runs inside command substitutions, where stdout would be captured and the
+          # message lost (a bad input once failed with only "exit code 1").
+          echo "::error title=Base spec::$m" >&2
+          set_out message "$m"
+          printf '### OpenAPI base spec: FAILED\n\n%s\n' "$m" | summary
+          exit 1
+        }
+
+        realpath_of() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+
+        # Inputs are data, never code: they reach the shell only through the environment, are checked here,
+        # and reach jq only as --arg.
+        nl=$'\n'
+        [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "repository must be owner/name, got '$REPO'"
+        [[ "$WORKFLOW" =~ ^[A-Za-z0-9_.-]+$ ]] || die "workflow must be a workflow file name such as backend-ci.yml, got '$WORKFLOW'"
+        [[ "$PREFIX" =~ ^[A-Za-z0-9_.-]*$ ]] || die "artifact-prefix has characters that an artifact name cannot have: '$PREFIX'"
+        [[ "$FILE" =~ ^[A-Za-z0-9_.-]+$ ]] && [ "$FILE" != . ] && [ "$FILE" != .. ] || die "file must be a plain file name, got '$FILE'"
+        [[ "$MAX" =~ ^[0-9]+$ ]] && [ "$MAX" -ge 1 ] && [ "$MAX" -le 100 ] || die "max-ancestors must be 1 to 100, got '$MAX'"
+        [ -n "$BASE_REF" ] || die "base-ref is empty: this is not a pull_request run, pass base-ref and base-sha"
+        [[ "$BASE_REF" != *"$nl"* ]] || die "base-ref must not contain a line break"
+        [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || die "base-sha must be 40 hex characters, got '$BASE_SHA' (not a pull_request run? pass base-ref and base-sha)"
+        [[ "$DEST" != *"$nl"* ]] || die "path must not contain a line break"
+        case "$DEST" in
+          '' | /* | .. | ../* | */.. | */../*) die "path must be a relative directory inside the workspace, got '$DEST'" ;;
+        esac
+        command -v jq > /dev/null 2>&1 || die "jq is required (it is on GitHub-hosted ubuntu runners)"
+        command -v gh > /dev/null 2>&1 || die "gh is required (it is on GitHub-hosted ubuntu runners)"
+        command -v python3 > /dev/null 2>&1 || die "python3 is required (it is on GitHub-hosted ubuntu runners)"
+
+        # The destination: inside the workspace after resolving links, and absent or an EMPTY directory. A
+        # checkout of the pull request can contain `base-spec/openapi.json` (or a link named base-spec); a
+        # spec that was already there must never be mistaken for the one this action downloads.
+        workspace="$(realpath_of "${GITHUB_WORKSPACE:-$PWD}")"
+        dest_real="$(realpath_of "$DEST")"
+        [ "$dest_real" != "$workspace" ] || die "path '$DEST' is the workspace itself: use a sub-directory"
+        case "$dest_real" in
+          "$workspace"/*) ;;
+          *) die "path '$DEST' resolves to '$dest_real', outside the workspace '$workspace'" ;;
+        esac
+        [ ! -L "$DEST" ] || die "path '$DEST' is a symbolic link"
+        if [ -e "$DEST" ]; then
+          [ -d "$DEST" ] || die "path '$DEST' exists and is not a directory"
+          [ -z "$(find "$DEST" -mindepth 1 -print -quit)" ] || die "path '$DEST' already has content (a pull request's checkout can plant a spec there); it must be absent or empty"
+        fi
+
+        errf="$(mktemp)"
+        trap 'rm -f "$errf"' EXIT
+
+        # `gh`, retried on a server error, a network failure or a rate limit only. Any other error (a 404 for a
+        # workflow that does not exist, a 403 for a token without access) is final, and it is an error, not
+        # "nothing found". A rate limit waits longer: the secondary limit answers 403/429 and asks for a pause.
+        retryable() { grep -qiE 'HTTP 5[0-9][0-9]|timeout|timed out|connection|EOF|reset by peer|rate limit|HTTP 429|retry-after|abuse' "$errf"; }
+        pause() { # attempt
+          if grep -qiE 'rate limit|HTTP 429|retry-after|abuse' "$errf"; then sleep $(($1 * 15)); else sleep $(($1 * 3)); fi
+        }
+        ghapi() {
+          local n=0 out
+          until out="$(gh api "$@" 2> "$errf")"; do
+            n=$((n + 1))
+            if [ "$n" -ge 4 ] || ! retryable; then die "GitHub API call failed: $(tr '\n' ' ' < "$errf")"; fi
+            pause "$n"
+          done
+          printf '%s' "$out"
+        }
+
+        # 1. Is there a baseline at all?
+        successes="$(ghapi -X GET "repos/$REPO/actions/workflows/$WORKFLOW/runs" \
+          -f branch="$BASE_REF" -f event=push -f status=success -F per_page=1 | jq -r '.total_count')"
+        [[ "$successes" =~ ^[0-9]+$ ]] || die "unexpected answer from the workflow runs API: '$successes'"
+        if [ "$successes" -eq 0 ]; then
+          m="no baseline: '$(oneline "$BASE_REF")' has no successful push run of $WORKFLOW, so there is no base spec to compare with"
+          echo "::warning title=No baseline::$m. The contract check will be skipped."
+          printf '### OpenAPI base spec: no baseline\n\n%s.\n' "$m" | summary
+          set_out found false
+          set_out message "$m"
+          exit 0
+        fi
+
+        # 2. Walk the first-parent chain from the base commit. The parent of each commit comes from
+        # `GET commits/<sha>` (`.parents[0]`), one call per step, so a merge-heavy history cannot push the chain
+        # out of a page; a commit merged in from a side branch is never visited.
+        wf_path=".github/workflows/$WORKFLOW"
+        found=""
+        run_id=""
+        distance=0
+        sha="$BASE_SHA"
+        while :; do
+          # The run: this workflow file, a push to the base branch, in this repository, for exactly this
+          # commit, concluded success. Asking by commit keeps unrelated runs (forks' pull requests included)
+          # from crowding the answer out; if it is still more than one page, say so instead of guessing.
+          runs="$(ghapi -X GET "repos/$REPO/actions/workflows/$WORKFLOW/runs" \
+            -f branch="$BASE_REF" -f event=push -f head_sha="$sha" -f status=success -F per_page=10)"
+          total="$(jq -r '.total_count' <<< "$runs")"
+          read_n="$(jq -r '.workflow_runs | length' <<< "$runs")"
+          { [[ "$total" =~ ^[0-9]+$ ]] && [[ "$read_n" =~ ^[0-9]+$ ]]; } || die "unexpected answer from the workflow runs API for ${sha:0:7}"
+          [ "$total" -le "$read_n" ] || die "$total successful push runs of $WORKFLOW for ${sha:0:7}, only $read_n were read: refusing to guess which one is the real one"
+          run_ids="$(jq -r --arg ref "$BASE_REF" --arg sha "$sha" --arg path "$wf_path" '
+            .workflow_runs[]
+            | select(.event == "push"
+                     and .conclusion == "success"
+                     and .head_branch == $ref
+                     and .head_sha == $sha
+                     and .path == $path
+                     and .head_repository.id == .repository.id)
+            | .id' <<< "$runs")"
+          for rid in $run_ids; do
+            arts="$(ghapi -X GET "repos/$REPO/actions/runs/$rid/artifacts" -f name="$PREFIX$sha" -F per_page=10)"
+            atotal="$(jq -r '.total_count' <<< "$arts")"
+            aread="$(jq -r '.artifacts | length' <<< "$arts")"
+            { [[ "$atotal" =~ ^[0-9]+$ ]] && [[ "$aread" =~ ^[0-9]+$ ]]; } || die "unexpected answer from the artifacts API for run $rid"
+            [ "$atotal" -le "$aread" ] || die "$atotal artifacts named $PREFIX${sha:0:7} in run $rid, only $aread were read"
+            hit="$(jq -r --arg name "$PREFIX$sha" '[.artifacts[] | select(.name == $name and .expired == false)][0] | .id // empty' <<< "$arts")"
+            if [ -n "$hit" ]; then found="$sha"; run_id="$rid"; break 2; fi
+          done
+          [ "$distance" -lt $((MAX - 1)) ] || break
+          parent="$(ghapi -X GET "repos/$REPO/commits/$sha" | jq -r '.parents[0].sha // empty')"
+          [ -n "$parent" ] || break # the root commit: nothing before it
+          [[ "$parent" =~ ^[0-9a-f]{40}$ ]] || die "unexpected parent of ${sha:0:7}: '$parent'"
+          sha="$parent"
+          distance=$((distance + 1))
+        done
+
+        if [ -z "$found" ]; then
+          die "'$(oneline "$BASE_REF")' has successful runs of $WORKFLOW, yet none of the (at most) $MAX commits along its first-parent chain from ${BASE_SHA:0:7} has a successful push run with a live $PREFIX<sha> artifact (artifacts expire; a run may have been cancelled; a push 'paths:' filter on $WORKFLOW leaves commits without a run). Not skipping: that would turn the contract check off silently. Re-run $WORKFLOW on '$(oneline "$BASE_REF")', rebase, or raise max-ancestors."
+        fi
+
+        # 3. Download it, into the (empty or absent) destination, and insist on the expected file.
+        mkdir -p "$DEST"
+        n=0
+        until gh run download "$run_id" -R "$REPO" -n "$PREFIX$found" -D "$DEST" 2> "$errf"; do
+          n=$((n + 1))
+          if [ "$n" -ge 4 ] || ! retryable; then
+            die "could not download artifact $PREFIX${found:0:7} of run $run_id: $(tr '\n' ' ' < "$errf")"
+          fi
+          pause "$n"
+        done
+        spec="$DEST/$FILE"
+        { [ -f "$spec" ] && [ ! -L "$spec" ] && [ -s "$spec" ]; } || die "artifact $PREFIX${found:0:7} of run $run_id has no usable $FILE (found: $(find "$DEST" -type f | head -5 | tr '\n' ' '))"
+
+        set_out found true
+        set_out commit "$found"
+        set_out distance "$distance"
+        set_out run-id "$run_id"
+        set_out path "$DEST"
+        set_out spec-path "$spec"
+        if [ "$distance" -eq 0 ]; then
+          m="spec of the base commit ${found:0:7} (run $run_id)"
+          echo "Base spec: $m"
+        else
+          m="no spec for the base commit ${BASE_SHA:0:7} (its run was cancelled, is still going, or was skipped); using ${found:0:7}, $distance first-parent commit(s) earlier (run $run_id)"
+          echo "::warning title=Base spec is from an older commit::$m"
+          printf '### OpenAPI base spec: from %s commit(s) earlier\n\n%s.\n' "$distance" "$m" | summary
+        fi
+        set_out message "$m"

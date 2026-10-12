@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# A stand-in for `gh` in the tests of actions/fetch-openapi-base-spec. It answers the calls the action makes
+# from canned files in $FAKE_GH_DIR, in the shape the real API uses (checked against the live API), and
+# refuses anything else, so a change in the action's calls fails the tests instead of being answered by
+# accident. See README.md next to this directory's fixtures.
+#
+#   FAKE_GH_DIR       a fixture directory (see the README)
+#   FAKE_GH_WORKFLOW  the only workflow file name that "exists"; any other is a 404, like the real API
+#   FAKE_GH_FLAKY=1   every distinct call fails once with "HTTP 502" before it succeeds
+#   FAKE_GH_FLAKY=rate-once   the very first call fails once with a secondary rate limit (403)
+#   FAKE_GH_LOG       file that receives one line per call
+set -euo pipefail
+
+dir="${FAKE_GH_DIR:?FAKE_GH_DIR is not set}"
+echo "gh $*" >> "${FAKE_GH_LOG:-/dev/null}"
+
+case "${FAKE_GH_FLAKY:-}" in
+  1)
+    marker="$dir/.flaky-$(printf '%s' "$*" | cksum | cut -d' ' -f1)"
+    if [ ! -e "$marker" ]; then
+      : > "$marker"
+      echo "gh: HTTP 502: Bad Gateway" >&2
+      exit 1
+    fi
+    ;;
+  rate-once)
+    marker="$dir/.rate-once"
+    if [ ! -e "$marker" ]; then
+      : > "$marker"
+      echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+notfound() { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+
+case "${1:-}" in
+  api)
+    shift
+    endpoint=""
+    method=""
+    q_branch=""; q_event=""; q_status=""; q_head_sha=""; q_name=""; q_per_page=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -X) method="$2"; shift 2 ;;
+        -f | -F)
+          case "${2%%=*}" in
+            branch) q_branch="${2#*=}" ;;
+            event) q_event="${2#*=}" ;;
+            status) q_status="${2#*=}" ;;
+            head_sha) q_head_sha="${2#*=}" ;;
+            name) q_name="${2#*=}" ;;
+            per_page) q_per_page="${2#*=}" ;;
+            *) echo "fake gh: unexpected field ${2%%=*}" >&2; exit 64 ;;
+          esac
+          shift 2
+          ;;
+        -*) echo "fake gh: unsupported flag $1" >&2; exit 64 ;;
+        *) endpoint="$1"; shift ;;
+      esac
+    done
+    [ "$method" = GET ] || { echo "fake gh: the action must pass -X GET with its -f/-F fields (got '$method')" >&2; exit 64; }
+    [ -n "$q_per_page" ] || [ "$endpoint" != "${endpoint#repos/*/commits/}" ] || { echo "fake gh: every list call must set per_page" >&2; exit 64; }
+    out=""
+    case "$endpoint" in
+      repos/*/actions/workflows/*/runs)
+        wf="${endpoint#repos/*/actions/workflows/}"; wf="${wf%/runs}"
+        [ "$wf" = "${FAKE_GH_WORKFLOW:?}" ] || notfound
+        [ "$q_event" = push ] && [ "$q_status" = success ] && [ -n "$q_branch" ] || { echo "fake gh: the runs query must ask for a branch, event=push and status=success" >&2; exit 64; }
+        if [ -n "$q_head_sha" ]; then f="$dir/runs/$q_head_sha.json"; else f="$dir/runs.$(slug "$q_branch").json"; fi
+        if [ -f "$f" ]; then out="$(cat "$f")"; else out='{"total_count":0,"workflow_runs":[]}'; fi
+        ;;
+      repos/*/actions/runs/*/artifacts)
+        rid="${endpoint#repos/*/actions/runs/}"; rid="${rid%/artifacts}"
+        [ -n "$q_name" ] || { echo "fake gh: the artifacts query needs a name" >&2; exit 64; }
+        f="$dir/run-artifacts/$rid.json"
+        if [ -f "$f" ]; then out="$(cat "$f")"; else out='{"total_count":0,"artifacts":[]}'; fi
+        ;;
+      repos/*/commits/*)
+        sha="${endpoint#repos/*/commits/}"
+        out="$(jq -c --arg sha "$sha" '[.[] | select(.sha == $sha)][0] // empty' "$dir/commits.json")"
+        [ -n "$out" ] || { echo "gh: No commit found for SHA: $sha (HTTP 422)" >&2; exit 1; }
+        ;;
+      *) echo "fake gh: unexpected endpoint '$endpoint'" >&2; exit 64 ;;
+    esac
+    printf '%s' "$out"
+    ;;
+  run)
+    shift
+    [ "${1:-}" = download ] || { echo "fake gh: only 'run download' is supported" >&2; exit 64; }
+    shift
+    shift # the run id: the fixtures are keyed by artifact name
+    name=""; dest=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -R) shift 2 ;;
+        -n) name="$2"; shift 2 ;;
+        -D) dest="$2"; shift 2 ;;
+        *) echo "fake gh: unsupported flag $1" >&2; exit 64 ;;
+      esac
+    done
+    [ -d "$dir/download/$name" ] || { echo "no valid artifacts found to download" >&2; exit 1; }
+    mkdir -p "$dest"
+    cp -R "$dir/download/$name/." "$dest/"
+    ;;
+  *) echo "fake gh: unsupported command '${1:-}'" >&2; exit 64 ;;
+esac

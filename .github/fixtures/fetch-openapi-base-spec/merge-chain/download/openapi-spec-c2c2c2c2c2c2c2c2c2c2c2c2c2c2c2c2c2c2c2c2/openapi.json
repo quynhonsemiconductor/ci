@@ -1,0 +1,9 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "fixture",
+    "version": "1"
+  },
+  "paths": {},
+  "x-commit": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"
+}

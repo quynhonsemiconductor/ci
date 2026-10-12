@@ -40,6 +40,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 |---|---|
 | [`publish-openapi-spec`](actions/publish-openapi-spec/action.yml) | Upload generated spec as artifact + optionally to S3 for cross-repo codegen |
 | [`validate-openapi-contract`](actions/validate-openapi-contract/action.yml) | oasdiff breaking-change detection between two OpenAPI specs |
+| [`fetch-openapi-base-spec`](actions/fetch-openapi-base-spec/action.yml) | Download the OpenAPI spec of a pull request's base commit (or its nearest ancestor), failing rather than skipping when it is missing |
 
 ### Security / Quality
 | Action | Description |
@@ -617,6 +618,69 @@ to both of its runs, and **fails** while such a file exists in the working direc
 either spec, so a silenced gate is visible instead of inert. Delete the file (or move the rule into the spec).
 
 Proven by `.github/workflows/validate-openapi-contract-test.yml` (fixtures in `.github/fixtures/validate-openapi-contract`).
+
+---
+
+### `fetch-openapi-base-spec`
+Gives `validate-openapi-contract` its baseline: the spec that the base branch's own push run uploaded
+(`publish-openapi-spec` with `artifact-name: openapi-spec-<sha>`) for the pull request's base commit.
+
+```yaml
+- name: Fetch the base spec
+  if: github.event_name == 'pull_request'
+  uses: quynhonsemiconductor/ci/actions/fetch-openapi-base-spec@v1
+  with:
+    workflow: backend-ci.yml           # the workflow that uploads the specs
+- name: Breaking change check
+  if: github.event_name == 'pull_request'
+  uses: quynhonsemiconductor/ci/actions/validate-openapi-contract@v1
+  with:
+    current-spec-path: openapi.json
+    base-spec-path: base-spec/openapi.json
+```
+
+| Input | Default | Description |
+|---|---|---|
+| `workflow` | **required** | File name of the workflow that uploads the specs. A name that does not exist is an **error** (404), not "no baseline" |
+| `artifact-prefix` | `openapi-spec-` | The artifact is `<prefix><commit sha>` |
+| `file` | `openapi.json` | The file the artifact must contain; also what `spec-path` points at |
+| `path` | `base-spec` | Directory to download into. Must be absent or an **empty** directory, not a symbolic link, resolving inside the workspace |
+| `max-ancestors` | `30` | Commits to try along the **first-parent** chain, the base commit included (1 to 100) |
+| `base-ref`, `base-sha` | the PR's | Override for tests or non-`pull_request` events |
+| `repository`, `token` | this repo, `github.token` | Where the runs and artifacts live |
+
+| Output | Description |
+|---|---|
+| `found` | `true` a spec was downloaded; `false` the base branch has no baseline (skip); **empty** the action failed |
+| `commit`, `distance` | The commit whose spec was used, and how many **first-parent** steps before the base commit it is (0 = the base commit) |
+| `run-id`, `path`, `spec-path`, `message` | The run that uploaded it, the directory, the spec file, and one line saying what happened |
+
+**Decisions.** (1) The base branch has no successful *push* run of the workflow (a stacked PR aimed at another PR's branch, a new
+repository): no baseline, `found=false`, the contract check skips with a warning. (2) Otherwise a baseline is **required**: the walk
+goes from the base commit along the base branch's first parents, and the first commit that has a spec wins, with a warning naming it
+when it is not the base commit itself; none within `max-ancestors` **fails**. (3) A commit has a spec only if a run of *this workflow
+file* (`.github/workflows/<workflow>`), triggered by a **push** to the base branch, in this repository (not a fork's run), built
+exactly that commit and **succeeded**, and that run uploaded an unexpired artifact named `<prefix><sha>`. Only first-parent commits
+are ever looked up, so a commit merged in from a side branch is never a candidate (and does not count toward `distance`). (4) The
+download goes into an empty destination and the expected file must be there afterwards, so a spec that a checkout of the pull request
+planted at `base-spec/` is never mistaken for the downloaded one.
+
+**Why a fallback at all.** A workflow that cancels in-progress runs per ref leaves some commits without a spec, and a pull request
+opened while the merge's own push run is still going has a base commit whose run has not succeeded yet. Without the fallback each is
+either a silent skip or a failure that is none of the pull request's doing.
+
+**Limits.** A push `paths:` filter on the uploading workflow leaves every commit it skips without a run, so *more than
+`max-ancestors` such commits in a row make every pull request fail here*: raise `max-ancestors` (up to 100), drop the filter, or
+upload a spec on every push. Artifacts expire (30 days in the callers), so a long-idle base branch fails the same way, by design.
+When the base commit's own run is still going, the comparison is against an earlier commit, so that commit's own API changes appear as
+the pull request's; the warning says so. A tag named like the base branch cannot plant a spec: a run counts only for a commit on the
+first-parent chain, and a tag push at such a commit built that same commit.
+
+Replaces a `dawidd6/action-download-artifact` step with `continue-on-error`, which skipped the check silently in two ways (a wrong
+workflow name was a swallowed 404; and it took the latest *successful* run, which is the previous commit while the merge's own run
+is still going). No `fetch-depth: 0` is needed: history is read one commit at a time through the API (`commits/<sha>`, `.parents[0]`).
+
+Proven by `.github/workflows/fetch-openapi-base-spec-test.yml`.
 
 ---
 
