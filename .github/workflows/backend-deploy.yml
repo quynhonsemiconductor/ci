@@ -29,6 +29,13 @@ on:
       # Manifest does not contain descriptor matching platform".
       build_runner:    { type: string, default: "ubuntu-latest" }
       image_platforms: { type: string, default: "" }
+      # MULTI-ARCH. When true, the image is built NATIVELY for linux/amd64 (on ubuntu-24.04) and linux/arm64 (on ubuntu-24.04-arm), each leg
+      # pushing by digest, and a `merge` job creates ONE tag over both. `build_runner` and `image_platforms` are then ignored.
+      #
+      # Why: ECS still runs on Graviton (cpu_architecture = ARM64) while the on-prem k3s host is amd64, and a single-arch image fails on
+      # the other with "image Manifest does not contain descriptor matching platform". The tag must be created once, by the merge,
+      # because the repositories are IMMUTABLE (task 0.8). Default false: every existing caller is unchanged.
+      multi_arch: { type: boolean, default: false }
       # Path of the READINESS probe, appended to the environment's APP_URL for the
       # post-deploy gate below. Defaults to rally's/opshub's `/v1/readyz`, so a caller
       # that passes nothing keeps today's behaviour byte for byte.
@@ -190,15 +197,18 @@ jobs:
   # `fail-fast: false` because a CRITICAL CVE in the worker should not cancel the api
   # build and leave you unable to tell whether the api was fine.
   build:
-    name: Build ${{ matrix.service }}
+    name: Build ${{ matrix.service }}${{ matrix.arch != 'single' && format(' ({0})', matrix.arch) || '' }}
     if: github.ref_type != 'tag'
-    runs-on: ${{ inputs.build_runner }}
+    runs-on: ${{ matrix.arch == 'amd64' && 'ubuntu-24.04' || matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || inputs.build_runner }}
     needs: context
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         service: ${{ fromJSON(needs.context.outputs.services) }}
+        # One leg per architecture in multi-arch mode; exactly one (`single`: the historical build_runner / image_platforms) otherwise.
+        # A real matrix DIMENSION, not `include`: an include list would be merged into every combination and keep only its last entry.
+        arch: ${{ fromJSON(inputs.multi_arch && '["amd64","arm64"]' || '["single"]') }}
     permissions:
       id-token: write
       contents: read
@@ -238,11 +248,14 @@ jobs:
           # push of an existing tag, so a pipeline still publishing `:latest` fails on its
           # next run. `sha-` and `v` tags are never republished, so they are unaffected.
           build-target: ${{ matrix.service }}
-          cache-scope: ${{ matrix.service }}
+          cache-scope: ${{ matrix.service }}-${{ matrix.arch }}
           cache-backend: ${{ inputs.cache_backend }}
-          platforms: ${{ inputs.image_platforms }}
+          platforms: ${{ matrix.arch == 'amd64' && 'linux/amd64' || matrix.arch == 'arm64' && 'linux/arm64' || inputs.image_platforms }}
+          # Multi-arch: each leg pushes an UNTAGGED image by digest; the `merge` job tags once (IMMUTABLE repositories).
+          push-by-digest: ${{ inputs.multi_arch && 'true' || 'false' }}
 
       - name: Scan ${{ matrix.service }} image
+        if: ${{ !inputs.multi_arch }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: '${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}:${{ env.IMAGE_TAG }}'
@@ -258,6 +271,7 @@ jobs:
           TRIVY_PLATFORM: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
 
       - name: Attest ${{ matrix.service }} image
+        if: ${{ !inputs.multi_arch }}
         uses: quynhonsemiconductor/ci/actions/attest-image@v1
         with:
           image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.build.outputs.image-digest }}
@@ -267,7 +281,7 @@ jobs:
       # last leg to finish overwrites whatever the others wrote — the api digest would
       # be whichever image happened to build last, or empty. Only the api leg writes.
       - name: Publish API digest for the deploy job
-        if: matrix.service == 'api'
+        if: matrix.service == 'api' && !inputs.multi_arch
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.image-digest }}
         run: echo "$IMAGE_DIGEST" > api-digest.txt
@@ -277,6 +291,133 @@ jobs:
       # versa. This repo pins upload-artifact v7 elsewhere (web-deploy, rally CI) with no
       # matching download — bumping only one side here breaks the deploy at the download
       # step, after the images are already built and pushed.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: matrix.service == 'api' && !inputs.multi_arch
+        with:
+          name: api-digest
+          path: api-digest.txt
+          retention-days: 1
+
+      # Multi-arch only: this leg's untagged image digest, for the merge job. An artifact, as above (matrix legs cannot share a job output).
+      - name: Record this leg's digest
+        if: inputs.multi_arch
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.image-digest }}
+          SERVICE: ${{ matrix.service }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest from the $SERVICE/$ARCH build"; exit 1; }
+          mkdir -p digests && echo "$IMAGE_DIGEST" > "digests/$SERVICE-$ARCH.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: inputs.multi_arch
+        with:
+          name: digest-${{ matrix.service }}-${{ matrix.arch }}
+          path: digests/${{ matrix.service }}-${{ matrix.arch }}.txt
+          retention-days: 1
+
+  # ── MERGE (multi-arch only) — one tag over every architecture ──────────────
+  # The tag is created HERE, once, because the image repositories are IMMUTABLE (task 0.8): the per-arch legs pushed untagged images, and
+  # a tag cannot be written twice. `docker buildx imagetools create` builds the index from the leg digests without pulling any layer.
+  # Scan and attestation belong to the INDEX (the deploy job verifies the API attestation against this digest), so they run here.
+  merge:
+    name: Merge ${{ matrix.service }} manifest
+    if: github.ref_type != 'tag' && inputs.multi_arch
+    runs-on: ubuntu-latest
+    needs: [context, build]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.context.outputs.services) }}
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+      packages: read
+    env:
+      IMAGE_TAG: ${{ needs.context.outputs.image_tag }}
+      PRODUCT:   ${{ inputs.product }}
+      SERVICE:   ${{ matrix.service }}
+    steps:
+      - name: Setup AWS OIDC + ECR login
+        id: aws
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        with:
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
+          region: ${{ inputs.aws_region }}
+          ecr-login: 'true'
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: digest-${{ matrix.service }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: Create the manifest list and tag it
+        id: merge
+        env:
+          REGISTRY: ${{ steps.aws.outputs.ecr-registry }}
+        run: |
+          set -euo pipefail
+          repo="$REGISTRY/$PRODUCT-$SERVICE"
+          # BOTH architectures or nothing: a one-arch index would deploy "successfully" and fail at the other platform's first pull.
+          for a in amd64 arm64; do
+            [[ -s "digests/$SERVICE-$a.txt" ]] || { echo "::error::missing the $a digest for $SERVICE: refusing to tag a partial image"; exit 1; }
+          done
+          refs=()
+          for a in amd64 arm64; do
+            d="$(cat "digests/$SERVICE-$a.txt")"
+            [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $SERVICE/$a"; exit 1; }
+            refs+=("$repo@$d")
+          done
+          docker buildx imagetools create --tag "$repo:$IMAGE_TAG" "${refs[@]}"
+          digest="$(docker buildx imagetools inspect "$repo:$IMAGE_TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::could not read the merged digest"; exit 1; }
+          # the index must now list both platforms
+          for p in linux/amd64 linux/arm64; do
+            docker buildx imagetools inspect "$repo@$digest" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{"\n"}}{{end}}' | grep -qx "$p" \
+              || { echo "::error::merged image $digest has no $p manifest"; exit 1; }
+          done
+          echo "image-digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "$SERVICE $IMAGE_TAG -> $digest (amd64 + arm64)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Scan ${{ matrix.service }} image (amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL
+          ignore-unfixed: true
+        env:
+          TRIVY_PLATFORM: linux/amd64
+
+      - name: Scan ${{ matrix.service }} image (arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL
+          ignore-unfixed: true
+        env:
+          TRIVY_PLATFORM: linux/arm64
+
+      - name: Attest ${{ matrix.service }} image
+        uses: quynhonsemiconductor/ci/actions/attest-image@v1
+        with:
+          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
+
+      - name: Publish API digest for the deploy job
+        if: matrix.service == 'api'
+        env:
+          IMAGE_DIGEST: ${{ steps.merge.outputs.image-digest }}
+        run: echo "$IMAGE_DIGEST" > api-digest.txt
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: matrix.service == 'api'
         with:
@@ -334,10 +475,10 @@ jobs:
     runs-on: ubuntu-latest
     # `build` and `promote` are mutually exclusive — one is always skipped — so the
     # default "all needs succeeded" gate would never pass. Require the one that ran.
-    needs: [context, build, promote]
+    needs: [context, build, merge, promote]
     if: >-
       always() && !cancelled() &&
-      (needs.build.result == 'success' || needs.promote.result == 'success')
+      ((needs.build.result == 'success' && (!inputs.multi_arch || needs.merge.result == 'success')) || needs.promote.result == 'success')
     environment: ${{ needs.context.outputs.environment }}
     timeout-minutes: 30
     permissions:
