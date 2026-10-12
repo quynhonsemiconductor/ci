@@ -198,7 +198,7 @@ jobs:
             got="$(jq -r '."x-commit"' "$SPEC" 2> /dev/null || true)"
             [ "$got" = "$WANT_COMMIT" ] || { echo "::error::$SPEC is the spec of '$got', want $WANT_COMMIT"; bad=1; }
           else
-            [ -z "$DEST" ] && [ -z "$SPEC" ] || { echo "::error::path and spec-path should be empty when nothing was downloaded"; bad=1; }
+            if [ -n "$DEST" ] || [ -n "$SPEC" ]; then echo "::error::path and spec-path should be empty when nothing was downloaded"; bad=1; fi
           fi
           if [ "$PLANT" = file ]; then
             got="$(jq -r '."x-commit"' base-spec/openapi.json 2> /dev/null || true)"
