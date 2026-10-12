@@ -1,6 +1,6 @@
 # =============================================================================
-# Proof for actions/fetch-openapi-base-spec: the base spec is found when it exists, falls back to an
-# ancestor loudly, is skipped ONLY when there is no baseline, and is a FAILURE otherwise.
+# Proof for actions/fetch-openapi-base-spec: the base spec is found when it exists, falls back along the
+# FIRST-PARENT chain loudly, is skipped ONLY when there is no baseline, and is a FAILURE otherwise.
 #
 # WHY THIS EXISTS. Two callers each had a download step that skipped the OpenAPI contract check silently:
 # rova asked for a workflow (ci.yml) that does not exist, so every download was a swallowed 404 and the gate
@@ -10,13 +10,18 @@
 #
 # What it shows:
 #   * cases   a matrix against a stand-in for `gh` (.github/fixtures/fetch-openapi-base-spec/bin/gh) that
-#             serves canned answers in the real API's shape: the base commit's spec; an ancestor's, with the
-#             distance and a warning; an empty window (fail); no baseline (skip, found=false); a stacked
-#             branch (skip); an artifact from another branch, for another commit, from a fork, or expired
-#             (each ignored); a hostile branch name (still ignored); a workflow that does not exist (fail,
-#             the rova bug); invalid inputs (fail, with the reason); a flaky API (retried); an empty artifact.
+#             serves canned answers in the real API's shape. A spec is accepted only for a run of THIS
+#             workflow file, a push to the base branch, in this repository, that built exactly the commit and
+#             succeeded; a run that fails any one of those is ignored (each has a case). The walk follows
+#             first parents only: a commit merged in from a side branch is never a candidate and does not
+#             count toward the distance. Plus: no baseline and stacked branches (skip); an empty window, too
+#             many runs to read, a workflow that does not exist (404, the rova bug), an artifact without the
+#             expected file (fail); a destination that already has content, or is a link, or resolves outside
+#             the workspace (fail, and the planted file is untouched); invalid inputs; a flaky API and a
+#             secondary rate limit (retried).
 #   * live    the same action against the real API, on the public repository `quynhonsemiconductor/rova`
-#             (read-only), so that the stand-in cannot drift from what GitHub really answers.
+#             (read-only), so that the stand-in cannot drift from what GitHub really answers. Informational
+#             when rova has no live spec at all (its artifacts expire after 30 days).
 #
 # Invoked by local path, never @v1: this must exercise the code in the PR, not the code already released.
 # =============================================================================
@@ -40,10 +45,12 @@ permissions: {}
 
 env:
   FX: .github/fixtures/fetch-openapi-base-spec
-  # The base commit of every fixture: c0 repeated 20 times. Its ancestors are c1..c4 (newest first).
+  # The base commit of every fixture is c0 repeated 20 times; c1..c4 are its ancestors (see the fixtures'
+  # README for the graph, which is different in the merge cases).
   C0: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0
   C1: c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1
   C2: c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2
+  C4: c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4
 
 jobs:
   cases:
@@ -55,30 +62,54 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # fixture: directory under the fixtures. outcome: how the step must end. found / commit / distance:
-        # expected outputs (`-` = not checked, `<empty>` = must be empty). msg: a substring of the `message`
-        # output. Everything else overrides an input of the action; empty = the default.
+        # fixture: directory under the fixtures. outcome: how the step must end. found / commit / distance /
+        # path: expected outputs (`-` = not checked, `<empty>` = must be empty). msg: a substring of the
+        # `message` output. plant: what to put in the workspace first. Everything else overrides an input of
+        # the action; empty = the default.
         include:
-          - { name: 'the base commit has a spec',                       fixture: exact,          outcome: success, found: 'true',  commit: '$C0', distance: '0',   msg: 'spec of the base commit' }
-          - { name: 'the base commit has none: nearest ancestor, loudly', fixture: ancestor,       outcome: success, found: 'true',  commit: '$C2', distance: '2',   msg: '2 commit(s) earlier' }
-          - { name: 'an expired spec is ignored: next ancestor',        fixture: expired,        outcome: success, found: 'true',  commit: '$C1', distance: '1',   msg: '1 commit(s) earlier' }
-          - { name: 'the window is too small for the ancestor: FAILS',  fixture: ancestor,       outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'none of the 2 commits', max: '2' }
-          - { name: 'a big enough window finds it',                     fixture: ancestor,       outcome: success, found: 'true',  commit: '$C2', distance: '2',   msg: '2 commit(s) earlier', max: '3' }
-          - { name: 'branch with successful runs, no spec at all: FAILS', fixture: empty-window,   outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
-          - { name: 'no successful push run on the branch: skip',       fixture: no-baseline,    outcome: success, found: 'false', commit: '<empty>', distance: '-', msg: 'no baseline' }
-          - { name: 'stacked PR (base branch has no push run): skip',   fixture: stacked-branch, outcome: success, found: 'false', commit: '<empty>', distance: '-', msg: 'no baseline', base_ref: 'feature/x' }
-          - { name: 'a spec uploaded from another branch is ignored',   fixture: foreign-branch, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
-          - { name: 'a spec whose run built another commit is ignored', fixture: wrong-head-sha, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
-          - { name: 'a spec from a fork run is ignored',                fixture: fork-run,       outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
-          - { name: 'a hostile base branch name does not widen the match', fixture: hostile-ref,  outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping', base_ref: 'main" or .workflow_run.head_branch == "attacker/feature' }
-          - { name: 'a workflow that does not exist FAILS (the rova bug)', fixture: exact,        outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not Found (HTTP 404)', workflow: ci.yml }
-          - { name: 'a flaky API is retried',                          fixture: flaky,          outcome: success, found: 'true',  commit: '$C0', distance: '0',   msg: 'spec of the base commit', flaky: '1' }
-          - { name: 'an artifact that downloads empty FAILS',           fixture: empty-artifact, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'could not download' }
-          - { name: 'base-sha that is not a sha FAILS, saying why',     fixture: exact,          outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'base-sha must be 40 hex characters', base_sha: 'main' }
-          - { name: 'an empty base-ref (not a pull_request) FAILS',     fixture: exact,          outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'base-ref is empty', base_ref: '-' }
-          - { name: 'max-ancestors out of range FAILS',                 fixture: exact,          outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'max-ancestors must be 1 to 100', max: '0' }
-          - { name: 'a path that leaves the workspace FAILS',           fixture: exact,          outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'path must be a relative directory', dest: '../outside' }
-          - { name: 'a workflow name with a space FAILS',               fixture: exact,          outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'workflow must be a workflow file name', workflow: 'a b.yml' }
+          # ── finding the spec ─────────────────────────────────────────────────────────────────────────────
+          - { name: 'the base commit has a spec',                           fixture: exact,          outcome: success, found: 'true',  commit: '$C0', distance: '0', msg: 'spec of the base commit' }
+          - { name: 'the base commit has none: nearest ancestor, loudly',    fixture: ancestor,       outcome: success, found: 'true',  commit: '$C2', distance: '2', msg: '2 first-parent commit(s) earlier' }
+          - { name: 'an expired spec is skipped for the next ancestor',      fixture: expired,        outcome: success, found: 'true',  commit: '$C1', distance: '1', msg: '1 first-parent commit(s) earlier' }
+          - { name: 'a window too small for the ancestor FAILS',             fixture: ancestor,       outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'at most) 2 commits', max: '2' }
+          - { name: 'a big enough window finds it',                          fixture: ancestor,       outcome: success, found: 'true',  commit: '$C2', distance: '2', msg: '2 first-parent commit(s) earlier', max: '3' }
+          - { name: 'runs but no spec anywhere in the window FAILS',         fixture: empty-window,   outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'the root commit ends the walk: FAILS, not loops',       fixture: root-reached,   outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'no successful push run on the branch: skip',            fixture: no-baseline,    outcome: success, found: 'false', commit: '<empty>', distance: '-', msg: 'no baseline' }
+          - { name: 'stacked PR (base branch has no push run): skip',        fixture: stacked-branch, outcome: success, found: 'false', commit: '<empty>', distance: '-', msg: 'no baseline', base_ref: 'feature/x' }
+          # ── first parents only ───────────────────────────────────────────────────────────────────────────
+          - { name: 'merge history: a merged-in commit is not a candidate, distance counts first-parent steps', fixture: merge-chain, outcome: success, found: 'true', commit: '$C4', distance: '3', msg: '3 first-parent commit(s) earlier' }
+          - { name: 'merge history: the window counts first-parent steps',  fixture: merge-chain,    outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'at most) 3 commits', max: '3' }
+          - { name: 'merge history: a spec only on the merged-in commit FAILS', fixture: merge-side-only, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          # ── what makes a run's artifact trustworthy ─────────────────────────────────────────────────────
+          - { name: 'a run on another branch is ignored',                    fixture: foreign-branch, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'a run that built another commit is ignored',            fixture: wrong-head-sha, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'a run from a fork is ignored',                          fixture: fork-run,       outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'a run of another workflow file is ignored',             fixture: other-workflow, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'a run that did not succeed is ignored',                 fixture: failed-run,     outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'a run that was not a push is ignored',                  fixture: not-a-push,     outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping' }
+          - { name: 'more runs than were read FAILS rather than guesses',    fixture: too-many-runs,  outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'refusing to guess' }
+          - { name: 'a hostile base branch name does not widen the match',   fixture: hostile-ref,    outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not skipping', base_ref: 'main" or .head_branch == "attacker/feature' }
+          # ── the download ─────────────────────────────────────────────────────────────────────────────────
+          - { name: 'an artifact that downloads empty FAILS',                fixture: empty-artifact, outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'could not download' }
+          - { name: 'an artifact without the expected file FAILS',           fixture: wrong-file,     outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'has no usable openapi.json' }
+          - { name: 'a destination that already has content FAILS, untouched', fixture: inputs,       outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'already has content', plant: file }
+          - { name: 'a destination that is a link FAILS',                    fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'is a symbolic link', plant: link }
+          - { name: 'a path through a link that leaves the workspace FAILS', fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'outside the workspace', plant: link-parent, dest: 'link/sub' }
+          - { name: 'an existing EMPTY destination is fine',                 fixture: inputs,         outcome: success, found: 'true',  commit: '$C0', distance: '0', msg: 'spec of the base commit', plant: empty-dir }
+          # ── the API ──────────────────────────────────────────────────────────────────────────────────────
+          - { name: 'a workflow that does not exist FAILS (the rova bug)',   fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'Not Found (HTTP 404)', workflow: ci.yml }
+          - { name: 'a flaky API is retried',                                fixture: flaky,          outcome: success, found: 'true',  commit: '$C0', distance: '0', msg: 'spec of the base commit', flaky: '1' }
+          - { name: 'a secondary rate limit is retried',                     fixture: rate-limit,     outcome: success, found: 'true',  commit: '$C0', distance: '0', msg: 'spec of the base commit', flaky: 'rate-once' }
+          # ── inputs ───────────────────────────────────────────────────────────────────────────────────────
+          - { name: 'base-sha that is not a sha FAILS, saying why',          fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'base-sha must be 40 hex characters', base_sha: 'main' }
+          - { name: 'an empty base-ref (not a pull_request) FAILS',          fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'base-ref is empty', base_ref: '-' }
+          - { name: 'max-ancestors out of range FAILS',                      fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'max-ancestors must be 1 to 100', max: '0' }
+          - { name: 'a path that leaves the workspace FAILS',                fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'path must be a relative directory', dest: '../outside' }
+          - { name: 'the workspace itself is not a destination',             fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'is the workspace itself', dest: '.' }
+          - { name: 'a line break in the path FAILS',                        fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'must not contain a line break', dest: "a\nb" }
+          - { name: 'a workflow name with a space FAILS',                    fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'workflow must be a workflow file name', workflow: 'a b.yml' }
+          - { name: 'a file name with a slash FAILS',                        fixture: inputs,         outcome: failure, found: '<empty>', commit: '<empty>', distance: '-', msg: 'file must be a plain file name', file: 'x/y' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,6 +122,20 @@ jobs:
         run: |
           echo "$GITHUB_WORKSPACE/$FX/bin" >> "$GITHUB_PATH"
           cp -R "$FX/$FIXTURE" "$RUNNER_TEMP/fixture"
+
+      # What a checkout of a pull request could contain where the action is about to download.
+      - name: Plant something in the workspace
+        if: matrix.plant != ''
+        env:
+          PLANT: ${{ matrix.plant }}
+        run: |
+          set -euo pipefail
+          case "$PLANT" in
+            file)        mkdir base-spec; printf '{"openapi":"3.0.3","x-commit":"planted"}\n' > base-spec/openapi.json ;;
+            link)        mkdir other; ln -s other base-spec ;;
+            link-parent) mkdir "$RUNNER_TEMP/elsewhere"; ln -s "$RUNNER_TEMP/elsewhere" link ;;
+            empty-dir)   mkdir base-spec ;;
+          esac
 
       - name: The action under test
         id: act
@@ -110,6 +155,7 @@ jobs:
           base-sha: ${{ matrix.base_sha || env.C0 }}
           max-ancestors: ${{ matrix.max || '30' }}
           path: ${{ matrix.dest || 'base-spec' }}
+          file: ${{ matrix.file || 'openapi.json' }}
 
       - name: The action ended the way this case requires
         env:
@@ -118,17 +164,19 @@ jobs:
           COMMIT: ${{ steps.act.outputs.commit }}
           DISTANCE: ${{ steps.act.outputs.distance }}
           DEST: ${{ steps.act.outputs.path }}
+          SPEC: ${{ steps.act.outputs.spec-path }}
           MESSAGE: ${{ steps.act.outputs.message }}
           WANT_OUTCOME: ${{ matrix.outcome }}
           WANT_FOUND: ${{ matrix.found }}
           WANT_COMMIT: ${{ matrix.commit }}
           WANT_DISTANCE: ${{ matrix.distance }}
           WANT_MSG: ${{ matrix.msg }}
+          PLANT: ${{ matrix.plant }}
         run: |
           set -uo pipefail
           # `$C0` in the matrix means the commit with that name.
-          WANT_COMMIT="${WANT_COMMIT/\$C0/$C0}"; WANT_COMMIT="${WANT_COMMIT/\$C1/$C1}"; WANT_COMMIT="${WANT_COMMIT/\$C2/$C2}"
-          echo "outcome=$OUTCOME (want $WANT_OUTCOME)  found='$FOUND' (want $WANT_FOUND)  commit='${COMMIT:0:7}' distance='$DISTANCE' path='$DEST'"
+          for v in C0 C1 C2 C4; do WANT_COMMIT="${WANT_COMMIT/\$$v/${!v}}"; done
+          echo "outcome=$OUTCOME (want $WANT_OUTCOME)  found='$FOUND' (want $WANT_FOUND)  commit='${COMMIT:0:7}' distance='$DISTANCE' path='$DEST' spec-path='$SPEC'"
           echo "message='$MESSAGE'"
           echo "  want it to contain: $WANT_MSG"
           same() { # got want
@@ -145,11 +193,16 @@ jobs:
           same "$DISTANCE" "$WANT_DISTANCE" || { echo "::error::distance is '$DISTANCE', want $WANT_DISTANCE"; bad=1; }
           grep -qF -- "$WANT_MSG" <<< "$MESSAGE" || { echo "::error::the message does not contain: $WANT_MSG"; bad=1; }
           if [ "$WANT_FOUND" = true ]; then
-            # The downloaded file is the one of the commit that was reported, not just some file.
-            got="$(jq -r '."x-commit"' "$DEST/openapi.json" 2> /dev/null || true)"
-            [ "$got" = "$WANT_COMMIT" ] || { echo "::error::$DEST/openapi.json is the spec of '$got', want $WANT_COMMIT"; bad=1; }
+            # The downloaded file is the one of the commit that was reported, and spec-path points at it.
+            [ "$SPEC" = "$DEST/openapi.json" ] || { echo "::error::spec-path is '$SPEC', want '$DEST/openapi.json'"; bad=1; }
+            got="$(jq -r '."x-commit"' "$SPEC" 2> /dev/null || true)"
+            [ "$got" = "$WANT_COMMIT" ] || { echo "::error::$SPEC is the spec of '$got', want $WANT_COMMIT"; bad=1; }
           else
-            [ -z "$DEST" ] || { echo "::error::path should be empty when nothing was downloaded, got '$DEST'"; bad=1; }
+            [ -z "$DEST" ] && [ -z "$SPEC" ] || { echo "::error::path and spec-path should be empty when nothing was downloaded"; bad=1; }
+          fi
+          if [ "$PLANT" = file ]; then
+            got="$(jq -r '."x-commit"' base-spec/openapi.json 2> /dev/null || true)"
+            [ "$got" = planted ] || { echo "::error::the file that was already there was touched ('$got')"; bad=1; }
           fi
           exit "$bad"
 
@@ -164,44 +217,60 @@ jobs:
         with:
           persist-credentials: false
 
-      # rova's newest commit on main. Its own push run may still be going, in which case the action falls
-      # back to the nearest ancestor: either way a spec is found. 50 commits of room, so a stretch of cancelled
-      # runs does not turn this red.
-      - name: rova's main tip
-        id: tip
+      # The newest spec rova still has. rova uploads one per push to main and keeps it 30 days, so a repository
+      # that has been idle that long has none: that is not a failure of this action, and this job says so
+      # instead of going red on the weekly schedule.
+      - name: The newest live spec on rova's main
+        id: pick
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          sha="$(gh api repos/quynhonsemiconductor/rova/commits/main --jq .sha)"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          sha="$(gh api -X GET repos/quynhonsemiconductor/rova/actions/artifacts -F per_page=100 \
+            | jq -r '[.artifacts[]
+                      | select(.expired == false
+                               and (.name | startswith("openapi-spec-"))
+                               and .workflow_run.head_branch == "main")]
+                     | sort_by(.created_at) | last | .workflow_run.head_sha // empty')"
+          if [ -z "$sha" ]; then
+            echo "::notice title=live check skipped::rova has no unexpired openapi-spec artifact on main (idle for over 30 days?). Nothing to check against the real API."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: The action under test, against the real API
+        if: steps.pick.outputs.found == 'true'
         id: act
         uses: ./actions/fetch-openapi-base-spec
         with:
           workflow: backend-ci.yml
           repository: quynhonsemiconductor/rova
           base-ref: main
-          base-sha: ${{ steps.tip.outputs.sha }}
-          max-ancestors: '50'
+          base-sha: ${{ steps.pick.outputs.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: It found a real OpenAPI document
+      - name: It found a real OpenAPI document of that commit
+        if: steps.pick.outputs.found == 'true'
         env:
           FOUND: ${{ steps.act.outputs.found }}
-          DEST: ${{ steps.act.outputs.path }}
+          SPEC: ${{ steps.act.outputs.spec-path }}
           COMMIT: ${{ steps.act.outputs.commit }}
           DISTANCE: ${{ steps.act.outputs.distance }}
+          WANT: ${{ steps.pick.outputs.sha }}
         run: |
           set -euo pipefail
           echo "found=$FOUND commit=${COMMIT:0:7} distance=$DISTANCE"
           [ "$FOUND" = true ]
-          jq -e '.openapi and (.paths | length > 0)' "$DEST/openapi.json" > /dev/null
-          echo "openapi $(jq -r .openapi "$DEST/openapi.json"), $(jq '.paths | length' "$DEST/openapi.json") paths"
+          # Normally that very commit (distance 0); its run may have been marked failed for an unrelated job,
+          # in which case the nearest earlier spec is used, which is also correct.
+          echo "newest spec was for ${WANT:0:7}"
+          jq -e '.openapi and (.paths | length > 0)' "$SPEC" > /dev/null
+          echo "openapi $(jq -r .openapi "$SPEC"), $(jq '.paths | length' "$SPEC") paths"
 
-  # The second guard against the failure this file is about: a wrong workflow name must not look like "no baseline".
+  # The guards, so that a refactor cannot quietly drop one.
   static:
     name: the action keeps its guards
     runs-on: ubuntu-latest
@@ -213,7 +282,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: No swallowed errors, no splicing into jq
+      - name: No swallowed errors, no splicing into jq, every guard present
         run: |
           set -euo pipefail
           f=actions/fetch-openapi-base-spec/action.yml
@@ -223,9 +292,23 @@ jobs:
           # jq filters take values with --arg. `gh api --jq "...$VAR..."` splices a shell variable into the filter
           # text; the action does not use --jq at all.
           if grep -n -- '--jq' <<< "$code"; then echo "::error::gh --jq in $f: pipe to jq and pass values with --arg"; exit 1; fi
-          # The text of the four guards on an artifact: they are jq source, so `$ref` and `$sha` are jq variables.
-          # shellcheck disable=SC2016
-          for guard in 'select(.expired == false' 'head_branch == $ref' 'head_sha == $sha' 'head_repository_id == .workflow_run.repository_id'; do
+          # The history is the first-parent chain, one commit at a time. The list endpoint (all ancestors, in
+          # date order, side branches included) must not come back.
+          if grep -nF "repos/\$REPO/commits\"" <<< "$code"; then echo "::error::the commits LIST endpoint in $f: it is not first-parent"; exit 1; fi
+          # The text of the guards (jq source and shell, so the dollar signs are escaped):
+          for guard in \
+            ".parents[0].sha" \
+            "select(.name == \$name and .expired == false)" \
+            ".event == \"push\"" \
+            ".conclusion == \"success\"" \
+            ".head_branch == \$ref" \
+            ".head_sha == \$sha" \
+            ".path == \$path" \
+            ".head_repository.id == .repository.id" \
+            "head_sha=\"\$sha\"" \
+            "[ ! -L \"\$DEST\" ]" \
+            "find \"\$DEST\" -mindepth 1 -print -quit" \
+            "[ ! -L \"\$spec\" ]"; do
             grep -qF -- "$guard" <<< "$code" || { echo "::error::the guard '$guard' is gone from $f"; exit 1; }
           done
           echo "ok"
