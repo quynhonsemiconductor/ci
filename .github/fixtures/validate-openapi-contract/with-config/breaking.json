@@ -1,0 +1,54 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "validate-openapi-contract fixture",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/compliance/shadow-it/scan": {
+      "post": {
+        "operationId": "scan",
+        "responses": {
+          "202": {
+            "description": "scan started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/security-posture/sync": {
+      "post": {
+        "operationId": "sync",
+        "responses": {
+          "202": {
+            "description": "synced"
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    }
+  }
+}
