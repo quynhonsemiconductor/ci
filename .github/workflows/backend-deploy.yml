@@ -405,7 +405,7 @@ jobs:
             if [[ "$have" != "$expected" ]]; then
               echo "::error::$repo:$IMAGE_TAG already exists (immutable) and is NOT made of this run's images. Expected children:"
               echo "$expected"; echo "Found:"; echo "$have"
-              echo "::error::Not reusing it. Re-run the whole workflow from the build, or investigate who wrote this tag."
+              echo "::error::Not reusing it. Do NOT re-run the whole workflow: it rebuilds new digests and fails the same way against this tag. Use 'Re-run failed jobs' on the run that created the tag (the legs keep their digests), or push a new commit (a new sha- tag)."
               exit 1
             fi
             echo "$repo:$IMAGE_TAG already exists and matches this run's legs: reusing it (re-run)"
