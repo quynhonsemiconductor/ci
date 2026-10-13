@@ -107,6 +107,17 @@ def main(argv: list[str]) -> int:
     allow = "--allow" in argv
     doc = load(sys.stdin.read())
     bad = findings(doc)
+    # The override is a person's decision and it should be visible on the run, not only in the log: a
+    # warning annotation whenever it is active, with or without findings. Without findings it is the
+    # more worrying case, an override left on a change that does not need one.
+    if allow:
+        source = os.environ.get("GUARD_OVERRIDE_SOURCE", "").strip() or "the allow label or dispatch input"
+        if bad:
+            print(f"::warning title=destructive-guard override::{len(bad)} DNS/identity resource(s) will be deleted "
+                  f"or replaced, allowed by {source}")
+        else:
+            print(f"::warning title=destructive-guard override::override active ({source}) but this plan deletes "
+                  f"or replaces nothing protected; remove it if it is not needed")
     if not bad:
         print("destructive_guard: no DNS or identity resource is deleted or replaced.")
         return 0
