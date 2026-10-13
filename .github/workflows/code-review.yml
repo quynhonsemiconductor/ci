@@ -228,12 +228,31 @@ jobs:
           work="$RUNNER_TEMP/qnsc-rules"
           mkdir -p "$work"
 
+          # One place that talks to raw.githubusercontent.com, because it used to answer every
+          # failure with "rule profile ... not found": `curl -f` turns a 429, a 5xx, a dropped
+          # connection and a real 404 into the same exit code, and the message blamed the profile
+          # name each time. Only a 404 means the file is not at that ref. Anything else is the
+          # network, is retried, and is reported with the status it actually got.
+          download() { # <url> <dest> <what>
+            local url="$1" dest="$2" what="$3" code="000" attempt
+            for attempt in 1 2 3; do
+              code="$(curl -sSL --connect-timeout 10 --max-time 60 -o "$dest" -w '%{http_code}' "$url" || true)"
+              [ "$code" = "200" ] && return 0
+              [ "$code" = "404" ] && break
+              echo "  $what: HTTP $code (attempt $attempt of 3)" >&2
+              sleep $((attempt * ${FETCH_RETRY_DELAY:-2}))
+            done
+            if [ "$code" = "404" ]; then
+              echo "::error::$what not found at $RULES_REF (HTTP 404: $url) — check the name against ci/rules/ and that the ref exists"
+            else
+              echo "::error::$what could not be fetched from $RULES_REF: HTTP $code after 3 attempts ($url). This is raw.githubusercontent.com or the network, not the profile name — re-run the job"
+            fi
+            return 1
+          }
+
           fetch() {
             local name="$1"
-            if ! curl -fsSL "$base/$RULES_REF/rules/$name.json" -o "$work/$name.json"; then
-              echo "::error::rule profile '$name' not found at $RULES_REF — check the name against ci/rules/"
-              exit 1
-            fi
+            download "$base/$RULES_REF/rules/$name.json" "$work/$name.json" "rule profile '$name'" || exit 1
             python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$work/$name.json" \
               || { echo "::error::rule profile '$name' is not valid JSON"; exit 1; }
             echo "  loaded $name"
@@ -329,8 +348,7 @@ jobs:
           PY
 
           # The gate script, from the same ref as the rules, for the same reason.
-          curl -fsSL "$base/$RULES_REF/scripts/code_review_gate.py" -o "$work/gate.py" \
-            || { echo "::error::scripts/code_review_gate.py not found at $RULES_REF"; exit 1; }
+          download "$base/$RULES_REF/scripts/code_review_gate.py" "$work/gate.py" "scripts/code_review_gate.py" || exit 1
           echo "QNSC_GATE=$work/gate.py" >> "$GITHUB_ENV"
 
           echo "QNSC_RULE_FILE=$work/merged.json" >> "$GITHUB_ENV"
