@@ -104,6 +104,28 @@ class DestructiveGuard(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("ALLOWED", out)
 
+    def test_the_override_is_a_warning_annotation_with_findings(self):
+        code, out, _ = run(plan(rc("cloudflare_record.x", "cloudflare_record", ["delete", "create"])), "--allow")
+        self.assertEqual(code, 0)
+        self.assertIn("::warning title=destructive-guard override::1 DNS/identity resource(s)", out)
+
+    def test_the_override_is_a_warning_annotation_without_findings_too(self):
+        code, out, _ = run(plan(rc("cloudflare_record.x", "cloudflare_record", ["create"])), "--allow")
+        self.assertEqual(code, 0)
+        self.assertIn("::warning title=destructive-guard override::override active", out)
+
+    def test_no_override_warning_when_the_override_is_not_active(self):
+        for doc in (plan(rc("cloudflare_record.x", "cloudflare_record", ["create"])),
+                    plan(rc("cloudflare_record.x", "cloudflare_record", ["delete"]))):
+            _, out, _ = run(doc)
+            self.assertNotIn("destructive-guard override", out)
+
+    def test_the_override_warning_names_where_it_came_from(self):
+        env = dict(os.environ, GUARD_OVERRIDE_SOURCE="the allow-dns-destroy label on PR #12")
+        r = subprocess.run([sys.executable, GUARD, "--allow"], input=json.dumps(plan()), capture_output=True,
+                           text=True, env=env)
+        self.assertIn("the allow-dns-destroy label on PR #12", r.stdout)
+
     def test_input_that_is_not_a_plan_fails_closed(self):
         for label, raw in (("empty", ""), ("null", "null"), ("{}", "{}"), ("[]", "[]"), ("not json", "oops"),
                            ("truncated", '{"format_version": "1.2", "resource_ch')):

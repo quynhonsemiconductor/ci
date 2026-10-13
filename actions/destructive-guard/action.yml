@@ -98,17 +98,40 @@ runs:
         set -uo pipefail
         allow=false
         labels=""
+        source=""
+        endpoint=""
+        err="$(mktemp)"
         if [ "$EVENT" = workflow_dispatch ]; then
-          [ "$DISPATCH_ALLOW" = true ] && allow=true
+          if [ "$DISPATCH_ALLOW" = true ]; then allow=true; source="the allow_destructive dispatch input"; fi
         elif [ -n "$PR" ]; then
-          labels="$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | join(",")' 2>/dev/null || true)"
+          endpoint="repos/$REPO/issues/$PR/labels"
         else
-          labels="$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[].labels[].name] | join(",")' 2>/dev/null || true)"
+          endpoint="repos/$REPO/commits/$SHA/pulls"
         fi
-        # an API failure leaves labels empty: the guard then FAILS CLOSED (refuses), never opens
-        case ",$labels," in *",$WANT,"*) allow=true;; esac
+        if [ -n "$endpoint" ]; then
+          # The API's own error goes to the log. It used to be `2>/dev/null || true`, which made "the lookup
+          # failed" indistinguishable from "the pull request has no label", and the refusal that followed
+          # said nothing about why. The guard still FAILS CLOSED either way; this only says which it was.
+          if raw="$(gh api "$endpoint" 2>"$err")"; then
+            if [ -n "$PR" ]; then
+              labels="$(jq -r '[.[].name] | join(",")' <<<"$raw")"
+            else
+              prs="$(jq 'length' <<<"$raw")"
+              [ "$prs" = 0 ] && echo "::notice title=destructive-guard::no pull request is associated with $SHA (a direct push?), so there is no label to read"
+              labels="$(jq -r '[.[].labels[].name] | join(",")' <<<"$raw")"
+            fi
+          else
+            echo "::warning title=destructive-guard::label lookup FAILED ($endpoint), treating as no label: $(tr '\n' ' ' < "$err")"
+          fi
+          case ",$labels," in
+            *",$WANT,"*)
+              allow=true
+              if [ -n "$PR" ]; then source="the $WANT label on PR #$PR"; else source="the $WANT label on the PR for commit $SHA"; fi;;
+          esac
+        fi
         echo "labels: [${labels}]  allow=$allow"
         echo "allow=$allow" >> "$GITHUB_OUTPUT"
+        echo "source=$source" >> "$GITHUB_OUTPUT"
 
     - name: Refuse to delete or replace DNS / identity resources
       if: ${{ inputs.mode != 'drift' }}
@@ -117,6 +140,7 @@ runs:
       env:
         PLAN_FILE: ${{ inputs.plan-file }}
         ALLOW: ${{ steps.label.outputs.allow }}
+        GUARD_OVERRIDE_SOURCE: ${{ steps.label.outputs.source }}
         GUARD: ${{ github.action_path }}/destructive_guard.py
       run: |
         set -euo pipefail
