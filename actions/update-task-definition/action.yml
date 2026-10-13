@@ -1,0 +1,48 @@
+name: update-task-definition
+description: >
+  Register a new revision of an ECS task definition with every container that runs the service's image moved to
+  the deployed tag, after checking that nothing is left on ':latest' and that every tag exists in ECR. See
+  update_task_definition.py for why this is not "rewrite the container named after the service".
+
+inputs:
+  family:
+    description: Task definition family (or ARN) to derive the new revision from.
+    required: true
+  container:
+    description: The container that defines the service image ('api', 'worker', 'migrator'). Its repository decides which other containers move.
+    required: true
+  tag:
+    description: Image tag to deploy.
+    required: true
+  region:
+    description: AWS region.
+    required: false
+    default: ""
+
+outputs:
+  arn:
+    description: ARN of the registered task definition revision.
+    value: ${{ steps.register.outputs.arn }}
+
+runs:
+  using: composite
+  steps:
+    - name: Rewrite, check, register
+      id: register
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.family }}
+        CONTAINER: ${{ inputs.container }}
+        TAG: ${{ inputs.tag }}
+        REGION: ${{ inputs.region }}
+        SCRIPT: ${{ github.action_path }}/update_task_definition.py
+      run: |
+        set -euo pipefail
+        out="$(mktemp)"
+        region_flag=(); [ -n "$REGION" ] && region_flag=(--region "$REGION")
+        aws ecs describe-task-definition --task-definition "$FAMILY" "${region_flag[@]}" --query taskDefinition --output json \
+          | python3 "$SCRIPT" --container "$CONTAINER" --tag "$TAG" "${region_flag[@]}" --out "$out"
+        ARN="$(aws ecs register-task-definition "${region_flag[@]}" --cli-input-json "file://$out" \
+          --query 'taskDefinition.taskDefinitionArn' --output text)"
+        echo "Registered $ARN"
+        echo "arn=$ARN" >> "$GITHUB_OUTPUT"

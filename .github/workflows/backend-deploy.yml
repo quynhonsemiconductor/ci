@@ -652,48 +652,28 @@ jobs:
           fi
           echo "Preflight OK — every injected Secrets Manager secret and SSM parameter holds a value."
 
+      # Every container that runs the service's image moves to the new tag, then the result is checked
+      # (no ':latest', every ECR tag exists) BEFORE a revision is registered. See
+      # actions/update-task-definition for the incident this exists for: a second container on the same
+      # image (qnsc-kb's Celery beat) kept ':latest', which does not exist in an immutable repository.
       - name: Update API task definition to ${{ env.IMAGE_TAG }}
         id: api-taskdef
-        env:
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-          ECS_API_SERVICE: ${{ vars.ECS_API_SERVICE }}
-        run: |
-          FAMILY="${ECS_CLUSTER}-${ECS_API_SERVICE}"
-          TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
-          NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
-          import sys, json, os
-          td = json.load(sys.stdin); tag = os.environ['IMAGE_TAG']
-          for c in td.get('containerDefinitions', []):
-              if c.get('name') == 'api':
-                  c['image'] = c['image'].rsplit(':', 1)[0] + ':' + tag
-          for f in ['taskDefinitionArn','revision','status','requiresAttributes','placementConstraints','compatibilities','registeredAt','registeredBy']:
-              td.pop(f, None)
-          print(json.dumps(td))")
-          ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        with:
+          family: ${{ vars.ECS_CLUSTER }}-${{ vars.ECS_API_SERVICE }}
+          container: api
+          tag: ${{ env.IMAGE_TAG }}
+          region: ${{ inputs.aws_region }}
 
       - name: Update Worker task definition to ${{ env.IMAGE_TAG }}
         id: worker-taskdef
         if: inputs.has_worker
-        env:
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-          ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
-        run: |
-          FAMILY="${ECS_CLUSTER}-${ECS_WORKER_SERVICE}"
-          TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
-          NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
-          import sys, json, os
-          td = json.load(sys.stdin); tag = os.environ['IMAGE_TAG']
-          for c in td.get('containerDefinitions', []):
-              if c.get('name') == 'worker':
-                  c['image'] = c['image'].rsplit(':', 1)[0] + ':' + tag
-          for f in ['taskDefinitionArn','revision','status','requiresAttributes','placementConstraints','compatibilities','registeredAt','registeredBy']:
-              td.pop(f, None)
-          print(json.dumps(td))")
-          ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        with:
+          family: ${{ vars.ECS_CLUSTER }}-${{ vars.ECS_WORKER_SERVICE }}
+          container: worker
+          tag: ${{ env.IMAGE_TAG }}
+          region: ${{ inputs.aws_region }}
 
       # Recovers a develop environment that has been put to sleep: a stopped RDS
       # instance, or services left at desiredCount=0. Without this a deploy landing
@@ -744,23 +724,12 @@ jobs:
       - name: Update Migrator task definition to ${{ env.IMAGE_TAG }}
         id: migrator-taskdef
         if: inputs.has_migrator
-        env:
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          ECS_MIGRATOR_TASK_DEF: ${{ vars.ECS_MIGRATOR_TASK_DEF }}
-        run: |
-          FAMILY="${ECS_MIGRATOR_TASK_DEF}"
-          TASK_DEF=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition' --output json)
-          NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
-          import sys, json, os
-          td = json.load(sys.stdin); tag = os.environ['IMAGE_TAG']
-          for c in td.get('containerDefinitions', []):
-              if c.get('name') == 'migrator':
-                  c['image'] = c['image'].rsplit(':', 1)[0] + ':' + tag
-          for f in ['taskDefinitionArn','revision','status','requiresAttributes','placementConstraints','compatibilities','registeredAt','registeredBy']:
-              td.pop(f, None)
-          print(json.dumps(td))")
-          ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        with:
+          family: ${{ vars.ECS_MIGRATOR_TASK_DEF }}
+          container: migrator
+          tag: ${{ env.IMAGE_TAG }}
+          region: ${{ inputs.aws_region }}
 
       - name: Run database migrations
         if: inputs.has_migrator
@@ -860,6 +829,34 @@ jobs:
           else
             echo "outcome=rollback" >> "$GITHUB_OUTPUT"
             echo "::error ::Deployment did not converge on ${IMAGE_TAG} — circuit breaker rolled back to $ACTIVE_IMAGE"
+            exit 1
+          fi
+
+      # The worker is verified too. Only the API was, so a worker that could not start (qnsc-kb, beat on a tag
+      # that does not exist) left the deploy green while the queue stood still. Steady state means the service has
+      # converged on the NEW task definition with every desired task running; a circuit-breaker rollback shows up
+      # as the service still pointing at an older revision, and fails here. A service scaled to zero (an idle
+      # environment) has nothing to run and is checked for the revision only.
+      - name: Verify Worker deployment
+        if: inputs.has_worker
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_WORKER_SERVICE: ${{ vars.ECS_WORKER_SERVICE }}
+          TASKDEF_ARN: ${{ steps.worker-taskdef.outputs.arn }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -euo pipefail
+          # 60 attempts x 15 s = 15 minutes, then the wait itself fails the step.
+          AWS_MAX_ATTEMPTS=60 aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_WORKER_SERVICE" --region "$AWS_REGION"
+          read -r ACTIVE DESIRED RUNNING < <(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_WORKER_SERVICE" \
+            --region "$AWS_REGION" --query 'services[0].[taskDefinition,desiredCount,runningCount]' --output text)
+          echo "Worker: taskDefinition=$ACTIVE desired=$DESIRED running=$RUNNING"
+          if [ "$ACTIVE" != "$TASKDEF_ARN" ]; then
+            echo "::error::The worker is on $ACTIVE, not the revision this deploy registered ($TASKDEF_ARN): the deployment was rolled back."
+            exit 1
+          fi
+          if [ "$RUNNING" != "$DESIRED" ]; then
+            echo "::error::The worker has $RUNNING of $DESIRED tasks running."
             exit 1
           fi
 
