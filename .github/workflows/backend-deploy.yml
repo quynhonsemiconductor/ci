@@ -84,6 +84,19 @@ jobs:
       # it can only read a value another job produced.
       services:    ${{ steps.ctx.outputs.services }}
     steps:
+      # Fail before any build starts. `registry` cache writes ONE `:buildcache` tag per image repository; the two architecture legs would
+      # overwrite each other's cache, and the repositories are IMMUTABLE (task 0.8), which rejects the overwrite outright (see the
+      # cache-backend note in actions/build-push-ecr). Use `gha` (per-arch scopes) or `none`.
+      - name: Reject cache_backend registry with multi_arch
+        env:
+          MULTI_ARCH: ${{ inputs.multi_arch }}
+          CACHE_BACKEND: ${{ inputs.cache_backend }}
+        run: |
+          if [[ "$MULTI_ARCH" == "true" && "$CACHE_BACKEND" == "registry" ]]; then
+            echo "::error title=backend-deploy::multi_arch cannot be combined with cache_backend: registry (both architecture legs would write the same immutable :buildcache tag). Use cache_backend: gha or none."
+            exit 1
+          fi
+
       - id: ctx
         env:
           REF_TYPE: ${{ github.ref_type }}
@@ -248,7 +261,8 @@ jobs:
           # push of an existing tag, so a pipeline still publishing `:latest` fails on its
           # next run. `sha-` and `v` tags are never republished, so they are unaffected.
           build-target: ${{ matrix.service }}
-          cache-scope: ${{ matrix.service }}-${{ matrix.arch }}
+          # The default (single-arch) path keeps its historical scope, so its GHA cache is not cold-started by this change.
+          cache-scope: ${{ matrix.arch == 'single' && matrix.service || format('{0}-{1}', matrix.service, matrix.arch) }}
           cache-backend: ${{ inputs.cache_backend }}
           platforms: ${{ matrix.arch == 'amd64' && 'linux/amd64' || matrix.arch == 'arm64' && 'linux/arm64' || inputs.image_platforms }}
           # Multi-arch: each leg pushes an UNTAGGED image by digest; the `merge` job tags once (IMMUTABLE repositories).
@@ -335,7 +349,6 @@ jobs:
       id-token: write
       contents: read
       attestations: write
-      packages: read
     env:
       IMAGE_TAG: ${{ needs.context.outputs.image_tag }}
       PRODUCT:   ${{ inputs.product }}
@@ -374,13 +387,39 @@ jobs:
             [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $SERVICE/$a"; exit 1; }
             refs+=("$repo@$d")
           done
-          docker buildx imagetools create --tag "$repo:$IMAGE_TAG" "${refs[@]}"
-          digest="$(docker buildx imagetools inspect "$repo:$IMAGE_TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+
+          # The digests an image reference is made of: an index's children, or the manifest itself. (Captured to variables, never piped
+          # into `grep -q`: under pipefail an early-closing reader makes the writer die of SIGPIPE and a true match reads as a failure.)
+          children() {
+            local j
+            j="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}')"
+            jq -r 'if .manifests then .manifests[].digest else .digest end' <<<"$j" | sort -u
+          }
+          expected="$(for r in "${refs[@]}"; do children "$r"; done | sort -u)"
+
+          # IDEMPOTENT on an immutable repository: a re-run of this job finds the tag already written, and a second write is rejected. Accept
+          # the existing tag ONLY if it is made of exactly the digests of this run's legs; anything else is a different image under the same
+          # tag, which must fail loudly rather than be deployed.
+          if existing="$(docker buildx imagetools inspect "$repo:$IMAGE_TAG" --format '{{json .Manifest}}' 2>/dev/null)"; then
+            have="$(jq -r 'if .manifests then .manifests[].digest else .digest end' <<<"$existing" | sort -u)"
+            if [[ "$have" != "$expected" ]]; then
+              echo "::error::$repo:$IMAGE_TAG already exists (immutable) and is NOT made of this run's images. Expected children:"
+              echo "$expected"; echo "Found:"; echo "$have"
+              echo "::error::Not reusing it. Re-run the whole workflow from the build, or investigate who wrote this tag."
+              exit 1
+            fi
+            echo "$repo:$IMAGE_TAG already exists and matches this run's legs: reusing it (re-run)"
+          else
+            docker buildx imagetools create --tag "$repo:$IMAGE_TAG" "${refs[@]}"
+          fi
+
+          j="$(docker buildx imagetools inspect "$repo:$IMAGE_TAG" --format '{{json .Manifest}}')"
+          digest="$(jq -r .digest <<<"$j")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::could not read the merged digest"; exit 1; }
-          # the index must now list both platforms
+          # the index must list both platforms (captured first; see above)
+          plats="$(docker buildx imagetools inspect "$repo@$digest" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{"\n"}}{{end}}')"
           for p in linux/amd64 linux/arm64; do
-            docker buildx imagetools inspect "$repo@$digest" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{"\n"}}{{end}}' | grep -qx "$p" \
-              || { echo "::error::merged image $digest has no $p manifest"; exit 1; }
+            grep -qx "$p" <<<"$plats" || { echo "::error::merged image $digest has no $p manifest"; exit 1; }
           done
           echo "image-digest=$digest" >> "$GITHUB_OUTPUT"
           echo "$SERVICE $IMAGE_TAG -> $digest (amd64 + arm64)" >> "$GITHUB_STEP_SUMMARY"
