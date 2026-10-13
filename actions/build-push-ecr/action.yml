@@ -108,6 +108,14 @@ inputs:
       once by hand with `aws ecr batch-delete-image --image-ids imageTag=buildcache`.
     required: false
     default: registry
+  push-by-digest:
+    description: >
+      Push the image by DIGEST ONLY, with no tag: `outputs: type=image,push-by-digest=true`. For the per-architecture legs of a multi-arch
+      build, each on a runner of its own architecture; a later job creates the tag ONCE with `docker buildx imagetools create`, over
+      the digests of every leg. It has to be like this because the repositories are IMMUTABLE (task 0.8): two legs cannot both push
+      `sha-<commit>`, and a leg cannot re-tag after the merge. `image-tag` is ignored when this is true. Default false: unchanged behaviour.
+    required: false
+    default: 'false'
   node-auth-token:
     description: >
       Token used by the Dockerfile's `pnpm install` to fetch private
@@ -192,8 +200,10 @@ runs:
         file: ${{ inputs.dockerfile }}
         target: ${{ inputs.build-target }}
         platforms: ${{ inputs.platforms }}
-        push: true
-        tags: ${{ steps.tags.outputs.tags }}
+        # Normal path: push: true + tags. By-digest path: `outputs` pushes an untagged image and `push`/`tags` must not also be set.
+        push: ${{ inputs.push-by-digest != 'true' }}
+        tags: ${{ inputs.push-by-digest != 'true' && steps.tags.outputs.tags || '' }}
+        outputs: ${{ inputs.push-by-digest == 'true' && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', inputs.ecr-registry, inputs.image-name) || '' }}
         # Both computed in the step above — see it for why this is not a `${{ }}` ternary,
         # and see `cache-backend` for the cost of each backend.
         #
