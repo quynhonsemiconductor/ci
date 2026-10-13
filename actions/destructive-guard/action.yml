@@ -18,7 +18,16 @@ description: >
 
   Needs `pull-requests: read` on the calling job. Run it after `tofu plan -out=<file>` and BEFORE `tofu apply`.
 
+  MODE `drift` (nightly drift jobs): classifies a `tofu plan -refresh-only -out=<file>` instead, with the same protected list.
+  A resource deleted outside OpenTofu, or a change to a protected resource, is class 2; other drift (provider-computed
+  attributes) is class 3, informational; none is 0; input that is not a plan is 1. The step never fails on 2 or 3:
+  the caller decides, using the `class` output.
+
 inputs:
+  mode:
+    description: "'plan' (default): refuse destructive changes in a plan about to be applied. 'drift': classify a refresh-only plan."
+    required: false
+    default: plan
   working-directory:
     description: The stack directory holding the saved plan.
     required: true
@@ -39,11 +48,43 @@ inputs:
     required: false
     default: allow-dns-destroy
 
+outputs:
+  class:
+    description: "mode drift only: 0 none, 3 informational, 2 matters, 1 could not classify."
+    value: ${{ steps.drift.outputs.class }}
+
 runs:
   using: composite
   steps:
+    # `mode` is validated, case-sensitively, before anything else: a typo ('Drift', 'plan ') would otherwise select neither
+    # branch's step guard cleanly and could skip the guard while the job stays green. Fail closed.
+    - name: Validate mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        case "$MODE" in
+          plan|drift) ;;
+          *) echo "::error title=destructive-guard::unknown mode '$MODE' (expected exactly 'plan' or 'drift')"; exit 1;;
+        esac
+
+    - name: Classify external drift
+      id: drift
+      if: ${{ inputs.mode == 'drift' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PLAN_FILE: ${{ inputs.plan-file }}
+        REPORT: ${{ github.action_path }}/drift_report.py
+      run: |
+        set +e
+        if [ ! -f "$PLAN_FILE" ]; then echo "::error title=destructive-guard::No plan file at '$PLAN_FILE'"; echo "class=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+        tofu show -json "$PLAN_FILE" | python3 "$REPORT"
+        echo "class=${PIPESTATUS[1]}" >> "$GITHUB_OUTPUT"
+
     - name: Resolve the allow label
       id: label
+      if: ${{ inputs.mode != 'drift' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -70,6 +111,7 @@ runs:
         echo "allow=$allow" >> "$GITHUB_OUTPUT"
 
     - name: Refuse to delete or replace DNS / identity resources
+      if: ${{ inputs.mode != 'drift' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
