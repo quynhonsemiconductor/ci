@@ -28,6 +28,8 @@ import re
 import subprocess
 import sys
 
+VERSION_ENV = "SERVICE_VERSION"   # what the products' observability reads for `service.version` and the log `version` field
+
 STRIP = ["taskDefinitionArn", "revision", "status", "requiresAttributes", "placementConstraints", "compatibilities",
          "registeredAt", "registeredBy"]
 ECR_HOST = re.compile(r"^(?P<account>\d{12})\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com$")
@@ -61,6 +63,12 @@ def rewrite(task_def: dict, primary: str, tag: str) -> tuple[dict, list[str], li
         new = f"{repo}:{tag}"
         log.append(f"  {c['name']}: {c['image']} -> {new}" if c["image"] != new else f"  {c['name']}: {new} (already)")
         c["image"] = new
+        # The version the app REPORTS must be the tag it RUNS. Terraform's baseline carries its own SERVICE_VERSION (a placeholder in develop, since
+        # `latest` does not exist), and rewriting only the image left every develop log line saying "version":"set-by-the-deploy-never-a-real-tag".
+        env = [e for e in c.get("environment", []) if e.get("name") != VERSION_ENV]
+        env.append({"name": VERSION_ENV, "value": tag})
+        c["environment"] = env
+        log.append(f"  {c['name']}: {VERSION_ENV}={tag}")
     for field in STRIP:
         task_def.pop(field, None)
     return task_def, log, []

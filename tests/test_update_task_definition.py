@@ -193,3 +193,46 @@ def test_backend_deploy_uses_the_action_for_api_worker_and_migrator_and_verifies
     assert "- name: Verify Worker deployment" in text
     assert "aws ecs wait services-stable" in text.split("- name: Verify Worker deployment", 1)[1].split("- name:", 1)[0]
     assert "c['image'].rsplit(':', 1)[0]" not in text, "the single-container inline rewrite must not come back"
+
+
+def api_task(env=None):
+    return {
+        "family": "rova-develop-api", "revision": 7, "status": "ACTIVE", "taskDefinitionArn": "arn:x",
+        "containerDefinitions": [
+            {"name": "api", "image": f"{REG}/rova-api:set-by-the-deploy-never-a-real-tag",
+             "environment": env if env is not None else [{"name": "SERVICE_VERSION", "value": "set-by-the-deploy-never-a-real-tag"},
+                                                         {"name": "NODE_ENV", "value": "production"}]},
+            {"name": "otel-agent", "image": "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.3", "environment": [{"name": "X", "value": "1"}]},
+        ],
+    }
+
+
+def _env(task, name):
+    c = next(c for c in task["containerDefinitions"] if c["name"] == name)
+    return {e["name"]: e["value"] for e in c.get("environment", [])}, [e["name"] for e in c.get("environment", [])]
+
+
+def test_service_version_is_set_to_the_deployed_tag_in_the_rewritten_container():
+    new, _, errors = utd.rewrite(api_task(), "api", "sha-abc123")
+    assert errors == []
+    env, names = _env(new, "api")
+    assert env["SERVICE_VERSION"] == "sha-abc123"          # was the placeholder
+    assert names.count("SERVICE_VERSION") == 1             # replaced, not duplicated
+    assert env["NODE_ENV"] == "production"                 # nothing else touched
+
+
+def test_service_version_is_added_when_the_baseline_has_none():
+    new, _, _ = utd.rewrite(api_task(env=[]), "api", "v1.2.3")
+    assert _env(new, "api")[0] == {"SERVICE_VERSION": "v1.2.3"}
+
+
+def test_a_container_on_a_different_image_keeps_its_environment():
+    new, _, _ = utd.rewrite(api_task(), "api", "sha-abc123")
+    assert _env(new, "otel-agent")[0] == {"X": "1"}
+
+
+def test_every_container_on_the_service_image_gets_the_version_including_beat():
+    new, _, _ = utd.rewrite(kb_worker_task(), "worker", "sha-abc123")
+    assert _env(new, "worker")[0]["SERVICE_VERSION"] == "sha-abc123"
+    assert _env(new, "beat")[0]["SERVICE_VERSION"] == "sha-abc123"
+    assert "SERVICE_VERSION" not in _env(new, "clamav")[0]
