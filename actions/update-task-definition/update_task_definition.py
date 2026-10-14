@@ -65,7 +65,11 @@ def rewrite(task_def: dict, primary: str, tag: str) -> tuple[dict, list[str], li
         c["image"] = new
         # The version the app REPORTS must be the tag it RUNS. Terraform's baseline carries its own SERVICE_VERSION (a placeholder in develop, since
         # `latest` does not exist), and rewriting only the image left every develop log line saying "version":"set-by-the-deploy-never-a-real-tag".
-        env = [e for e in c.get("environment", []) if e.get("name") != VERSION_ENV]
+        if any(sec.get("name") == VERSION_ENV for sec in c.get("secrets") or []):
+            # A secret and an environment entry of the same name cannot both be right (ECS rejects the duplicate or one silently wins), and a version
+            # pinned in a secret is not the tag being deployed. Refuse rather than guess.
+            return task_def, [], [f"container '{c['name']}' injects {VERSION_ENV} from a secret; it must come from the deployed tag, not a secret"]
+        env = [e for e in c.get("environment") or [] if e.get("name") != VERSION_ENV]
         env.append({"name": VERSION_ENV, "value": tag})
         c["environment"] = env
         log.append(f"  {c['name']}: {VERSION_ENV}={tag}")
