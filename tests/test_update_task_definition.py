@@ -236,3 +236,17 @@ def test_every_container_on_the_service_image_gets_the_version_including_beat():
     assert _env(new, "worker")[0]["SERVICE_VERSION"] == "sha-abc123"
     assert _env(new, "beat")[0]["SERVICE_VERSION"] == "sha-abc123"
     assert "SERVICE_VERSION" not in _env(new, "clamav")[0]
+
+
+def test_a_service_version_secret_is_refused_not_duplicated():
+    td = api_task()
+    td["containerDefinitions"][0]["secrets"] = [{"name": "SERVICE_VERSION", "valueFrom": "arn:aws:secretsmanager:r:1:secret:x"}]
+    _, _, errors = utd.rewrite(td, "api", "sha-abc123")
+    assert errors and "SERVICE_VERSION" in errors[0] and "secret" in errors[0]
+
+
+def test_other_secrets_are_fine():
+    td = api_task()
+    td["containerDefinitions"][0]["secrets"] = [{"name": "DATABASE_PASSWORD", "valueFrom": "arn:x"}]
+    _, _, errors = utd.rewrite(td, "api", "sha-abc123")
+    assert errors == []
