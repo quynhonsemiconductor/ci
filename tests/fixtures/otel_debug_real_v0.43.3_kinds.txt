@@ -1,0 +1,89 @@
+2026/10/15 08:53:48 ADOT Collector version: v0.43.3
+2026/10/15 08:53:48 found no extra config, skip it, err: open /opt/aws/aws-otel-collector/etc/extracfg.txt: no such file or directory
+2026/10/15 08:53:48 attn: users of the `datadog`, `logzio`, `sapm`, `signalfx` exporter components. please refer to https://github.com/aws-observability/aws-otel-collector/issues/2734 in regards to an upcoming ADOT Collector breaking change
+2026-10-15T08:53:48.772Z	info	service@v0.117.0/service.go:164	Setting up own telemetry...
+2026-10-15T08:53:48.772Z	info	telemetry/metrics.go:70	Serving metrics	{"address": "localhost:8888", "metrics level": "Normal"}
+2026-10-15T08:53:48.772Z	info	builders/builders.go:26	Development component. May change in the future.	{"kind": "exporter", "data_type": "metrics", "name": "debug"}
+2026-10-15T08:53:48.773Z	info	service@v0.117.0/service.go:230	Starting aws-otel-collector...	{"Version": "v0.43.3", "NumCPU": 12}
+2026-10-15T08:53:48.773Z	info	extensions/extensions.go:39	Starting extensions...
+2026-10-15T08:53:48.773Z	info	otlpreceiver@v0.117.0/otlp.go:169	Starting HTTP server	{"kind": "receiver", "name": "otlp", "data_type": "metrics", "endpoint": "0.0.0.0:4318"}
+2026-10-15T08:53:48.774Z	info	service@v0.117.0/service.go:253	Everything is ready. Begin running and processing data.
+2026-10-15T08:53:53.799Z	info	Metrics	{"kind": "exporter", "data_type": "metrics", "name": "debug", "resource metrics": 1, "metrics": 4, "data points": 4}
+2026-10-15T08:53:53.799Z	info	ResourceMetrics #0
+Resource SchemaURL: 
+Resource attributes:
+     -> service.name: Str(x)
+     -> service.instance.id: Str(i)
+ScopeMetrics #0
+ScopeMetrics SchemaURL: 
+InstrumentationScope qnsc 1
+Metric #0
+Descriptor:
+     -> Name: exp.hist
+     -> Description: 
+     -> Unit: 
+     -> DataType: ExponentialHistogram
+     -> AggregationTemporality: Cumulative
+ExponentialHistogramDataPoints #0
+Data point attributes:
+     -> r: Str(/a)
+StartTimestamp: 2025-10-14 08:39:59.999999 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Count: 4
+Sum: 10.500000
+Min: 0.000000
+Max: 5.000000
+Bucket [-1.189207, -1.000000), Count: 0
+Bucket [0, 0], Count: 1
+Bucket (1.189207, 1.414214], Count: 1
+Bucket (1.414214, 1.681793], Count: 2
+Metric #1
+Descriptor:
+     -> Name: summ
+     -> Description: 
+     -> Unit: 
+     -> DataType: Summary
+SummaryDataPoints #0
+Data point attributes:
+     -> r: Str(/a)
+StartTimestamp: 2025-10-14 08:39:59.999999 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Count: 4
+Sum: 10.500000
+QuantileValue #0: Quantile 0.500000, Value 2.000000
+QuantileValue #1: Quantile 0.990000, Value 9.000000
+Metric #2
+Descriptor:
+     -> Name: dbl
+     -> Description: 
+     -> Unit: 
+     -> DataType: Sum
+     -> IsMonotonic: false
+     -> AggregationTemporality: Delta
+NumberDataPoints #0
+Data point attributes:
+     -> r: Str(/a)
+StartTimestamp: 2025-10-14 08:39:59.999999 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 1.250000
+Exemplars:
+Exemplar #0
+     -> Trace ID: 0102030405060708090a0b0c0d0e0f10
+     -> Span ID: 0102030405060708
+     -> Timestamp: 2025-10-14 08:40:00 +0000 UTC
+     -> Value: 1.000000
+Metric #3
+Descriptor:
+     -> Name: weird "name" with spaces	and	tab
+     -> Description: 
+     -> Unit: 
+     -> DataType: Gauge
+NumberDataPoints #0
+Data point attributes:
+     -> k with space: Str(v: with colon -> arrow)
+     -> multi: Str(line1
+line2)
+StartTimestamp: 1970-01-01 00:00:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 3
+	{"kind": "exporter", "data_type": "metrics", "name": "debug"}

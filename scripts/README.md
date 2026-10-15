@@ -31,6 +31,13 @@ It replaced `gitops/scripts/check-size-agreement.py` and
 `infra/scripts/check_remote_state.py`, which were two ad-hoc tools growing
 separately in two repositories, doing the same thing badly.
 
+## `otel_duplicate_timestamps.py`
+
+Finds the series that are written twice for one timestamp with different values (Grafana Cloud's
+`sample_duplicate_timestamp` discards) in the collector's `debug` exporter log. Standard library only. Not a
+conformance contract: a diagnostic tool, kept here with its tests so it is usable by any product.
+Runbook: [`docs/runbooks/otel-duplicate-timestamps.md`](../docs/runbooks/otel-duplicate-timestamps.md).
+
 ## Why these bugs are invisible otherwise
 
 All five found in that review were the same shape: **a reference and its
