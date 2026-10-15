@@ -41,9 +41,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Create the label ONCE, before the action. The action labels every shipped PR in parallel (Promise.all of addLabels), and a label that
+      # does not exist yet is created implicitly by each request: with two PRs in one release (a fix and its release PR) the requests race and one
+      # fails with "Validation Failed ... Label name invalid" (observability v0.4.2), failing the job after the other label call had succeeded.
+      # Creating it first removes the race; "already exists" (422) is the normal case on a re-run and is not an error.
+      - name: Ensure the release label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LABEL_TEMPLATE: ${{ inputs.label_template }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+        run: |
+          set -euo pipefail
+          name="${RELEASE_NAME:-$RELEASE_TAG}"
+          label="${LABEL_TEMPLATE//\{release_tag\}/$RELEASE_TAG}"
+          label="${label//\{release_name\}/$name}"
+          if out=$(gh api "repos/${REPO}/labels" -f name="$label" -f color=ededed 2>&1); then
+            echo "created label: $label"
+          elif grep -q 'already_exists' <<<"$out"; then
+            echo "label already exists: $label"
+          else
+            echo "::error::could not create label '$label': $out"
+            exit 1
+          fi
+
       - uses: apexskier/github-release-commenter@e7813a9625eabd79a875b4bc4046cfcae377ab34  # v1.4.1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           comment-template: ${{ inputs.comment_template }}
           label-template: ${{ inputs.label_template }}
-          create-label: true
