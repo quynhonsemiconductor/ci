@@ -1,0 +1,162 @@
+2026/10/15 08:51:25 ADOT Collector version: v0.43.3
+2026/10/15 08:51:25 found no extra config, skip it, err: open /opt/aws/aws-otel-collector/etc/extracfg.txt: no such file or directory
+2026/10/15 08:51:25 attn: users of the `datadog`, `logzio`, `sapm`, `signalfx` exporter components. please refer to https://github.com/aws-observability/aws-otel-collector/issues/2734 in regards to an upcoming ADOT Collector breaking change
+2026-10-15T08:51:25.823Z	info	service@v0.117.0/service.go:164	Setting up own telemetry...
+2026-10-15T08:51:25.824Z	info	telemetry/metrics.go:70	Serving metrics	{"address": "localhost:8888", "metrics level": "Normal"}
+2026-10-15T08:51:25.824Z	info	builders/builders.go:26	Development component. May change in the future.	{"kind": "exporter", "data_type": "metrics", "name": "debug"}
+2026-10-15T08:51:25.826Z	info	service@v0.117.0/service.go:230	Starting aws-otel-collector...	{"Version": "v0.43.3", "NumCPU": 12}
+2026-10-15T08:51:25.826Z	info	extensions/extensions.go:39	Starting extensions...
+2026-10-15T08:51:25.826Z	info	otlpreceiver@v0.117.0/otlp.go:169	Starting HTTP server	{"kind": "receiver", "name": "otlp", "data_type": "metrics", "endpoint": "0.0.0.0:4318"}
+2026-10-15T08:51:25.827Z	info	service@v0.117.0/service.go:253	Everything is ready. Begin running and processing data.
+2026-10-15T08:51:46.909Z	info	Metrics	{"kind": "exporter", "data_type": "metrics", "name": "debug", "resource metrics": 2, "metrics": 5, "data points": 7}
+2026-10-15T08:51:46.913Z	info	ResourceMetrics #0
+Resource SchemaURL: 
+Resource attributes:
+     -> service.name: Str(rova-api)
+     -> service.instance.id: Str(11111111-aaaa)
+     -> service.version: Str(1.2.3)
+     -> deployment.environment.name: Str(develop)
+     -> service.namespace: Str(rova)
+ScopeMetrics #0
+ScopeMetrics SchemaURL: 
+InstrumentationScope qnsc dev
+Metric #0
+Descriptor:
+     -> Name: http.server.requests
+     -> Description: Inbound HTTP requests
+     -> Unit: 
+     -> DataType: Sum
+     -> IsMonotonic: true
+     -> AggregationTemporality: Cumulative
+NumberDataPoints #0
+Data point attributes:
+     -> route: Str(/v1/x)
+     -> method: Str(GET)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 5
+NumberDataPoints #1
+Data point attributes:
+     -> route: Str(/v1/x)
+     -> method: Str(GET)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 7
+NumberDataPoints #2
+Data point attributes:
+     -> route: Str(/v1/y)
+     -> method: Str(POST)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 3
+Metric #1
+Descriptor:
+     -> Name: http.server.duration
+     -> Description: 
+     -> Unit: ms
+     -> DataType: Histogram
+     -> AggregationTemporality: Cumulative
+HistogramDataPoints #0
+Data point attributes:
+     -> route: Str(/v1/x)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Count: 3
+Sum: 12.500000
+Min: 1.000000
+Max: 8.000000
+ExplicitBounds #0: 0.000000
+ExplicitBounds #1: 5.000000
+ExplicitBounds #2: 10.000000
+Buckets #0, Count: 0
+Buckets #1, Count: 2
+Buckets #2, Count: 1
+Buckets #3, Count: 0
+Metric #2
+Descriptor:
+     -> Name: queue.depth
+     -> Description: 
+     -> Unit: 
+     -> DataType: Gauge
+NumberDataPoints #0
+Data point attributes:
+     -> queue: Str(mail)
+StartTimestamp: 1970-01-01 00:00:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 4.500000
+ScopeMetrics #1
+ScopeMetrics SchemaURL: 
+InstrumentationScope @opentelemetry/instrumentation-http 0.221.0
+Metric #0
+Descriptor:
+     -> Name: http.client.request.duration
+     -> Description: 
+     -> Unit: s
+     -> DataType: Histogram
+     -> AggregationTemporality: Cumulative
+HistogramDataPoints #0
+Data point attributes:
+     -> http.request.method: Str(GET)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Count: 1
+Sum: 0.030000
+ExplicitBounds #0: 0.050000
+Buckets #0, Count: 1
+Buckets #1, Count: 0
+ResourceMetrics #1
+Resource SchemaURL: 
+Resource attributes:
+     -> service.name: Str(rova-api)
+     -> service.instance.id: Str(11111111-aaaa)
+     -> service.version: Str(1.2.3)
+     -> cloud.provider: Str(aws)
+     -> deployment.environment.name: Str(develop)
+     -> service.namespace: Str(rova)
+ScopeMetrics #0
+ScopeMetrics SchemaURL: 
+InstrumentationScope qnsc dev
+Metric #0
+Descriptor:
+     -> Name: http.server.requests
+     -> Description: 
+     -> Unit: 
+     -> DataType: Sum
+     -> IsMonotonic: true
+     -> AggregationTemporality: Cumulative
+NumberDataPoints #0
+Data point attributes:
+     -> route: Str(/v1/x)
+     -> method: Str(GET)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 9
+	{"kind": "exporter", "data_type": "metrics", "name": "debug"}
+2026-10-15T08:51:48.919Z	info	Metrics	{"kind": "exporter", "data_type": "metrics", "name": "debug", "resource metrics": 1, "metrics": 1, "data points": 1}
+2026-10-15T08:51:48.919Z	info	ResourceMetrics #0
+Resource SchemaURL: 
+Resource attributes:
+     -> service.name: Str(rova-api)
+     -> service.instance.id: Str(11111111-aaaa)
+     -> service.version: Str(1.2.3)
+     -> deployment.environment.name: Str(develop)
+     -> service.namespace: Str(rova)
+ScopeMetrics #0
+ScopeMetrics SchemaURL: 
+InstrumentationScope qnsc dev
+Metric #0
+Descriptor:
+     -> Name: http.server.requests
+     -> Description: 
+     -> Unit: 
+     -> DataType: Sum
+     -> IsMonotonic: true
+     -> AggregationTemporality: Cumulative
+NumberDataPoints #0
+Data point attributes:
+     -> route: Str(/v1/x)
+     -> method: Str(GET)
+StartTimestamp: 2025-10-14 08:39:00 +0000 UTC
+Timestamp: 2025-10-14 08:40:00 +0000 UTC
+Value: 6
+	{"kind": "exporter", "data_type": "metrics", "name": "debug"}
