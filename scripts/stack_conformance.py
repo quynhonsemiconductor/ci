@@ -112,10 +112,16 @@ ACCEPTED: dict[str, str] = {
     # deliberately, to match the pgvector/pgvector:pg16 image used in development. Verified
     # against live AWS 2026-09-12.
     "rds::engine_version": "qnsc-kb pins 16 for pgvector:pg16; others take the module default 17",
-    # Only qnsc-kb sends DKIM-signed mail from its own subdomain. rova and opshub send via
-    # SES from noreply@qnsc.vn / opshub-noreply@qnsc.vn, whose DKIM records live in the
-    # Cloudflare zone rather than a product stack.
-    "module::dns_ses_dkim": "qnsc-kb signs its own subdomain; zone-level DKIM for the others",
+    # worker.health_check_command: rova and qnsc-kb run a process check in the worker task (`pgrep -x node`, `celery
+    # inspect ping`); opshub does not, by decision (2026-10-16). The worker runs under tini, so a dead process already
+    # stops the task and ECS replaces it; `pgrep` cannot detect a HUNG worker (alive, doing nothing), which is the
+    # failure that matters. A real liveness check is a heartbeat the worker writes and the health check reads, for all
+    # three products (quynhonsemiconductor/app-platform#254), not ported as a check that looks like coverage.
+    # container_depends_on orders the app's shutdown before the OTel agent's (ecs-service 2.5.0). It needs an agent
+    # container to name, and qnsc-kb has none (module::otel_agent_* above), so it follows that decision.
+    "api::container_depends_on": "follows module::otel_agent_api — qnsc-kb has no agent container to order against",
+    "worker::container_depends_on": "follows module::otel_agent_worker — qnsc-kb has no agent container to order against",
+    "worker::health_check_command": "opshub has none by decision: tini already stops the task on a dead process, and pgrep cannot see a hung worker; a heartbeat check is a follow-up for all three",
     # Added to rova's stack on 2026-09-14 to rebuild rova-prod into rova-prod-db: AWS refuses
     # to move a DB instance between subnet groups in the same VPC, so the only route into the
     # correctly-named group was a restore into a new instance. opshub and qnsc-kb were already
