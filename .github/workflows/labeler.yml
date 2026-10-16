@@ -60,32 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Is there an area-label map?
-        # actions/labeler fails on a missing map. A repository without one should still get size
-        # labels from this same call, rather than need a second workflow that would race the first.
-        id: map
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MAP: ${{ inputs.configuration_path }}
-          REF: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if gh api "repos/$GITHUB_REPOSITORY/contents/$MAP?ref=$REF" --silent 2>/dev/null; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no $MAP in this repository; applying size labels only"
-          fi
-
-      - name: Area labels
-        if: steps.map.outputs.present == 'true'
-        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
+      # The steps live in a composite so the PR-title job can run the same ones (one runner instead of two).
+      - uses: quynhonsemiconductor/ci/actions/pr-labels@v1
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: ${{ inputs.configuration_path }}
           sync-labels: ${{ inputs.sync_labels }}
-
-      - name: Size label
-        # After the area labeler, and even if it failed: a broken label map is no reason to lose
-        # the size label.
-        if: ${{ !cancelled() && inputs.size }}
-        uses: quynhonsemiconductor/ci/actions/pr-size@v1
+          size: ${{ inputs.size }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
