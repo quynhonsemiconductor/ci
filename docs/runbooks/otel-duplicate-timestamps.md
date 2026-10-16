@@ -58,7 +58,9 @@ api and worker is only visible when both are in one run, but the files can be pa
 
 ## 4. Run the script
 
-Python 3.10+, standard library only.
+Python 3.10+, standard library only. The report compares series as Grafana Cloud stores them, after the
+OTLP-to-Prometheus translation (`job`, `instance` from the resource, sanitised names, unit and `_total` suffixes),
+not as OTLP sends them.
 
 ```bash
 python3 scripts/otel_duplicate_timestamps.py --self-test      # once: proves the parser on a known duplicate
@@ -96,6 +98,8 @@ How the kind of collision points to the writer:
 | `ACROSS-TASKS` / "resources written by more than one task" | two tasks share `service.name` + `service.instance.id` | identity collision (api/worker/migrator, old/new task) |
 | `RESOURCE-ATTRS-DIFFER` | same service id, different resource attributes | two resources that collapse to one Prometheus series |
 | `NAMES-COLLIDE-AFTER-SANITISING` | `a.b` and `a_b` are one Prometheus name | two instruments that differ only by `.` vs `_` |
+| `ATTRS-COLLAPSE-IN-TRANSLATION` | datapoints that differ in OTLP attributes are one Prometheus series | an attribute is lost in the OTLP-to-Prometheus translation |
+| `OVERRIDDEN-BY-RESOURCE(job)` / `(instance)` | the instrument records an attribute named `job` or `instance`; Grafana replaces it with `service.namespace/service.name` / `service.instance.id` | rename the attribute (this was the cause in 2026-10: `JobMetrics` recorded `job`) |
 | `across-batches` + `same-task` | the same task exported the point in two batches | the batch/export interval overlaps itself, or retry after a timeout |
 
 ## 6. Turn it off

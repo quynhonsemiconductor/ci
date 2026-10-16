@@ -18,9 +18,13 @@ only if the datapoint count it parsed equals the count in the ``Metrics {... "da
 collector logs just before it: a dump that lost or reordered lines is reported, not trusted.
 
 WHAT COUNTS AS THE SAME SERIES. What Prometheus (and so Grafana Cloud) sees, not what OpenTelemetry sees:
-  * the resource is ``service.name`` + ``service.instance.id`` (the OTLP resource that becomes job/instance);
-  * metric and label names are sanitised the way the OTLP->Prometheus translation does (``http.method`` and
-    ``http_method`` are one label), label VALUES are compared as text (``Int(1)`` and ``Str(1)`` are one value);
+  * the OTLP->Prometheus translation is applied first, the way Grafana Cloud's OTLP endpoint does it:
+    ``job`` <- ``service.namespace/service.name`` and ``instance`` <- ``service.instance.id``, both OVERRIDING a
+    datapoint attribute of the same name (an instrument that records its own ``job`` attribute loses it, and the
+    series it told apart collapse into one); dots and other characters become ``_`` in names and labels
+    (``http.method`` and ``http_method`` are one label); the unit is appended to the metric name (``_seconds``,
+    ``_bytes``, ...), monotonic sums get ``_total``; label VALUES are compared as text (``Int(1)`` and ``Str(1)``
+    are one value);
   * the timestamp is truncated to MILLISECONDS (Prometheus timestamps are ms): two points a few
     microseconds apart collide.
 Same series + same millisecond + a different value is a conflict. Same value repeated is harmless and only counted.
@@ -174,12 +178,90 @@ class Observation:
     ts_ms: int
     ts_ns: int
     value: str  # canonical text of the value fields
+    datatype: str = ""  # the descriptor's DataType: Sum, Gauge, Histogram, ...
+    unit: str = ""  # the descriptor's Unit, as logged
+    monotonic: bool = False  # Sum only: IsMonotonic
 
 
 def prom_name(name: str) -> str:
-    """OpenTelemetry -> Prometheus name sanitising: anything outside [a-zA-Z0-9_:] becomes ``_``."""
-    out = re.sub(r"[^a-zA-Z0-9_:]", "_", name)
-    return ("_" + out) if out[:1].isdigit() else out
+    """OpenTelemetry -> Prometheus LABEL name: anything outside [a-zA-Z0-9_] becomes ``_``; a leading digit gets
+    ``key_``; a single leading ``_`` gets ``key`` in front (``__x`` is reserved and kept)."""
+    out = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    if out[:1].isdigit():
+        return "key_" + out
+    if out.startswith("_") and not out.startswith("__"):
+        return "key" + out
+    return out
+
+
+# The Prometheus OTLP translator (prometheus/otlptranslator, used by Grafana Cloud's OTLP endpoint) appends the
+# unit to the metric name, spelled out. Only the commonly used units are listed; an unlisted unit is appended
+# sanitised, which still gives the right answer for "are these two the same name".
+UNITS = {
+    "d": "days", "h": "hours", "min": "minutes", "s": "seconds", "ms": "milliseconds", "us": "microseconds",
+    "ns": "nanoseconds", "By": "bytes", "KiBy": "kibibytes", "MiBy": "mebibytes", "GiBy": "gibibytes",
+    "TiBy": "tebibytes", "KBy": "kilobytes", "MBy": "megabytes", "GBy": "gigabytes", "TBy": "terabytes",
+    "B": "bytes", "KB": "kilobytes", "MB": "megabytes", "GB": "gigabytes", "TB": "terabytes",
+    "m": "meters", "V": "volts", "A": "amperes", "J": "joules", "W": "watts", "g": "grams", "Cel": "celsius",
+    "Hz": "hertz", "%": "percent",
+}
+
+
+def _unit_words(unit: str) -> str:
+    unit = re.sub(r"\{[^}]*\}", "", unit).strip()  # {requests} is an annotation, not a unit
+    if not unit or unit == "1":
+        return ""
+    top, _, bottom = unit.partition("/")
+    words = UNITS.get(top.strip(), re.sub(r"[^a-zA-Z0-9]+", "_", top.strip()).strip("_"))
+    if bottom.strip():
+        words += "_per_" + UNITS.get(bottom.strip(), re.sub(r"[^a-zA-Z0-9]+", "_", bottom.strip()).strip("_")).rstrip("s")
+    return words
+
+
+def prom_metric_name(obs: "Observation") -> str:
+    """The metric name the Prometheus side stores: sanitised, unit appended, ``_total`` for monotonic sums,
+    ``_ratio`` for unit-less gauges ("1"). Histograms are the family name (series ``_bucket``/``_sum``/``_count``
+    hang off it and collide when it does)."""
+    tokens = [t for t in re.split(r"[^a-zA-Z0-9:]+", obs.metric) if t]
+    name = "_".join(tokens)
+    if name[:1].isdigit():
+        name = "_" + name
+    unit = _unit_words(obs.unit)
+    if unit and not (name == unit or name.endswith("_" + unit)):
+        name += "_" + unit
+    if obs.datatype == "Gauge" and obs.unit.strip() == "1" and not name.endswith("_ratio"):
+        name += "_ratio"
+    if obs.datatype == "Sum" and obs.monotonic and not name.endswith("_total"):
+        name += "_total"
+    return name
+
+
+def prom_labels(obs: "Observation") -> Tuple[Tuple[str, str], ...]:
+    """The label set Grafana Cloud stores for a datapoint.
+
+    * datapoint attribute names are sanitised, and two that sanitise to one name are joined with ``;``;
+    * ``job`` is set from the RESOURCE, ``service.namespace/service.name`` (just ``service.name`` with no
+      namespace), and ``instance`` from ``service.instance.id``. They OVERRIDE a datapoint attribute of the same
+      name: an instrument that records its own ``job`` attribute loses it, and everything it distinguished by it
+      collapses into one series.
+    """
+    merged: Dict[str, List[str]] = {}
+    for key, value in obs.attrs:
+        merged.setdefault(prom_name(key), []).append(value)
+    labels = {k: ";".join(sorted(v)) for k, v in merged.items()}
+    res = dict(obs.resource)
+    if "service.name" in res:
+        ns = res.get("service.namespace")
+        labels["job"] = f"{ns}/{res['service.name']}" if ns else res["service.name"]
+    if "service.instance.id" in res:
+        labels["instance"] = res["service.instance.id"]
+    return tuple(sorted(labels.items()))
+
+
+def overridden_labels(obs: "Observation") -> List[str]:
+    """Datapoint attributes the resource's job/instance replace (only counts if the value actually differs)."""
+    labels = dict(prom_labels(obs))
+    return sorted({prom_name(k) for k, v in obs.attrs if prom_name(k) in ("job", "instance") and labels.get(prom_name(k)) != v})
 
 
 def canon_number(text: str) -> str:
@@ -211,7 +293,9 @@ class StreamParser:
         self.resource: List[Tuple[str, str]] = []
         self.scope = ""
         self.metric = ""
-        self.kind = ""
+        self.kind = ""  # the descriptor's DataType
+        self.unit = ""
+        self.monotonic = False
         self.dp: Optional[dict] = None
         self.open_attr: Optional[List[str]] = None  # [target, key, type, value-so-far]
         self.batch_logged_at = 0
@@ -238,6 +322,9 @@ class StreamParser:
                 ts_ms=ts[0],
                 ts_ns=ts[1],
                 value="|".join(dp["value"]),
+                datatype=self.kind,
+                unit=self.unit,
+                monotonic=self.monotonic,
             )
         )
 
@@ -310,7 +397,7 @@ class StreamParser:
         if line.startswith("Metric #"):
             self._flush_dp()
             self.counts[1] += 1
-            self.metric, self.kind, self.mode = "", "", "descriptor"
+            self.metric, self.kind, self.unit, self.monotonic, self.mode = "", "", "", False, "descriptor"
             return
         if line == "Descriptor:":
             self.mode = "descriptor"
@@ -331,11 +418,16 @@ class StreamParser:
             self._attr(line)
             return
         if self.mode == "descriptor" and line.startswith("     -> "):
-            name, _, value = line[len("     -> ") :].partition(": ")
+            name, _, value = line[len("     -> ") :].partition(":")
+            value = value[1:] if value.startswith(" ") else value
             if name == "Name":
                 self.metric = value
             elif name == "DataType":
                 self.kind = value
+            elif name == "Unit":
+                self.unit = value.strip()
+            elif name == "IsMonotonic":
+                self.monotonic = value.strip().lower() == "true"
             return
         if self.dp is not None and self.mode in ("dp", "dpattrs"):
             self.mode = "dp"
@@ -383,8 +475,7 @@ def resource_id(resource: Tuple[Tuple[str, str], ...]) -> str:
 
 
 def series_key(obs: Observation) -> Tuple:
-    labels = tuple(sorted((prom_name(k), v) for k, v in obs.attrs))
-    return (resource_id(obs.resource), prom_name(obs.metric), labels, obs.ts_ms)
+    return (resource_id(obs.resource), prom_metric_name(obs), prom_labels(obs), obs.ts_ms)
 
 
 @dataclasses.dataclass
@@ -413,6 +504,12 @@ class Conflict:
             tags.append("RESOURCE-ATTRS-DIFFER")
         if len({o.metric for o in obs}) > 1 or len({tuple(sorted(k for k, _ in o.attrs)) for o in obs}) > 1:
             tags.append("NAMES-COLLIDE-AFTER-SANITISING")
+        if len({o.attrs for o in obs}) > 1 and not (len({o.metric for o in obs}) > 1):
+            # the OTLP datapoints told them apart, the Prometheus labels do not
+            overridden = sorted({n for o in obs for n in overridden_labels(o)})
+            tags.append("ATTRS-COLLAPSE-IN-TRANSLATION")
+            if overridden:
+                tags.append("OVERRIDDEN-BY-RESOURCE(" + ",".join(overridden) + ")")
         if len({(o.ts_ms, o.ts_ns) for o in obs}) > 1:
             tags.append("same-ms-different-ns")
         return tags
@@ -531,7 +628,10 @@ def render(analysis: Analysis, top: int, examples: int) -> str:
     out.append("  how to read: ACROSS-TASKS = two tasks share a resource id; ACROSS-SCOPES = one instrument under two")
     out.append("  scopes; same-task + one-scope + same-batch = one process recorded the point twice (two providers /")
     out.append("  readers, or two instruments with one name); RESOURCE-ATTRS-DIFFER = same service id, different")
-    out.append("  resource attributes; NAMES-COLLIDE-AFTER-SANITISING = 'a.b' and 'a_b' are one Prometheus name/label.")
+    out.append("  resource attributes; NAMES-COLLIDE-AFTER-SANITISING = 'a.b' and 'a_b' are one Prometheus name/label;")
+    out.append("  ATTRS-COLLAPSE-IN-TRANSLATION = datapoints that differ in OTLP attributes are one Prometheus series;")
+    out.append("  OVERRIDDEN-BY-RESOURCE(job) = the instrument records an attribute named job (or instance), which the")
+    out.append("  resource's service name / instance id replaces.")
     out.append("")
 
     out.append(f"== by metric (top {top}) ==")
@@ -568,6 +668,8 @@ def render(analysis: Analysis, top: int, examples: int) -> str:
             extra = f" (logged as {o.metric})" if names_differ else ""
             value = o.value[len("Value: ") :] if o.value.startswith("Value: ") and "|" not in o.value else o.value
             out.append(f"      {o.stream} batch {o.batch} @ {logged}  scope [{o.scope}]  {o.kind}{extra}  value {value}")
+            if len({x.attrs for x in c.observations}) > 1:
+                out.append("          OTLP attributes: " + ", ".join(f"{k}={v}" for k, v in o.attrs))
         resources = {o.resource for o in c.observations}
         if len(resources) > 1:
             dicts = [dict(r) for r in resources]
