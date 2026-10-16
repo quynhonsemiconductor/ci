@@ -1,0 +1,46 @@
+name: Trivy image CVE scan
+description: >
+  Trivy over an image that is ALREADY in the local Docker daemon. CRITICAL findings fail the step (`ignore-unfixed`: a CVE with no
+  upstream fix is not actionable); HIGH is reported as SARIF and never fails.
+
+  WHY THIS EXISTS. The reusable security.yml used to BUILD the image a second time just to scan it, in a job of its own, beside the
+  Docker build the product's own CI had already done. Run this right after that build instead (build with `load: true`) and the
+  second build, its checkout and its runner disappear: one job fewer per push and one image build fewer.
+
+  The caller needs `security-events: write` for the SARIF upload; without it that step no-ops.
+
+inputs:
+  image-ref:
+    description: 'Local image to scan, as `docker images` shows it, e.g. `rova-api:scan`.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Scan image (CRITICAL — blocks)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: table
+        severity: CRITICAL
+        exit-code: '1'
+        ignore-unfixed: true
+
+    - name: Scan image (HIGH — report only)
+      if: ${{ !cancelled() }}
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ inputs.image-ref }}
+        format: sarif
+        output: trivy-results.sarif
+        severity: HIGH
+        exit-code: '0'
+        ignore-unfixed: true
+
+    - name: Upload Trivy SARIF (GHAS UI — advisory on free plan)
+      if: ${{ !cancelled() }}
+      continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
+      with:
+        sarif_file: trivy-results.sarif
+        category: trivy-container

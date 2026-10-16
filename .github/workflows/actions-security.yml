@@ -62,6 +62,17 @@ on:
         required: false
         default: false
         type: boolean
+      combine:
+        description: >
+          Run actionlint and zizmor as STEPS of ONE job ("Workflow security (actionlint, zizmor)") instead of two jobs. Both still run
+          even if the first fails, and actionlint still always blocks.
+
+          OFF BY DEFAULT because it changes check names. "Workflow lint (actionlint)" and "Actions security (zizmor)" are skipped and the
+          ONE required check becomes "Workflow security (actionlint, zizmor)". A skipped required check counts as PASSING, so adopt this
+          with the ruleset change, in this order - ADD the new context, merge the caller PR, REMOVE the two old contexts.
+        required: false
+        default: false
+        type: boolean
 
 #
 # TWO tools, two questions, and they do not overlap:
@@ -92,6 +103,7 @@ permissions:
 jobs:
   actionlint:
     name: Workflow lint (actionlint)
+    if: ${{ !inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -101,31 +113,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install actionlint
-        shell: bash
-        env:
-          VERSION: '1.7.12'
-          # Pinned alongside the version: the tarball is fetched from a release
-          # asset, so without this the step trusts whatever that URL serves.
-          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          set -euo pipefail
-          file="actionlint_${VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 3 -o "$file" \
-            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${file}"
-          echo "${SHA256}  ${file}" | sha256sum -c -
-          tar -xzf "$file" actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
-          actionlint --version
-
-      - name: actionlint
-        shell: bash
-        run: |
-          set -euo pipefail
-          actionlint -color
+      - uses: quynhonsemiconductor/ci/actions/lint-workflows@v1
 
   zizmor:
     name: Actions security (zizmor)
+    if: ${{ !inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -136,47 +128,36 @@ jobs:
         with:
           persist-credentials: false
 
-      # TODO: pin to a full commit SHA (org convention) once this has run once
-      # and the resolved SHA is visible in the Actions log — not verified here.
-      - uses: actions/setup-python@v7
+      - uses: quynhonsemiconductor/ci/actions/audit-workflows@v1
         with:
-          python-version: '3.14'
+          path: ${{ inputs.path }}
+          min-severity: ${{ inputs.min_severity }}
+          min-confidence: ${{ inputs.min_confidence }}
+          blocking: ${{ inputs.blocking }}
 
-      - name: Install zizmor
-        run: pip install --disable-pip-version-check zizmor==1.5.2
-
-      - name: zizmor scan (SARIF)
-        shell: bash
-        env:
-          ZIZMOR_PATH: ${{ inputs.path }}
-        run: |
-          set -euo pipefail
-          zizmor --format sarif --no-progress "$ZIZMOR_PATH" > zizmor.sarif
-
-      - name: Upload SARIF (GHAS UI — advisory on free plan)
-        if: always()
-        continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+  # Both as STEPS of one job (`combine: true`). zizmor runs even if actionlint failed (`!cancelled()`), so one
+  # failure never hides the other's findings; the job fails if either did.
+  workflow-security:
+    name: Workflow security (actionlint, zizmor)
+    if: ${{ inputs.combine }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sarif_file: zizmor.sarif
-          category: zizmor-actions
+          persist-credentials: false
 
-      - name: zizmor scan (console + gate)
-        shell: bash
-        env:
-          ZIZMOR_PATH: ${{ inputs.path }}
-          MIN_SEVERITY: ${{ inputs.min_severity }}
-          MIN_CONFIDENCE: ${{ inputs.min_confidence }}
-          BLOCKING: ${{ inputs.blocking }}
-        run: |
-          set +e
-          zizmor --min-severity "$MIN_SEVERITY" --min-confidence "$MIN_CONFIDENCE" --no-progress "$ZIZMOR_PATH"
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ]; then
-            if [ "$BLOCKING" = "true" ]; then
-              echo "::error::zizmor found findings at or above severity=${MIN_SEVERITY}/confidence=${MIN_CONFIDENCE} (blocking)"
-              exit "$code"
-            fi
-            echo "::warning::zizmor found findings at or above severity=${MIN_SEVERITY}/confidence=${MIN_CONFIDENCE} (report-only; set blocking=true to enforce)"
-          fi
+      - name: Workflow lint (actionlint)
+        uses: quynhonsemiconductor/ci/actions/lint-workflows@v1
+
+      - name: Actions security (zizmor)
+        if: ${{ !cancelled() }}
+        uses: quynhonsemiconductor/ci/actions/audit-workflows@v1
+        with:
+          path: ${{ inputs.path }}
+          min-severity: ${{ inputs.min_severity }}
+          min-confidence: ${{ inputs.min_confidence }}
+          blocking: ${{ inputs.blocking }}

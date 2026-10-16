@@ -80,6 +80,18 @@ on:
         required: false
         default: '22'
         type: string
+      combine:
+        description: >
+          Run Gitleaks, osv-scanner and Semgrep as STEPS of ONE job ("Security scans") instead of three jobs of their own. Each is still
+          run even if an earlier one failed, and each keeps its own blocking input. Three runners become one per push.
+
+          OFF BY DEFAULT because it changes check names. The three jobs ("Secret scan (Gitleaks)", "SAST (Semgrep)", "Dependency CVE
+          scan (osv-scanner)") are skipped, and the ONE required check becomes "Security scans (Gitleaks, osv-scanner, Semgrep)". A
+          skipped required check counts as PASSING, so adopt this together with the ruleset change, in this order - ADD the new context
+          to the ruleset, merge the caller PR, REMOVE the three old contexts. Doing only the caller PR leaves the scans un-required.
+        required: false
+        default: false
+        type: boolean
       scan_container:
         description: >
           Build and Trivy-scan a container image. Set false for Cloudflare-native
@@ -95,6 +107,9 @@ permissions:
 jobs:
   # ───────────────────────────────────────────────────────────────────────
   # 1. Trivy — container image CVE scan. CRITICAL blocks; HIGH is reported.
+  #    Builds the image itself. A product whose own CI already builds it should set
+  #    `scan_container: false` and run actions/scan-image right after that build instead:
+  #    one runner and one image build fewer per push.
   # ───────────────────────────────────────────────────────────────────────
   trivy:
     name: Container CVE scan (Trivy)
@@ -127,41 +142,17 @@ jobs:
           secrets: |
             node_auth_token=${{ secrets.GITHUB_TOKEN }}
 
-      # CRITICAL blocks the run. ignore-unfixed drops CVEs with no upstream fix.
-      - name: Scan image (CRITICAL — blocks)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      - uses: quynhonsemiconductor/ci/actions/scan-image@v1
         with:
           image-ref: ${{ inputs.product }}-${{ inputs.image_target }}:scan
-          format: table
-          severity: CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
-
-      - name: Scan image (HIGH — report only)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: ${{ inputs.product }}-${{ inputs.image_target }}:scan
-          format: sarif
-          output: trivy-results.sarif
-          severity: HIGH
-          exit-code: '0'
-          ignore-unfixed: true
-
-      - name: Upload Trivy SARIF (GHAS UI — advisory on free plan)
-        if: always()
-        continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy-container
 
   # ───────────────────────────────────────────────────────────────────────
   # 2. Semgrep — SAST (OSS, free). Replaces CodeQL (which needs GHAS).
-  #    Runs via the official Docker image (hermetic; avoids the pip/pkg_resources
-  #    breakage under Python 3.12). Report-only by default (semgrep_blocking).
+  #    Report-only by default (semgrep_blocking).
   # ───────────────────────────────────────────────────────────────────────
   semgrep:
     name: SAST (Semgrep)
+    if: ${{ !inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -172,43 +163,18 @@ jobs:
         with:
           persist-credentials: false
 
-      # Registry packs (p/*) fetched anonymously (no login/token); telemetry off.
-      # --error (fail on findings) added only when semgrep_blocking=true.
-      - name: Semgrep scan
-        shell: bash
-        env:
-          SEMGREP_VERSION: ${{ inputs.semgrep_version }}
-          SEMGREP_CONFIG: ${{ inputs.semgrep_config }}
-          SEMGREP_BLOCKING: ${{ inputs.semgrep_blocking }}
-        run: |
-          set -euo pipefail
-          CONFIG_ARGS=""
-          for c in $SEMGREP_CONFIG; do CONFIG_ARGS="$CONFIG_ARGS --config=$c"; done
-          ERROR_FLAG=""
-          [ "${SEMGREP_BLOCKING}" = "true" ] && ERROR_FLAG="--error"
-          # Intentional word-splitting below: CONFIG_ARGS/ERROR_FLAG accumulate
-          # zero or more separate flags, so they must stay unquoted.
-          # shellcheck disable=SC2086
-          docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off \
-            "semgrep/semgrep:${SEMGREP_VERSION}" \
-            semgrep scan $CONFIG_ARGS $ERROR_FLAG --sarif --output=semgrep.sarif .
-          if [ "${SEMGREP_BLOCKING}" != "true" ]; then
-            echo "::notice::Semgrep report-only (set semgrep_blocking=true to enforce)"
-          fi
-
-      - name: Upload Semgrep SARIF (GHAS UI — advisory on free plan)
-        if: always()
-        continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
+      - uses: quynhonsemiconductor/ci/actions/scan-semgrep@v1
         with:
-          sarif_file: semgrep.sarif
-          category: semgrep-sast
+          config: ${{ inputs.semgrep_config }}
+          version: ${{ inputs.semgrep_version }}
+          blocking: ${{ inputs.semgrep_blocking }}
 
   # ───────────────────────────────────────────────────────────────────────
   # 3. Gitleaks — committed-secret scan over full history (shared action).
   # ───────────────────────────────────────────────────────────────────────
   secrets:
     name: Secret scan (Gitleaks)
+    if: ${{ !inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -229,6 +195,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────
   dependencies:
     name: Dependency CVE scan (osv-scanner)
+    if: ${{ !inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -238,33 +205,46 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install osv-scanner
-        shell: bash
-        env:
-          OSV_VERSION: ${{ inputs.osv_scanner_version }}
-        run: |
-          set -euo pipefail
-          curl -sSfL \
-            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" \
-            -o /usr/local/bin/osv-scanner
-          chmod +x /usr/local/bin/osv-scanner
-          osv-scanner --version
+      - uses: quynhonsemiconductor/ci/actions/scan-osv@v1
+        with:
+          version: ${{ inputs.osv_scanner_version }}
+          blocking: ${{ inputs.osv_blocking }}
 
-      # Recursively finds every lockfile (root + apps/*) and scans it.
-      # Report-only by default; set osv_blocking=true to fail on findings.
-      - name: osv-scanner
-        shell: bash
-        env:
-          OSV_BLOCKING: ${{ inputs.osv_blocking }}
-        run: |
-          set +e
-          osv-scanner --recursive .
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ]; then
-            if [ "${OSV_BLOCKING}" = "true" ]; then
-              echo "::error::osv-scanner found vulnerable dependencies (blocking)"
-              exit "$code"
-            fi
-            echo "::warning::osv-scanner found vulnerable dependencies (report-only; set osv_blocking=true to enforce)"
-          fi
+  # ───────────────────────────────────────────────────────────────────────
+  # 5. The three source scans above as STEPS of one job (`combine: true`).
+  #    `!cancelled()` on every step after the first: one scanner failing must not hide what
+  #    the others found. The job fails if ANY of them failed; the report-only ones never do.
+  # ───────────────────────────────────────────────────────────────────────
+  scans:
+    name: Security scans (Gitleaks, osv-scanner, Semgrep)
+    if: ${{ inputs.combine }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Gitleaks scans the full history
+          persist-credentials: false
+
+      - name: Secret scan (Gitleaks)
+        uses: quynhonsemiconductor/ci/actions/scan-secrets@v1
+        with:
+          fail-on-leak: 'true'
+
+      - name: Dependency CVE scan (osv-scanner)
+        if: ${{ !cancelled() }}
+        uses: quynhonsemiconductor/ci/actions/scan-osv@v1
+        with:
+          version: ${{ inputs.osv_scanner_version }}
+          blocking: ${{ inputs.osv_blocking }}
+
+      - name: SAST (Semgrep)
+        if: ${{ !cancelled() }}
+        uses: quynhonsemiconductor/ci/actions/scan-semgrep@v1
+        with:
+          config: ${{ inputs.semgrep_config }}
+          version: ${{ inputs.semgrep_version }}
+          blocking: ${{ inputs.semgrep_blocking }}

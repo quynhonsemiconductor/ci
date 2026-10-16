@@ -46,6 +46,12 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`scan-secrets`](actions/scan-secrets/action.yml) | Gitleaks secret scan with SARIF upload to GitHub Security tab |
+| [`scan-osv`](actions/scan-osv/action.yml) | osv-scanner dependency CVE scan (report-only unless `blocking`) |
+| [`scan-semgrep`](actions/scan-semgrep/action.yml) | Semgrep SAST through the official image (report-only unless `blocking`) |
+| [`scan-image`](actions/scan-image/action.yml) | Trivy over a local image: CRITICAL blocks, HIGH reported. Run it right after the product's own Docker build (`load: true`) instead of building a second time in the security workflow |
+| [`lint-workflows`](actions/lint-workflows/action.yml) | actionlint over the repo (always blocks) |
+| [`audit-workflows`](actions/audit-workflows/action.yml) | zizmor over the repo (report-only unless `blocking`) |
+| [`pr-labels`](actions/pr-labels/action.yml) | `area/*` and `size/*` labels as steps, so the PR-title job can label in the same runner |
 | [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 | [`pr-title-conventional-commits`](actions/pr-title-conventional-commits/action.yml) | Validate a PR title against Conventional Commits — Release Please derives the CHANGELOG from it |
 | [`pr-size`](actions/pr-size/action.yml) | Label a PR `size/XS…XXL` by lines of CODE (tests, docs, lockfiles and generated files reported, not counted) and comment above 1,000 — advisory unless `fail-above` is set |
@@ -706,6 +712,22 @@ Auto-detects Slack vs Discord by webhook URL pattern.
 | `run-url` | auto | Link to the GitHub Actions run |
 
 ---
+
+## Fewer jobs per push
+
+Free-plan runners cap at 20 concurrent jobs, and one push to a product used to start about 20. Three opt-in switches, all OFF by default
+so `@v1` callers see no change until they ask:
+
+| Switch | Jobs | New required check name |
+|---|---|---|
+| `security.yml` `combine: true` | Gitleaks + osv-scanner + Semgrep: 3 -> 1 | `Security scans (Gitleaks, osv-scanner, Semgrep)` |
+| `actions-security.yml` `combine: true` | actionlint + zizmor: 2 -> 1 | `Workflow security (actionlint, zizmor)` |
+| `security.yml` `scan_container: false` + `actions/scan-image` in the product's Docker build job | Trivy job and its second image build: 1 -> 0 | none: the scan runs inside the product's already-required build job |
+| PR-title job calls `actions/pr-labels` (and the labeler workflow goes) | PR title + labeler: 2 -> 1 | unchanged (`PR title (conventional commits)`) |
+
+**A skipped required check counts as passing.** `combine: true` skips the old jobs, so a ruleset that still requires only the old names
+passes while the scans run un-required. Cut over in this order: ADD the new context to the ruleset, merge the caller PR, REMOVE the old
+contexts. Any open PR must then update from main (the strict up-to-date rule already forces that).
 
 ## Versioning
 
