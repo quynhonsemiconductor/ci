@@ -1,0 +1,50 @@
+name: osv-scanner dependency scan
+description: >
+  osv-scanner (OSS, free) over every lockfile under the checked-out repository. Replaces actions/dependency-review-action, which
+  needs GHAS on private repositories. REPORT-ONLY unless `blocking` is true.
+
+  Lifted out of the reusable security.yml so it can run as a job of its own (legacy shape) or beside the other source scans in
+  ONE job (`combine: true`).
+
+inputs:
+  version:
+    description: osv-scanner CLI version (without the "v" prefix, v1.x CLI).
+    required: false
+    default: '1.9.2'
+  blocking:
+    description: 'Fail on findings. Phased rollout: false (report-only) until the findings are triaged.'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Install osv-scanner
+      shell: bash
+      env:
+        OSV_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        curl -sSfL \
+          "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" \
+          -o /usr/local/bin/osv-scanner
+        chmod +x /usr/local/bin/osv-scanner
+        osv-scanner --version
+
+    # Recursively finds every lockfile (root + apps/*) and scans it.
+    - name: osv-scanner
+      shell: bash
+      env:
+        OSV_BLOCKING: ${{ inputs.blocking }}
+      run: |
+        set +e
+        osv-scanner --recursive .
+        code=$?
+        set -e
+        if [ "$code" -ne 0 ]; then
+          if [ "${OSV_BLOCKING}" = "true" ]; then
+            echo "::error::osv-scanner found vulnerable dependencies (blocking)"
+            exit "$code"
+          fi
+          echo "::warning::osv-scanner found vulnerable dependencies (report-only; set osv_blocking=true to enforce)"
+        fi

@@ -1,0 +1,65 @@
+name: PR labels (area + size)
+description: >
+  Every label the organisation puts on a pull request, as STEPS rather than a job: `area/*` from the caller's changed files and its
+  label map, then `size/*` from actions/pr-size.
+
+  WHY STEPS. The reusable `labeler.yml` is a whole job, so a caller that also wants the PR-title check pays for TWO runners per push.
+  Call this from the PR-title job instead and the two share one (the check keeps its name, `PR title (conventional commits)`, which
+  the rulesets require). The reusable `labeler.yml` now calls this too, so there is one implementation.
+
+  ONE JOB, area first and size second, on purpose: actions/labeler replaces the pull request's whole label set (PUT) from a snapshot
+  it takes when it starts, so anything labelling the PR while it runs is undone (opshub#348). Sequential steps cannot race.
+
+  The caller's job needs `pull-requests: write`.
+
+inputs:
+  configuration-path:
+    description: Path to the area-label map in the caller repo. Optional - without it, no area labels.
+    required: false
+    default: .github/labeler.yml
+  sync-labels:
+    description: Remove area labels no longer matching when files change.
+    required: false
+    default: 'true'
+  size:
+    description: Apply size/* labels and the size comment (thresholds live in actions/pr-size).
+    required: false
+    default: 'true'
+  github-token:
+    description: "Token with `pull-requests: write` on the caller's repository."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Is there an area-label map?
+      # actions/labeler fails on a missing map. A repository without one should still get size labels.
+      id: map
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MAP: ${{ inputs.configuration-path }}
+        REF: ${{ github.event.pull_request.head.sha }}
+      run: |
+        if gh api "repos/$GITHUB_REPOSITORY/contents/$MAP?ref=$REF" --silent 2>/dev/null; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::no $MAP in this repository; applying size labels only"
+        fi
+
+    - name: Area labels
+      if: steps.map.outputs.present == 'true'
+      uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
+      with:
+        repo-token: ${{ inputs.github-token }}
+        configuration-path: ${{ inputs.configuration-path }}
+        sync-labels: ${{ inputs.sync-labels }}
+
+    - name: Size label
+      # After the area labeler, and even if it failed: a broken label map is no reason to lose the size label.
+      if: ${{ !cancelled() && inputs.size == 'true' }}
+      uses: quynhonsemiconductor/ci/actions/pr-size@v1
+      with:
+        github-token: ${{ inputs.github-token }}
