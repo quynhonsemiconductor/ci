@@ -93,3 +93,14 @@ def test_a_rule_without_an_author_is_never_trusted(tmp_path):
 
 def test_author_match_ignores_case(tmp_path):
     assert run(RELEASE_FILES, skip=RELEASE_RULE, head="release-please--x", author=BOT.upper(), tmp_path=tmp_path) == "run=false"
+
+
+TOML_PATCH = '@@ -1,4 +1,4 @@\n [project]\n name = "qnsc-kb-backend"\n-version = "0.4.0"\n+version = "0.5.0"\n'
+
+
+def test_a_python_release_pr_is_version_only_in_pyproject(tmp_path):
+    rule = f"release-please--@{BOT}=CHANGELOG.md,.release-please-manifest.json,version-only:pyproject.toml"
+    files = [("CHANGELOG.md", "+x"), ("pyproject.toml", TOML_PATCH)]
+    assert run(files, skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=false"
+    dep = '@@ -9,3 +9,3 @@\n-dependencies = ["a"]\n+dependencies = ["a", "evil"]\n'
+    assert run([("pyproject.toml", TOML_PATCH + dep)], skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=true"

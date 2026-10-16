@@ -9,7 +9,7 @@ Environment (set by action.yml):
                A rule applies only when the head branch starts with the prefix AND the pull request's author
                is one of the listed logins (a branch name is chosen by whoever opens the PR; the author is not).
                A glob written `version-only:<glob>` additionally requires that the file's diff changes nothing
-               but `"version": ...` lines.
+               but `version` lines (`"version": ...` or `version = ...`).
   HEAD_REF     the pull request's head branch
   AUTHOR       the pull request author's login, e.g. `qnsc-automation[bot]`
   GITHUB_OUTPUT
@@ -23,7 +23,7 @@ import re
 import sys
 
 VERSION_ONLY = "version-only:"
-VERSION_LINE = re.compile(r'^[+-]\s*"version"\s*:')
+VERSION_LINE = re.compile(r'^[+-]\s*"?version"?\s*[:=]')  # package.json `"version": ...` and pyproject.toml `version = ...`
 
 
 def rx(glob: str) -> re.Pattern[str]:
@@ -52,7 +52,7 @@ def lines(name: str) -> list[str]:
 
 
 def version_only(patch: str | None) -> bool:
-    """True only when every added or removed line of the diff is a `"version"` line.
+    """True only when every added or removed line of the diff sets a `version`.
 
     A missing patch (GitHub omits it for large or binary files) is NOT version-only.
     """

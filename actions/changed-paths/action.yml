@@ -31,7 +31,7 @@ inputs:
       skips when every changed path matches one of its globs. BOTH conditions are required because a branch name is chosen by whoever
       opens the PR: a prefix alone would let anyone name a branch to skip CI. A glob written `version-only:<glob>` also requires that
       the file's diff changes nothing but `"version": ...` lines. A rule without an author is ignored (with a warning), never trusted.
-      Example: `release-please--@qnsc-automation[bot]=CHANGELOG.md,.release-please-manifest.json,version-only:**/package.json`.
+      Example: `release-please--@qnsc-automation[bot]=CHANGELOG.md,.release-please-manifest.json,version-only:**/package.json` (Python: `version-only:pyproject.toml`).
     required: false
     default: ''
   github-token:
