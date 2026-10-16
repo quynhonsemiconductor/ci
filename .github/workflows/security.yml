@@ -82,15 +82,11 @@ on:
         type: string
       combine:
         description: >
-          Run Gitleaks, osv-scanner and Semgrep as STEPS of ONE job ("Security scans") instead of three jobs of their own. Each is still
-          run even if an earlier one failed, and each keeps its own blocking input. Three runners become one per push.
-
-          OFF BY DEFAULT because it changes check names. The three jobs ("Secret scan (Gitleaks)", "SAST (Semgrep)", "Dependency CVE
-          scan (osv-scanner)") are skipped, and the ONE required check becomes "Security scans (Gitleaks, osv-scanner, Semgrep)". A
-          skipped required check counts as PASSING, so adopt this together with the ruleset change, in this order - ADD the new context
-          to the ruleset, merge the caller PR, REMOVE the three old contexts. Doing only the caller PR leaves the scans un-required.
+          DEPRECATED, IGNORED. The combined shape is the only shape: Gitleaks, osv-scanner and Semgrep always run as steps of ONE job,
+          "Security scans (Gitleaks, osv-scanner, Semgrep)". The input is still accepted so a caller that passes `combine: true` keeps
+          working instead of dying at startup; delete it from callers, then delete it here.
         required: false
-        default: false
+        default: true
         type: boolean
       scan_container:
         description: >
@@ -147,77 +143,12 @@ jobs:
           image-ref: ${{ inputs.product }}-${{ inputs.image_target }}:scan
 
   # ───────────────────────────────────────────────────────────────────────
-  # 2. Semgrep — SAST (OSS, free). Replaces CodeQL (which needs GHAS).
-  #    Report-only by default (semgrep_blocking).
-  # ───────────────────────────────────────────────────────────────────────
-  semgrep:
-    name: SAST (Semgrep)
-    if: ${{ !inputs.combine }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: quynhonsemiconductor/ci/actions/scan-semgrep@v1
-        with:
-          config: ${{ inputs.semgrep_config }}
-          version: ${{ inputs.semgrep_version }}
-          blocking: ${{ inputs.semgrep_blocking }}
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 3. Gitleaks — committed-secret scan over full history (shared action).
-  # ───────────────────────────────────────────────────────────────────────
-  secrets:
-    name: Secret scan (Gitleaks)
-    if: ${{ !inputs.combine }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: quynhonsemiconductor/ci/actions/scan-secrets@v1
-        with:
-          fail-on-leak: 'true'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 4. osv-scanner — dependency CVE scan (OSS, free).
-  #    Replaces actions/dependency-review-action (needs GHAS on private repos).
-  # ───────────────────────────────────────────────────────────────────────
-  dependencies:
-    name: Dependency CVE scan (osv-scanner)
-    if: ${{ !inputs.combine }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: quynhonsemiconductor/ci/actions/scan-osv@v1
-        with:
-          version: ${{ inputs.osv_scanner_version }}
-          blocking: ${{ inputs.osv_blocking }}
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 5. The three source scans above as STEPS of one job (`combine: true`).
+  # 2. Gitleaks, osv-scanner and Semgrep as STEPS of one job.
   #    `!cancelled()` on every step after the first: one scanner failing must not hide what
   #    the others found. The job fails if ANY of them failed; the report-only ones never do.
   # ───────────────────────────────────────────────────────────────────────
   scans:
     name: Security scans (Gitleaks, osv-scanner, Semgrep)
-    if: ${{ inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

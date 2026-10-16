@@ -716,19 +716,17 @@ Auto-detects Slack vs Discord by webhook URL pattern.
 
 ## Fewer jobs per push
 
-Free-plan runners cap at 20 concurrent jobs, and one push to a product used to start about 20. Three opt-in switches, all OFF by default
-so `@v1` callers see no change until they ask:
+Free-plan runners cap at 20 concurrent jobs, and one push to a product used to start about 20. The shared workflows therefore have ONE shape:
 
-| Switch | Jobs | New required check name |
+| Workflow | Job | Check name |
 |---|---|---|
-| `security.yml` `combine: true` | Gitleaks + osv-scanner + Semgrep: 3 -> 1 | `Security scans (Gitleaks, osv-scanner, Semgrep)` |
-| `actions-security.yml` `combine: true` | actionlint + zizmor: 2 -> 1 | `Workflow security (actionlint, zizmor)` |
-| `security.yml` `scan_container: false` + `actions/scan-image` in the product's Docker build job | Trivy job and its second image build: 1 -> 0 | none: the scan runs inside the product's already-required build job |
-| PR-title job calls `actions/pr-labels` (and the labeler workflow goes) | PR title + labeler: 2 -> 1 | unchanged (`PR title (conventional commits)`) |
+| `security.yml` | Gitleaks + osv-scanner + Semgrep as steps of one job | `Security scans (Gitleaks, osv-scanner, Semgrep)` |
+| `actions-security.yml` | actionlint + zizmor as steps of one job | `Workflow security (actionlint, zizmor)` |
+| `security.yml` with `scan_container: true` | Trivy, built from scratch (the weekly scan) | `Container CVE scan (Trivy)` |
 
-**A skipped required check counts as passing.** `combine: true` skips the old jobs, so a ruleset that still requires only the old names
-passes while the scans run un-required. Cut over in this order: ADD the new context to the ruleset, merge the caller PR, REMOVE the old
-contexts. Any open PR must then update from main (the strict up-to-date rule already forces that).
+A product that already builds its image sets `scan_container: ${{ github.event_name == 'schedule' }}` and runs `actions/scan-image` right after that build, so the PR scan costs no extra job or image build while the scheduled scan still catches new CVEs in an unchanged image. A product's PR-title job can call `actions/pr-labels` instead of running the labeler workflow as a second job.
+
+The `combine` input on both workflows is deprecated and ignored (it is still accepted so callers that pass it do not fail at startup).
 
 ## Versioning
 
