@@ -402,3 +402,4 @@
 * **ci:** correct invalid pinned action SHAs ([fc8620b](https://github.com/QNSC-VN/qnsc-ci/commit/fc8620b1ef7e78a3d48c9441fb04b3220e52c334))
 * **run-db-migration:** update stale qnsc-gitops ref to qnsc-ci ([c909836](https://github.com/QNSC-VN/qnsc-ci/commit/c909836996867a75819b71dc7a1d9b4c96cb21c6))
 * **scan-secrets:** call the Gitleaks CLI directly instead of gitleaks-action ([93c1d62](https://github.com/QNSC-VN/qnsc-ci/commit/93c1d62064a9b0aaa041c12fc05bd029dfe14bc8))
+# c
