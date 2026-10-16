@@ -102,5 +102,6 @@ def test_a_python_release_pr_is_version_only_in_pyproject(tmp_path):
     rule = f"release-please--@{BOT}=CHANGELOG.md,.release-please-manifest.json,version-only:pyproject.toml"
     files = [("CHANGELOG.md", "+x"), ("pyproject.toml", TOML_PATCH)]
     assert run(files, skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=false"
+    (tmp_path / "out").unlink()  # run() appends to one output file
     dep = '@@ -9,3 +9,3 @@\n-dependencies = ["a"]\n+dependencies = ["a", "evil"]\n'
     assert run([("pyproject.toml", TOML_PATCH + dep)], skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=true"
