@@ -46,6 +46,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`scan-secrets`](actions/scan-secrets/action.yml) | Gitleaks secret scan with SARIF upload to GitHub Security tab |
+| [`changed-paths`](actions/changed-paths/action.yml) | Decide from a PR's changed files whether a workflow's heavy jobs need to run (`run=true|false`). Fails open: only "every file is on the ignore list" skips. Gate on its output, never on bare `allow-skipped` |
 | [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 | [`pr-title-conventional-commits`](actions/pr-title-conventional-commits/action.yml) | Validate a PR title against Conventional Commits — Release Please derives the CHANGELOG from it |
 | [`pr-size`](actions/pr-size/action.yml) | Label a PR `size/XS…XXL` by lines of CODE (tests, docs, lockfiles and generated files reported, not counted) and comment above 1,000 — advisory unless `fail-above` is set |
