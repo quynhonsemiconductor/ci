@@ -243,7 +243,7 @@ jobs:
 
       - name: Upload D1 backup (artifact)
         if: inputs.run_d1_migrations && inputs.backup_before_migrate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: d1-backup-${{ inputs.product }}-${{ needs.context.outputs.asset_tag }}
           path: ${{ format('{0}/{1}', inputs.working_directory, env.D1_BACKUP_FILE) }}
