@@ -63,3 +63,4 @@ jobs:
       # (release.yml's tag-push checkout, web-deploy.yml's cache-poisoning) are
       # deliberate, documented, accepted risk, not backlog.
       blocking: true
+      combine: true # actionlint + zizmor as ONE job; the required check is `actions-security / Workflow security (actionlint, zizmor)`
