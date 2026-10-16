@@ -1,0 +1,76 @@
+name: Changed paths (should this CI run?)
+description: >
+  Decide, from the files a pull request changes, whether a workflow's heavy jobs need to run. Output `run` is `true` or `false`.
+
+  WHY. A web-only change started the whole backend pipeline (six jobs, a Postgres, a Docker build) and the reverse. Free-plan runners cap
+  at 20 concurrent jobs and one product push started ~20.
+
+  THE DIRECTION OF EVERY DOUBT IS `true`. This skips CI, and a skipped required check counts as PASSING, so it fails open on purpose:
+    * any event but `pull_request` (a push to main ALWAYS runs: deploys wait for that run);
+    * the files cannot be listed (API error, no token), or the list is empty, or it hit the API's 3,000-file ceiling;
+    * ANY changed file that matches none of `ignore`.
+  Only "every changed file is on the ignore list" turns `run` off. Use the SAME list the product's deploy workflow keeps in `paths-ignore`:
+  that list already is the org's definition of "cannot affect this artifact".
+
+  THE CALLER'S GATE must not simply accept skipped jobs. Gate on `needs.changes.outputs.run`: when `true`, assert every job `success` (no
+  `allow-skipped`, so a renamed or removed job still fails loudly); when not `true`, assert only that this job succeeded. See the README.
+
+  Needs `pull-requests: read` (and `contents: read`) on the calling job. No checkout.
+
+inputs:
+  ignore:
+    description: >
+      Newline-separated globs. `**` crosses directories, `*` and `?` do not cross `/`. When EVERY changed file matches one, `run` is `false`.
+      Empty means nothing is ignorable, so `run` is always `true`.
+    required: false
+    default: ''
+  skip-heads:
+    description: >
+      Newline-separated rules `<head-branch-prefix>@<author>[,<author>...]=<glob>[,<glob>...]`. A rule applies only when the head branch
+      starts with the prefix AND the pull request's author (`github.event.pull_request.user.login`) is one of the listed logins, and it
+      skips when every changed path matches one of its globs. BOTH conditions are required because a branch name is chosen by whoever
+      opens the PR: a prefix alone would let anyone name a branch to skip CI. A glob written `version-only:<glob>` also requires that
+      the file's diff changes nothing but `"version": ...` lines. A rule without an author is ignored (with a warning), never trusted.
+      Example: `release-please--@qnsc-automation[bot]=CHANGELOG.md,.release-please-manifest.json,version-only:**/package.json` (Python: `version-only:pyproject.toml`).
+    required: false
+    default: ''
+  github-token:
+    description: "Token with `pull-requests: read` on the caller's repository."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  run:
+    description: '`true` if the heavy jobs should run, `false` if every change is on an ignore list.'
+    value: ${{ steps.decide.outputs.run }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide
+      id: decide
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        EVENT: ${{ github.event_name }}
+        PR: ${{ github.event.pull_request.number }}
+        HEAD_REF: ${{ github.head_ref }}
+        AUTHOR: ${{ github.event.pull_request.user.login }}
+        REPO: ${{ github.repository }}
+        IGNORE: ${{ inputs.ignore }}
+        SKIP_HEADS: ${{ inputs.skip-heads }}
+      run: |
+        set -uo pipefail
+        emit() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "changed-paths: run=$1 ($2)"; }
+
+        if [ "$EVENT" != "pull_request" ]; then emit true "event is $EVENT, not pull_request"; exit 0; fi
+
+        # One JSON object per changed path, WITH its diff (the diff is what lets a rule check "only the version field changed").
+        # Written to a file and read by the script by path: a large pull request carries megabytes of diff, and passing that through
+        # an environment variable or argv fails with E2BIG ("Argument list too long") and would turn both CI gates red.
+        list_file="$RUNNER_TEMP/changed-paths-files.jsonl"
+        if ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
+          emit true "could not list the changed files"; exit 0
+        fi
+
+        FILES_PATH="$list_file" python3 "$GITHUB_ACTION_PATH/changed_paths.py"
