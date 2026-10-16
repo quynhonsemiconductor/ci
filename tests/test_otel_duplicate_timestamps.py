@@ -51,7 +51,8 @@ FIELDS = '\t{"kind": "exporter", "data_type": "metrics", "name": "debug"}'
 
 
 def block(points: list[tuple[str, str, str]], *, service="svc", instance="i1", scope="qnsc dev",
-          metric="jobs.total", label_key="route", header=True) -> str:
+          metric="jobs.total", label_key="route", header=True, namespace=None, unit="",
+          datatype="Sum", monotonic=True) -> str:
     """A debug-exporter record. points: (timestamp, label value, value line text)."""
     lines = []
     if header:
@@ -62,6 +63,7 @@ def block(points: list[tuple[str, str, str]], *, service="svc", instance="i1", s
         "Resource attributes:",
         f"     -> service.name: Str({service})",
         f"     -> service.instance.id: Str({instance})",
+        *([f"     -> service.namespace: Str({namespace})"] if namespace else []),
         "ScopeMetrics #0",
         "ScopeMetrics SchemaURL: ",
         f"InstrumentationScope {scope}",
@@ -69,9 +71,9 @@ def block(points: list[tuple[str, str, str]], *, service="svc", instance="i1", s
         "Descriptor:",
         f"     -> Name: {metric}",
         "     -> Description: ",
-        "     -> Unit: ",
-        "     -> DataType: Sum",
-        "     -> IsMonotonic: true",
+        f"     -> Unit: {unit}",
+        f"     -> DataType: {datatype}",
+        *(["     -> IsMonotonic: " + ("true" if monotonic else "false")] if datatype == "Sum" else []),
         "     -> AggregationTemporality: Cumulative",
     ]
     for i, (ts, label, value) in enumerate(points):
@@ -102,8 +104,13 @@ def test_real_capture_with_known_duplicates():
 
     (conflict,) = analysis.conflicts()
     assert conflict.resource == "rova-api / 11111111-aaaa"
-    assert conflict.metric == "http_server_requests"
-    assert dict(conflict.key[2]) == {"method": "GET", "route": "/v1/x"}
+    assert conflict.metric == "http_server_requests_total"  # monotonic sum: the Prometheus name
+    assert dict(conflict.key[2]) == {
+        "method": "GET",
+        "route": "/v1/x",
+        "job": "rova/rova-api",  # service.namespace/service.name of the capture
+        "instance": "11111111-aaaa",
+    }
     assert sorted(o.value for o in conflict.observations) == ["Value: 5.0", "Value: 6.0", "Value: 7.0", "Value: 9.0"]
     assert conflict.tags() == ["across-batches", "same-task", "one-scope", "RESOURCE-ATTRS-DIFFER"]
     # the same series written once is not reported
@@ -114,7 +121,7 @@ def test_real_capture_report_names_what_differs():
     text = (FIXTURES / "otel_debug_real_v0.43.3_duplicates.txt").read_text()
     report = tool.render(analyse(cloudwatch_events(text)), top=5, examples=3)
     assert "rova-api / 11111111-aaaa" in report
-    assert "http_server_requests" in report
+    assert "http_server_requests_total" in report
     assert "RESOURCE-ATTRS-DIFFER" in report
     assert "resource attributes that differ: cloud.provider" in report
     assert "value 9.0" in report
@@ -235,6 +242,99 @@ def test_other_services_and_instances_do_not_collide():
     assert not a.conflicts()
 
 
+# ── the OTLP -> Prometheus translation ───────────────────────────────────────────────────────────────────
+
+
+def test_datapoints_that_differ_only_in_a_job_attribute_collapse_and_collide():
+    """The bug that was in production: JobMetrics records an attribute named `job`. Grafana's OTLP endpoint sets
+    `job` from service.namespace/service.name, replacing it, so every cron job of a worker became ONE series and
+    several values arrived for one timestamp. On the OTLP attributes alone the two points are distinct."""
+    a = one_stream(block([(T0, "Str(cleanup)", "Value: 3"), (T0, "Str(reports)", "Value: 8")], label_key="job",
+                         service="rova-worker", metric="jobs.runs"))
+    (conflict,) = a.conflicts()
+    assert conflict.metric == "jobs_runs_total"
+    assert dict(conflict.key[2]) == {"job": "rova-worker", "instance": "i1"}  # the `job` attribute is gone
+    assert "ATTRS-COLLAPSE-IN-TRANSLATION" in conflict.tags()
+    assert "OVERRIDDEN-BY-RESOURCE(job)" in conflict.tags()
+    assert sorted(o.value for o in conflict.observations) == ["Value: 3.0", "Value: 8.0"]
+    report = tool.render(a, 5, 5)
+    assert "OVERRIDDEN-BY-RESOURCE(job)" in report
+    assert "OTLP attributes: job=cleanup" in report and "OTLP attributes: job=reports" in report
+
+
+def test_the_same_two_points_under_a_non_reserved_attribute_name_do_not_collide():
+    a = one_stream(block([(T0, "Str(cleanup)", "Value: 3"), (T0, "Str(reports)", "Value: 8")], label_key="task",
+                         service="rova-worker", metric="jobs.runs"))
+    assert not a.conflicts()  # this is the fix: rename the attribute
+
+
+def test_an_instance_attribute_is_overridden_by_service_instance_id():
+    a = one_stream(block([(T0, "Str(a)", "Value: 1"), (T0, "Str(b)", "Value: 2")], label_key="instance"))
+    (conflict,) = a.conflicts()
+    assert "OVERRIDDEN-BY-RESOURCE(instance)" in conflict.tags()
+    assert dict(conflict.key[2])["instance"] == "i1"
+
+
+def test_an_attribute_called_job_with_the_resources_own_value_is_not_blamed():
+    a = one_stream(block([(T0, "Str(svc)", "Value: 1"), (T0, "Str(svc)", "Value: 2")], label_key="job"))
+    (conflict,) = a.conflicts()  # still a duplicate, but not an override: the values were the same
+    assert not any(t.startswith("OVERRIDDEN") for t in conflict.tags())
+
+
+def test_job_is_namespace_slash_name_when_there_is_a_namespace():
+    obs = next(iter(one_stream(block([(T0, "Str(x)", "Value: 1")], namespace="qnsc", service="rova-api")).groups.values()))[0]
+    assert dict(tool.prom_labels(obs))["job"] == "qnsc/rova-api"
+    # and a service.namespace separates two services of the same name
+    a = one_stream(block([(T0, "Str(x)", "Value: 1")], namespace="qnsc"), block([(T0, "Str(x)", "Value: 2")], namespace="other"))
+    assert not a.conflicts()
+    b = one_stream(block([(T0, "Str(x)", "Value: 1")]), block([(T0, "Str(x)", "Value: 2")], namespace="qnsc"))
+    assert not b.conflicts()  # "svc" and "qnsc/svc" are two jobs
+
+
+@pytest.mark.parametrize(
+    "metric, unit, datatype, monotonic, expected",
+    [
+        ("http.server.duration", "s", "Histogram", False, "http_server_duration_seconds"),
+        ("http.server.duration.seconds", "s", "Histogram", False, "http_server_duration_seconds"),  # not doubled
+        ("process.memory", "By", "Gauge", False, "process_memory_bytes"),
+        ("cache.hit.ratio", "1", "Gauge", False, "cache_hit_ratio"),
+        ("cpu.utilization", "1", "Gauge", False, "cpu_utilization_ratio"),
+        ("jobs.runs", "", "Sum", True, "jobs_runs_total"),
+        ("jobs.runs.total", "", "Sum", True, "jobs_runs_total"),  # not doubled
+        ("queue.depth", "", "Sum", False, "queue_depth"),  # an up-down counter is a gauge
+        ("http.requests", "{request}", "Sum", True, "http_requests_total"),  # annotation units are dropped
+        ("bytes.sent", "By", "Sum", True, "bytes_sent_bytes_total"),
+        ("disk.io", "By/s", "Gauge", False, "disk_io_bytes_per_second"),
+        ("a..b--c", "", "Gauge", False, "a_b_c"),
+        ("9lives", "", "Gauge", False, "_9lives"),
+    ],
+)
+def test_metric_names_follow_the_prometheus_translation(metric, unit, datatype, monotonic, expected):
+    obs = next(iter(one_stream(block([(T0, "Str(x)", "Value: 1")], metric=metric, unit=unit, datatype=datatype,
+                                     monotonic=monotonic)).groups.values()))[0]
+    assert tool.prom_metric_name(obs) == expected
+
+
+@pytest.mark.parametrize(
+    "attr, expected",
+    [("http.method", "http_method"), ("9x", "key_9x"), ("_x", "key_x"), ("__name__", "__name__"), ("a-b c", "a_b_c")],
+)
+def test_label_names_follow_the_prometheus_translation(attr, expected):
+    assert tool.prom_name(attr) == expected
+
+
+def test_two_attributes_that_sanitise_to_one_label_are_joined():
+    obs = next(iter(one_stream(block([(T0, "Str(x)", "Value: 1")], label_key="a.b")).groups.values()))[0]
+    obs = tool.dataclasses.replace(obs, attrs=(("a.b", "1"), ("a_b", "2")))
+    assert dict(tool.prom_labels(obs))["a_b"] == "1;2"
+
+
+def test_a_unit_changes_the_name_so_two_units_of_one_metric_do_not_collide():
+    a = one_stream(block([(T0, "Str(x)", "Value: 1")], metric="m", unit="s", datatype="Gauge", monotonic=False),
+                   block([(T0, "Str(x)", "Value: 2")], metric="m", unit="ms", datatype="Gauge", monotonic=False))
+    assert not a.conflicts()
+
+
 # ── reading the dump ──────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -331,7 +431,7 @@ def test_json_output_is_machine_readable(tmp_path):
     data = json.loads(done.stdout)
     assert data["datapoints"] == 5 and len(data["conflicts"]) == 1
     assert data["conflicts"][0]["metric"] == "jobs_total"
-    assert data["conflicts"][0]["labels"] == {"route": "/v1/x"}
+    assert data["conflicts"][0]["labels"] == {"route": "/v1/x", "job": "svc-a", "instance": "inst-1"}
     assert sorted(o["value"] for o in data["conflicts"][0]["observations"]) == ["Value: 5.0", "Value: 9.0"]
 
 
