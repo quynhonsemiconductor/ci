@@ -75,3 +75,79 @@ jobs:
       - run: cd gitops && ./scripts/render.sh
 
       - run: ./ci/scripts/platform_conformance.py --root .
+
+  # Red every day from 2026-10-14 to 2026-10-16 without anyone acting: a red scheduled run only emails whoever last touched
+  # the cron line. One open issue, updated on every red scheduled run and closed by the next green one (the pattern of infra's
+  # drift-detection.yml). A Teams card is added when the repository has TEAMS_ALERTS_WEBHOOK_URL (it does not today).
+  alert:
+    name: Alert on platform-conformance failure
+    needs: conformance
+    if: ${{ always() && github.event_name == 'schedule' && needs.conformance.result != 'success' && needs.conformance.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the platform-conformance issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create platform-conformance -R "$REPO" --color D93F0B --description "Daily platform conformance did not pass" 2>/dev/null || true
+          body="A cross-repository contract is broken, or the check could not run. The findings are in the run log: ${RUN_URL}. This issue closes itself on the next green scheduled run."
+          n="$(gh issue list -R "$REPO" --label platform-conformance --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" -R "$REPO" --body "$body"
+          else
+            gh issue create -R "$REPO" --title "Platform conformance is failing" --label platform-conformance --body "$body"
+          fi
+
+      - name: Post to the platform Teams channel
+        env:
+          WEBHOOK: ${{ secrets.TEAMS_ALERTS_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then echo "::notice::TEAMS_ALERTS_WEBHOOK_URL is not set in this repository; only the GitHub issue was raised"; exit 0; fi
+          payload="$(python3 - <<'PY'
+          import json, os
+          card = {
+              "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+              "type": "AdaptiveCard",
+              "version": "1.4",
+              "body": [
+                  {"type": "TextBlock", "size": "Medium", "weight": "Bolder", "wrap": True,
+                   "text": "Platform conformance failed: a cross-repository contract is broken"},
+              ],
+              "actions": [{"type": "Action.OpenUrl", "title": "Open the run", "url": os.environ["RUN_URL"]}],
+          }
+          print(json.dumps({"type": "message",
+                            "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
+                                             "contentUrl": None, "content": card}]}))
+          PY
+          )"
+          curl -fsS --max-time 20 -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK" >/dev/null \
+            || echo "::warning::Teams post failed; see the GitHub issue"
+
+  resolve:
+    name: Close the platform-conformance issue
+    needs: conformance
+    if: ${{ always() && github.event_name == 'schedule' && needs.conformance.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Close open platform-conformance issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list -R "$REPO" --label platform-conformance --state open --json number --jq '.[].number'); do
+            gh issue close "$n" -R "$REPO" --comment "Every contract held in ${RUN_URL}. Closing; it reopens as a new issue if one breaks."
+          done
