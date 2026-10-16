@@ -46,6 +46,12 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`scan-secrets`](actions/scan-secrets/action.yml) | Gitleaks secret scan with SARIF upload to GitHub Security tab |
+| [`scan-osv`](actions/scan-osv/action.yml) | osv-scanner dependency CVE scan (report-only unless `blocking`) |
+| [`scan-semgrep`](actions/scan-semgrep/action.yml) | Semgrep SAST through the official image (report-only unless `blocking`) |
+| [`scan-image`](actions/scan-image/action.yml) | Trivy over a local image: CRITICAL blocks, HIGH reported. Run it right after the product's own Docker build (`load: true`) instead of building a second time in the security workflow |
+| [`lint-workflows`](actions/lint-workflows/action.yml) | actionlint over the repo (always blocks) |
+| [`audit-workflows`](actions/audit-workflows/action.yml) | zizmor over the repo (report-only unless `blocking`) |
+| [`pr-labels`](actions/pr-labels/action.yml) | `area/*` and `size/*` labels as steps, so the PR-title job can label in the same runner |
 | [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 | [`pr-title-conventional-commits`](actions/pr-title-conventional-commits/action.yml) | Validate a PR title against Conventional Commits — Release Please derives the CHANGELOG from it |
 | [`pr-size`](actions/pr-size/action.yml) | Label a PR `size/XS…XXL` by lines of CODE (tests, docs, lockfiles and generated files reported, not counted) and comment above 1,000 — advisory unless `fail-above` is set |

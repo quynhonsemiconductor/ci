@@ -1,0 +1,55 @@
+name: Semgrep SAST scan
+description: >
+  Semgrep (OSS) over the checked-out repository, through the official Docker image (hermetic; avoids the pip/pkg_resources breakage
+  under Python 3.12). Registry packs (p/*) are fetched anonymously, telemetry is off. REPORT-ONLY unless `blocking` is true.
+
+  Lifted out of the reusable security.yml so the same step can run as a job of its own (legacy shape) or beside the other source
+  scans in ONE job (`combine: true`). The caller needs `security-events: write` for the SARIF upload; without it that step no-ops.
+
+inputs:
+  config:
+    description: >
+      Space-separated Semgrep rulesets. Registry packs (p/*) are free and need no login.
+    required: false
+    default: 'p/default p/typescript p/nodejs p/owasp-top-ten'
+  version:
+    description: Semgrep Docker image tag (semgrep/semgrep).
+    required: false
+    default: '1.97.0'
+  blocking:
+    description: 'Fail on findings (`--error`). Phased rollout: false (report-only) until the findings are triaged.'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Semgrep scan
+      shell: bash
+      env:
+        SEMGREP_VERSION: ${{ inputs.version }}
+        SEMGREP_CONFIG: ${{ inputs.config }}
+        SEMGREP_BLOCKING: ${{ inputs.blocking }}
+      run: |
+        set -euo pipefail
+        CONFIG_ARGS=""
+        for c in $SEMGREP_CONFIG; do CONFIG_ARGS="$CONFIG_ARGS --config=$c"; done
+        ERROR_FLAG=""
+        [ "${SEMGREP_BLOCKING}" = "true" ] && ERROR_FLAG="--error"
+        # Intentional word-splitting below: CONFIG_ARGS/ERROR_FLAG accumulate
+        # zero or more separate flags, so they must stay unquoted.
+        # shellcheck disable=SC2086
+        docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off \
+          "semgrep/semgrep:${SEMGREP_VERSION}" \
+          semgrep scan $CONFIG_ARGS $ERROR_FLAG --sarif --output=semgrep.sarif .
+        if [ "${SEMGREP_BLOCKING}" != "true" ]; then
+          echo "::notice::Semgrep report-only (set semgrep_blocking=true to enforce)"
+        fi
+
+    - name: Upload Semgrep SARIF (GHAS UI — advisory on free plan)
+      if: always()
+      continue-on-error: true # requires GitHub Advanced Security (free plan: no-op)
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
+      with:
+        sarif_file: semgrep.sarif
+        category: semgrep-sast

@@ -1,0 +1,35 @@
+name: Workflow lint (actionlint)
+description: >
+  actionlint over the checked-out repository: is every workflow VALID (schema, expression contexts, shell)?
+
+  A schema fault is invisible in the worst way: GitHub creates the run, fails it before any job starts, and the PR shows NO checks
+  rather than a red one. This ALWAYS blocks; there is nothing to triage in a workflow that cannot run.
+
+  Lifted out of the reusable actions-security.yml so it can run as a job of its own (legacy shape) or beside zizmor in ONE job
+  (`combine: true`). No checkout here: the caller checks out.
+
+runs:
+  using: composite
+  steps:
+    - name: Install actionlint
+      shell: bash
+      env:
+        VERSION: '1.7.12'
+        # Pinned alongside the version: the tarball is fetched from a release
+        # asset, so without this the step trusts whatever that URL serves.
+        SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      run: |
+        set -euo pipefail
+        file="actionlint_${VERSION}_linux_amd64.tar.gz"
+        curl -fsSL --retry 3 -o "$file" \
+          "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${file}"
+        echo "${SHA256}  ${file}" | sha256sum -c -
+        tar -xzf "$file" actionlint
+        sudo install -m 0755 actionlint /usr/local/bin/actionlint
+        actionlint --version
+
+    - name: actionlint
+      shell: bash
+      run: |
+        set -euo pipefail
+        actionlint -color

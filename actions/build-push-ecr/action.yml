@@ -173,6 +173,8 @@ runs:
         SCOPE:    ${{ inputs.cache-scope }}
         REGISTRY: ${{ inputs.ecr-registry }}
         IMAGE:    ${{ inputs.image-name }}
+        REF:      ${{ github.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         set -euo pipefail
         case "$BACKEND" in
@@ -188,6 +190,17 @@ runs:
             echo "::error::cache-backend must be registry, gha or none (got '$BACKEND')"
             exit 1 ;;
         esac
+        # WRITE THE CACHE ONLY FROM THE DEFAULT BRANCH. A GitHub Actions cache entry is readable only by the ref that wrote it
+        # (and pull requests based on it), never by main or a sibling: a cache written from a tag or a manual run on another branch
+        # is read by nobody and still counts against the 10 GB per-repository cap, evicting the entries main DOES read. For the
+        # registry backend the same write is a push of the whole cache to ECR. READ is unchanged everywhere.
+        DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+        if [ "$REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+          if [ -n "$TO" ]; then
+            echo "cache: read-only on ${REF} (writes only from refs/heads/${DEFAULT_BRANCH})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          TO=""
+        fi
         echo "from=$FROM" >> "$GITHUB_OUTPUT"
         echo "to=$TO"     >> "$GITHUB_OUTPUT"
         echo "cache backend: ${BACKEND}" >> "$GITHUB_STEP_SUMMARY"
