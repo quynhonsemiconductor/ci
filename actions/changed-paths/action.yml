@@ -26,9 +26,12 @@ inputs:
     default: ''
   skip-heads:
     description: >
-      Newline-separated `<head-branch-prefix>=<glob>[,<glob>...]` rules. When the PR's head branch starts with the prefix AND every changed
-      file matches one of that rule's globs, `run` is `false`, whatever `ignore` says. Example: `release-please--=**` (a release PR is
-      mechanical; the push to main it becomes runs everything) and `renovate/=.github/workflows/**` (an Actions-only dependency PR).
+      Newline-separated rules `<head-branch-prefix>@<author>[,<author>...]=<glob>[,<glob>...]`. A rule applies only when the head branch
+      starts with the prefix AND the pull request's author (`github.event.pull_request.user.login`) is one of the listed logins, and it
+      skips when every changed path matches one of its globs. BOTH conditions are required because a branch name is chosen by whoever
+      opens the PR: a prefix alone would let anyone name a branch to skip CI. A glob written `version-only:<glob>` also requires that
+      the file's diff changes nothing but `"version": ...` lines. A rule without an author is ignored (with a warning), never trusted.
+      Example: `release-please--@qnsc-automation[bot]=CHANGELOG.md,.release-please-manifest.json,version-only:**/package.json`.
     required: false
     default: ''
   github-token:
@@ -52,6 +55,7 @@ runs:
         EVENT: ${{ github.event_name }}
         PR: ${{ github.event.pull_request.number }}
         HEAD_REF: ${{ github.head_ref }}
+        AUTHOR: ${{ github.event.pull_request.user.login }}
         REPO: ${{ github.repository }}
         IGNORE: ${{ inputs.ignore }}
         SKIP_HEADS: ${{ inputs.skip-heads }}
@@ -61,7 +65,8 @@ runs:
 
         if [ "$EVENT" != "pull_request" ]; then emit true "event is $EVENT, not pull_request"; exit 0; fi
 
-        files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)' 2>/dev/null)" || {
+        # One JSON object per changed path, with its diff (the diff is what lets a rule check "only the version field changed").
+        files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' 2>/dev/null)" || {
           emit true "could not list the changed files"; exit 0; }
 
-        FILES="$files" python3 "$GITHUB_ACTION_PATH/changed_paths.py"
+        FILES_JSON="$files" python3 "$GITHUB_ACTION_PATH/changed_paths.py"
