@@ -20,7 +20,7 @@
 #       uses: quynhonsemiconductor/ci/.github/workflows/actions-security.yml@v1
 #
 # Then point the ruleset's required status check at this job's name —
-# "Actions security (zizmor)" — instead of `Analyze (actions)` / `CodeQL`.
+# "Workflow security (actionlint, zizmor)" — instead of `Analyze (actions)` / `CodeQL`.
 # =============================================================================
 name: Reusable · Actions Security
 
@@ -64,14 +64,11 @@ on:
         type: boolean
       combine:
         description: >
-          Run actionlint and zizmor as STEPS of ONE job ("Workflow security (actionlint, zizmor)") instead of two jobs. Both still run
-          even if the first fails, and actionlint still always blocks.
-
-          OFF BY DEFAULT because it changes check names. "Workflow lint (actionlint)" and "Actions security (zizmor)" are skipped and the
-          ONE required check becomes "Workflow security (actionlint, zizmor)". A skipped required check counts as PASSING, so adopt this
-          with the ruleset change, in this order - ADD the new context, merge the caller PR, REMOVE the two old contexts.
+          DEPRECATED, IGNORED. The combined shape is the only shape: actionlint and zizmor always run as steps of ONE job, "Workflow
+          security (actionlint, zizmor)". The input is still accepted so a caller that passes `combine: true` keeps working instead of
+          dying at startup; delete it from callers, then delete it here.
         required: false
-        default: false
+        default: true
         type: boolean
 
 #
@@ -92,54 +89,18 @@ on:
 # actionlint ALWAYS blocks, deliberately, and takes no `blocking` input. zizmor's
 # phased rollout makes sense for findings that need triage; an invalid workflow
 # has nothing to triage — it cannot run at all, so "report-only" would mean
-# merging something already known to be broken. It is a separate JOB rather than
-# a step so it reports as its own check and can be required independently, and so
-# a zizmor failure cannot skip it.
+# merging something already known to be broken. It runs as the FIRST step of the one job, and
+# zizmor runs after it even if it failed (`!cancelled()`), so neither can hide the other's findings.
 #
 
 permissions:
   contents: read
 
 jobs:
-  actionlint:
-    name: Workflow lint (actionlint)
-    if: ${{ !inputs.combine }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: quynhonsemiconductor/ci/actions/lint-workflows@v1
-
-  zizmor:
-    name: Actions security (zizmor)
-    if: ${{ !inputs.combine }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: quynhonsemiconductor/ci/actions/audit-workflows@v1
-        with:
-          path: ${{ inputs.path }}
-          min-severity: ${{ inputs.min_severity }}
-          min-confidence: ${{ inputs.min_confidence }}
-          blocking: ${{ inputs.blocking }}
-
-  # Both as STEPS of one job (`combine: true`). zizmor runs even if actionlint failed (`!cancelled()`), so one
+  # actionlint then zizmor as STEPS of one job. zizmor runs even if actionlint failed (`!cancelled()`), so one
   # failure never hides the other's findings; the job fails if either did.
   workflow-security:
     name: Workflow security (actionlint, zizmor)
-    if: ${{ inputs.combine }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
