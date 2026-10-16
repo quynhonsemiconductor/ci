@@ -65,8 +65,12 @@ runs:
 
         if [ "$EVENT" != "pull_request" ]; then emit true "event is $EVENT, not pull_request"; exit 0; fi
 
-        # One JSON object per changed path, with its diff (the diff is what lets a rule check "only the version field changed").
-        files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' 2>/dev/null)" || {
-          emit true "could not list the changed files"; exit 0; }
+        # One JSON object per changed path, WITH its diff (the diff is what lets a rule check "only the version field changed").
+        # Written to a file and read by the script by path: a large pull request carries megabytes of diff, and passing that through
+        # an environment variable or argv fails with E2BIG ("Argument list too long") and would turn both CI gates red.
+        list_file="$RUNNER_TEMP/changed-paths-files.jsonl"
+        if ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
+          emit true "could not list the changed files"; exit 0
+        fi
 
-        FILES_JSON="$files" python3 "$GITHUB_ACTION_PATH/changed_paths.py"
+        FILES_PATH="$list_file" python3 "$GITHUB_ACTION_PATH/changed_paths.py"

@@ -3,7 +3,9 @@
 Fails OPEN: every doubt is `run=true`. Only "every changed file is provably ignorable" turns it off.
 
 Environment (set by action.yml):
-  FILES_JSON   one JSON object per line: {"filename": ..., "previous_filename": ..., "patch": ...}
+  FILES_PATH   path of a file holding one JSON object per line: {"filename": ..., "previous_filename": ..., "patch": ...}.
+               A FILE, never an environment variable or argv: a big pull request (a lockfile, a Renovate bump) carries
+               megabytes of diff, and Linux caps one env string at 128 KB and all of env+argv at ~2 MB (E2BIG).
   IGNORE       newline-separated globs; when EVERY changed file matches one, run=false
   SKIP_HEADS   newline-separated rules `<head-branch-prefix>@<author>[,<author>...]=<glob>[,<glob>...]`
                A rule applies only when the head branch starts with the prefix AND the pull request's author
@@ -80,7 +82,12 @@ def main() -> None:
         print(f"changed-paths: run={value} ({why})")
         sys.exit(0)
 
-    entries = parse_files(os.environ.get("FILES_JSON", ""))
+    path = os.environ.get("FILES_PATH", "")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            entries = parse_files(fh.read())
+    except (OSError, ValueError) as exc:  # unreadable or malformed list: do not guess
+        emit("true", f"could not read the changed-file list ({exc.__class__.__name__})")
     if not entries:
         emit("true", "no changed files listed")
     if len(entries) >= 3000:
@@ -122,4 +129,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # a bug here must not take both CI gates down: run everything, loudly
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning::changed-paths crashed ({exc.__class__.__name__}); running everything")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+            fh.write("run=true\n")

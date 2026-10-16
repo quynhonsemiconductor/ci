@@ -25,7 +25,9 @@ def run(files, ignore="", skip="", head="feat/x", author="someone", tmp_path=Non
     for f in files:
         name, patch = (f, None) if isinstance(f, str) else f
         rows.append(json.dumps({"filename": name, "previous_filename": None, "patch": patch}))
-    env = dict(os.environ, FILES_JSON="\n".join(rows), IGNORE=ignore, SKIP_HEADS=skip, HEAD_REF=head, AUTHOR=author,
+    listing = tmp_path / "files.jsonl"
+    listing.write_text("\n".join(rows))
+    env = dict(os.environ, FILES_PATH=str(listing), IGNORE=ignore, SKIP_HEADS=skip, HEAD_REF=head, AUTHOR=author,
                GITHUB_OUTPUT=str(out))
     subprocess.run([sys.executable, str(SCRIPT)], env=env, check=True, capture_output=True)
     return out.read_text().strip()
@@ -48,15 +50,43 @@ def test_no_ignore_list_never_skips(tmp_path):
     assert run(["docs/a.md"], ignore="", tmp_path=tmp_path) == "run=true"
 
 
+BIG_PATCH = "@@ -1,2 +1,2 @@\n" + "-old line of a lockfile entry\n+new line of a lockfile entry\n" * 60  # ~3.5 KB
+
+
 def test_the_3000_file_ceiling_runs_everything(tmp_path):
-    files = [f"docs/{i}.md" for i in range(3000)]
+    files = [(f"docs/{i}.md", BIG_PATCH) for i in range(3000)]  # ~10 MB of diff, far past ARG_MAX and the 128 KB env-string cap
     assert run(files, ignore=WEB_ONLY_IGNORES, tmp_path=tmp_path) == "run=true"
+
+
+def test_a_huge_but_ignorable_listing_is_read_from_the_file(tmp_path):
+    """The real regression: the list must travel by FILE. 2,999 ignorable files with ~3.5 KB diffs each (~10 MB) would crash with
+    E2BIG if the action passed them through the environment or argv, and here must be decided normally."""
+    files = [(f"docs/{i}.md", BIG_PATCH) for i in range(2999)]
+    assert run(files, ignore=WEB_ONLY_IGNORES, tmp_path=tmp_path) == "run=false"
+
+
+def test_an_unreadable_listing_runs_everything(tmp_path):
+    out = tmp_path / "out"
+    env = dict(os.environ, FILES_PATH=str(tmp_path / "missing.jsonl"), IGNORE=WEB_ONLY_IGNORES, SKIP_HEADS="", HEAD_REF="x",
+               AUTHOR="x", GITHUB_OUTPUT=str(out))
+    subprocess.run([sys.executable, str(SCRIPT)], env=env, check=True, capture_output=True)
+    assert out.read_text().strip() == "run=true"
+
+
+def test_a_malformed_listing_runs_everything(tmp_path):
+    out = tmp_path / "out"
+    (tmp_path / "bad.jsonl").write_text("{not json")
+    env = dict(os.environ, FILES_PATH=str(tmp_path / "bad.jsonl"), IGNORE=WEB_ONLY_IGNORES, SKIP_HEADS="", HEAD_REF="x",
+               AUTHOR="x", GITHUB_OUTPUT=str(out))
+    subprocess.run([sys.executable, str(SCRIPT)], env=env, check=True, capture_output=True)
+    assert out.read_text().strip() == "run=true"
 
 
 def test_a_rename_needs_both_paths_ignorable(tmp_path):
     out = tmp_path / "out"
     row = json.dumps({"filename": "docs/new.md", "previous_filename": "apps/api/old.ts", "patch": None})
-    env = dict(os.environ, FILES_JSON=row, IGNORE=WEB_ONLY_IGNORES, SKIP_HEADS="", HEAD_REF="x", AUTHOR="x", GITHUB_OUTPUT=str(out))
+    (tmp_path / "files.jsonl").write_text(row)
+    env = dict(os.environ, FILES_PATH=str(tmp_path / "files.jsonl"), IGNORE=WEB_ONLY_IGNORES, SKIP_HEADS="", HEAD_REF="x", AUTHOR="x", GITHUB_OUTPUT=str(out))
     subprocess.run([sys.executable, str(SCRIPT)], env=env, check=True, capture_output=True)
     assert out.read_text().strip() == "run=true"
 
