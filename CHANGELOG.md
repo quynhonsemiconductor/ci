@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.22.0](https://github.com/quynhonsemiconductor/ci/compare/v1.21.0...v1.22.0) (2026-10-16)
+
+
+### Features
+
+* **actions:** add fetch-openapi-base-spec ([#190](https://github.com/quynhonsemiconductor/ci/issues/190)) ([dc0f170](https://github.com/quynhonsemiconductor/ci/commit/dc0f170016d10fe2b9cf9e5294acae37f7fb2784))
+* **backend-deploy:** multi_arch: build amd64 and arm64 natively and merge one manifest ([#195](https://github.com/quynhonsemiconductor/ci/issues/195)) ([7ebbc5a](https://github.com/quynhonsemiconductor/ci/commit/7ebbc5a4812e4c9746fdbe99015002d74c77b1df))
+* **changed-paths:** skip a workflow's heavy jobs when every changed file is ignorable ([#211](https://github.com/quynhonsemiconductor/ci/issues/211)) ([f79b879](https://github.com/quynhonsemiconductor/ci/commit/f79b87923204cecf42c8de8fbc67d24629fc71de))
+* **code-review:** spend the model quota only on reviews that can finish ([#175](https://github.com/quynhonsemiconductor/ci/issues/175)) ([c5e36f6](https://github.com/quynhonsemiconductor/ci/commit/c5e36f6165365eaa4d1886b0104ea955b8280e34))
+* **destructive-guard:** a composite action that refuses plans which delete or replace DNS or identity resources ([#192](https://github.com/quynhonsemiconductor/ci/issues/192)) ([3d0e2bd](https://github.com/quynhonsemiconductor/ci/commit/3d0e2bdd20ac0c1a5287f61ead1b4dc2e77dc985))
+* **destructive-guard:** a drift mode for the nightly drift jobs ([#193](https://github.com/quynhonsemiconductor/ci/issues/193)) ([64ccd33](https://github.com/quynhonsemiconductor/ci/commit/64ccd3385f5720a5f179129a0547ad7a5eb9af89))
+* **destructive-guard:** annotate every override, and say why a label lookup failed ([#197](https://github.com/quynhonsemiconductor/ci/issues/197)) ([d4692d2](https://github.com/quynhonsemiconductor/ci/commit/d4692d24a8977d6ebdcb7f36164646300ccbb6ce))
+* **labeler:** apply size labels in the same job as area labels ([#177](https://github.com/quynhonsemiconductor/ci/issues/177)) ([b728e1c](https://github.com/quynhonsemiconductor/ci/commit/b728e1cfc4ba7cd30739093a48d67c7ea967ace3))
+* **pr-size:** label pull requests by lines of code, warn when too large ([#176](https://github.com/quynhonsemiconductor/ci/issues/176)) ([d6445d8](https://github.com/quynhonsemiconductor/ci/commit/d6445d8a2f9ad3ef61bf1d8aa23f67f00a019492))
+* review pull requests against our own rules ([#152](https://github.com/quynhonsemiconductor/ci/issues/152)) ([5f3846b](https://github.com/quynhonsemiconductor/ci/commit/5f3846b0537ea3313e8b4928ed85dbe96d5684dc))
+* say whether anything is blocking, including when nothing is ([#165](https://github.com/quynhonsemiconductor/ci/issues/165)) ([55abee0](https://github.com/quynhonsemiconductor/ci/commit/55abee0eee07da8f61d0a60ad8d31d7dd725ba8a))
+* **scripts:** find the writer of duplicate-timestamp metric samples ([#202](https://github.com/quynhonsemiconductor/ci/issues/202)) ([1fdc806](https://github.com/quynhonsemiconductor/ci/commit/1fdc806001c9721023025db69949d8dcaa4d3ae2))
+* **security:** composite actions for the scans, Trivy on a local image, and PR labels ([#209](https://github.com/quynhonsemiconductor/ci/issues/209)) ([0d8aceb](https://github.com/quynhonsemiconductor/ci/commit/0d8aceb307b8132d16a2a6e75e490afd2891b954))
+* **security:** opt-in combined scan jobs and a labeler built from steps ([#214](https://github.com/quynhonsemiconductor/ci/issues/214)) ([243c4bc](https://github.com/quynhonsemiconductor/ci/commit/243c4bc36d1cdb36fed9147c7aa8297501f2665d))
+* **workflows:** read cross-repository code with the read-only qnsc-repo-reader App ([#179](https://github.com/quynhonsemiconductor/ci/issues/179)) ([6336b25](https://github.com/quynhonsemiconductor/ci/commit/6336b2540fbe08b65a1ba120ac3e6f106b5c05ef))
+
+
+### Bug Fixes
+
+* a reasoning model needs longer than the 300s default ([#166](https://github.com/quynhonsemiconductor/ci/issues/166)) ([5a7a8df](https://github.com/quynhonsemiconductor/ci/commit/5a7a8df19b0d5e03a0b3546985ebbd010051b998))
+* **actions:** setup-node-pnpm authenticates on pnpm 11 without writing the token anywhere ([#182](https://github.com/quynhonsemiconductor/ci/issues/182)) ([f1dd992](https://github.com/quynhonsemiconductor/ci/commit/f1dd992dc8cc274c210fcc51fb9e30522b47f654))
+* **actions:** validate-openapi-contract fails on ERR-level changes ([#184](https://github.com/quynhonsemiconductor/ci/issues/184)) ([7101dd9](https://github.com/quynhonsemiconductor/ci/commit/7101dd97a20978403e5e53e5ee7641c1b1f6c32a))
+* **backend-deploy:** move every container on the service image, verify tags, wait for the worker ([#199](https://github.com/quynhonsemiconductor/ci/issues/199)) ([d431b3e](https://github.com/quynhonsemiconductor/ci/commit/d431b3e2ab102729cb1f7d2ae912cf08cb480bc7))
+* **backend-deploy:** say which re-run works when the immutable tag holds different images ([#198](https://github.com/quynhonsemiconductor/ci/issues/198)) ([74fa8e5](https://github.com/quynhonsemiconductor/ci/commit/74fa8e54af28539588cffcd75153abd70cb2dc98))
+* **bump-gitops-tag:** a comment inside run: broke the action template ([#172](https://github.com/quynhonsemiconductor/ci/issues/172)) ([52b7f31](https://github.com/quynhonsemiconductor/ci/commit/52b7f31b217942289ffb7db3ccc839ee9cbb39b2))
+* **code-review:** report why the rules download failed, and retry it ([#196](https://github.com/quynhonsemiconductor/ci/issues/196)) ([8672af0](https://github.com/quynhonsemiconductor/ci/commit/8672af0f141c5132f049f3c10fb700b90ab89abf))
+* compute the routing threshold where an empty value is expressible ([#164](https://github.com/quynhonsemiconductor/ci/issues/164)) ([ac4fe8d](https://github.com/quynhonsemiconductor/ci/commit/ac4fe8d3e55a3d143d932e48554097235c17818d))
+* **k8s-deploy:** attest the digest, not the tag ([#170](https://github.com/quynhonsemiconductor/ci/issues/170)) ([639c83d](https://github.com/quynhonsemiconductor/ci/commit/639c83d5bd63e0340a90cae6fe2e07627a95026d))
+* **k8s-deploy:** build arm64 on an arm64 runner, not under QEMU ([#168](https://github.com/quynhonsemiconductor/ci/issues/168)) ([d09f5cf](https://github.com/quynhonsemiconductor/ci/commit/d09f5cff83768f7dea9719ba294da2cce736cc48))
+* **k8s-deploy:** build the right Dockerfile stage per service ([#171](https://github.com/quynhonsemiconductor/ci/issues/171)) ([f339097](https://github.com/quynhonsemiconductor/ci/commit/f339097cf9d2d3b4862ae1ddfc38a78070125b5f))
+* **k8s-deploy:** grant packages:read, which the caller's grant could not supply ([#169](https://github.com/quynhonsemiconductor/ci/issues/169)) ([643be94](https://github.com/quynhonsemiconductor/ci/commit/643be9452658fe07ea843a77db3ce39c96bc9b57))
+* **platform-conformance:** retire the schedulable contract, alert on a red scheduled run ([#208](https://github.com/quynhonsemiconductor/ci/issues/208)) ([95cd2f1](https://github.com/quynhonsemiconductor/ci/commit/95cd2f14082c3ce05b2e9e2dcfe98cfdc9481ca3))
+* **release-commenter:** create the release label once, before the action labels PRs in parallel ([#203](https://github.com/quynhonsemiconductor/ci/issues/203)) ([066a633](https://github.com/quynhonsemiconductor/ci/commit/066a6339ec132666fa021195c342646a6c5e5b20))
+* **scripts:** compare series after the OTLP to Prometheus translation ([#204](https://github.com/quynhonsemiconductor/ci/issues/204)) ([dc80e54](https://github.com/quynhonsemiconductor/ci/commit/dc80e540f200c1c9b19d88361949677807014aa1))
+* **stack-conformance:** open an issue when the scheduled report fails ([#206](https://github.com/quynhonsemiconductor/ci/issues/206)) ([c5ab28f](https://github.com/quynhonsemiconductor/ci/commit/c5ab28f5f5f7d152bad79657cd898d371e471f27))
+* **stack-conformance:** record the worker health check decision, drop the wrong dkim reason ([#207](https://github.com/quynhonsemiconductor/ci/issues/207)) ([4510a2d](https://github.com/quynhonsemiconductor/ci/commit/4510a2db0f50d48e3fd60b4c762fad1251230122))
+* the `all` branch of the severity mapping could never fire ([#163](https://github.com/quynhonsemiconductor/ci/issues/163)) ([8797dbd](https://github.com/quynhonsemiconductor/ci/commit/8797dbd8c91ea050ff68f870c39dea498e9adee3))
+* **update-task-definition:** refuse a container that injects SERVICE_VERSION from a secret ([#201](https://github.com/quynhonsemiconductor/ci/issues/201)) ([102fa9e](https://github.com/quynhonsemiconductor/ci/commit/102fa9e7a236fe079a35931aae19884d0917078f))
+* **update-task-definition:** set SERVICE_VERSION to the deployed tag in every container it rewrites ([#200](https://github.com/quynhonsemiconductor/ci/issues/200)) ([671d870](https://github.com/quynhonsemiconductor/ci/commit/671d870b20785368ffe7a2017b481958c47f5583))
+* **workflows:** down-scope GitHub App tokens to named repositories and permissions ([#178](https://github.com/quynhonsemiconductor/ci/issues/178)) ([f8b2ebd](https://github.com/quynhonsemiconductor/ci/commit/f8b2ebdc0659f8154f495152bf77d188e3ee3e29))
+
+
+### Performance Improvements
+
+* **build-push-ecr:** write the build cache only from the default branch ([#210](https://github.com/quynhonsemiconductor/ci/issues/210)) ([e5fa5d7](https://github.com/quynhonsemiconductor/ci/commit/e5fa5d788477417e281ca532eefbdd7b218395a0))
+
 ## [1.21.0](https://github.com/quynhonsemiconductor/ci/compare/v1.20.0...v1.21.0) (2026-09-20)
 
 
