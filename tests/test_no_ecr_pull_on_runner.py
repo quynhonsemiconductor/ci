@@ -224,6 +224,52 @@ def test_the_pushed_image_must_have_the_scanned_layers_before_anything_downstrea
     assert "$RUNNER_TEMP/scanned-layers.json" in verify["run"] and "$RUNNER_TEMP/pushed-layers.json" in verify["run"]
 
 
+def test_trivy_keeps_its_cache_out_of_the_build_context():
+    """trivy-action defaults cache-dir to ${{ github.workspace }}/.cache/trivy, inside the build context: KB's push shipped it."""
+    steps, _ = build_push_steps()
+    scan = steps["Scan before push (CRITICAL blocks; nothing has been pushed yet)"][1]
+    assert "runner.temp" in str(scan["with"]["cache-dir"])
+    assert "github.workspace" not in str(scan["with"]["cache-dir"])
+
+
+def test_the_build_context_is_checked_between_the_scan_and_the_push():
+    steps, _ = build_push_steps()
+    record_i, record = steps["Record the build context"]
+    scan_i, _ = steps["Scan before push (CRITICAL blocks; nothing has been pushed yet)"]
+    check_i, check = steps["Check nothing wrote into the build context (the push would ship it)"]
+    push_i, _ = steps["Build & push"]
+    assert record_i < scan_i < check_i < push_i
+    assert record["if"] == check["if"] == "${{ inputs.scan == 'true' }}"
+
+
+def test_the_build_context_check_catches_a_write_and_passes_without_one(tmp_path):
+    steps, _ = build_push_steps()
+    record = steps["Record the build context"][1]["run"]
+    check = steps["Check nothing wrote into the build context (the push would ship it)"][1]["run"]
+    ctx = tmp_path / "ctx"
+    ctx.mkdir()
+    subprocess.run(["git", "init", "-q", str(ctx)], check=True)
+    (ctx / "Dockerfile").write_text("FROM scratch\n")
+    (ctx / ".gitignore").write_text("ignored.txt\n")
+    (ctx / "ignored.txt").write_text("x")
+    env = {"CTX": str(ctx), "RUNNER_TEMP": str(tmp_path), "SNAPSHOT": str(tmp_path / "context-before.txt")}
+    assert run_snippet(record, **env).returncode == 0
+    assert run_snippet(check, **env).returncode == 0  # nothing written: passes
+    (ctx / ".cache" / "trivy").mkdir(parents=True)
+    (ctx / ".cache" / "trivy" / "trivy.db").write_text("db")  # what the scanner did before the fix
+    result = run_snippet(check, **env)
+    assert result.returncode != 0
+    assert "wrote into the build context" in result.stdout + result.stderr
+    assert "trivy.db" in result.stdout + result.stderr
+
+
+def test_the_build_context_must_be_a_git_checkout(tmp_path):
+    steps, _ = build_push_steps()
+    record = steps["Record the build context"][1]["run"]
+    env = {"CTX": str(tmp_path), "RUNNER_TEMP": str(tmp_path), "SNAPSHOT": str(tmp_path / "s.txt")}
+    assert run_snippet(record, **env).returncode != 0
+
+
 def test_scan_is_opt_in_so_other_callers_are_unchanged():
     _, action = build_push_steps()
     assert action["inputs"]["scan"]["default"] == "false"

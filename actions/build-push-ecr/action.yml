@@ -266,6 +266,21 @@ runs:
           exit 1
         fi
 
+    # Snapshot of the build context, to compare with just before the push. The push ships whatever is in the context, so
+    # anything a later step writes there (a scanner's cache, a report, a lock file) goes into the image. A snapshot is git's view
+    # (tracked, untracked and ignored files); it needs the context to be a git checkout, as every caller's is.
+    - name: Record the build context
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        CTX: ${{ inputs.build-context }}
+        SNAPSHOT: ${{ runner.temp }}/context-before.txt
+      run: |
+        set -euo pipefail
+        git -C "$CTX" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+          echo "::error title=build-push-ecr::scan: true needs the build context to be a git checkout (the context is '$CTX')"; exit 1; }
+        git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$SNAPSHOT"
+
     # Build for the scan: local only, nothing is pushed and nothing is written to the cache. Same context, Dockerfile, target,
     # platform, secrets and cache-from as the real build, so it is the same image. No provenance/SBOM: the Docker exporter cannot
     # export an image index; the real build below adds them.
@@ -296,6 +311,9 @@ runs:
         exit-code: '1'
         severity: ${{ inputs.scan-severity }}
         ignore-unfixed: true
+        # trivy-action defaults this to ${{ github.workspace }}/.cache/trivy, which is inside the build context: the push build's
+        # `COPY . .` then shipped the trivy database in the image, and the layers no longer matched the scan. Keep it outside.
+        cache-dir: ${{ runner.temp }}/trivy-cache
 
     # What was scanned, by layer diff_id. The push below rebuilds from the same Dockerfile, so it can differ: a cache miss after
     # BuildKit pruned its cache rebuilds a layer, and an unpinned base or `apt-get upgrade` can move under it. The verify step after
@@ -309,6 +327,22 @@ runs:
         set -euo pipefail
         docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}' > "$RUNNER_TEMP/scanned-layers.json"
         docker image rm "$IMAGE"
+
+    # The check the snapshot exists for: anything a step wrote into the build context since the snapshot is in the image about to
+    # be pushed, and the scan did not see it. Fails before the push.
+    - name: Check nothing wrote into the build context (the push would ship it)
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        CTX: ${{ inputs.build-context }}
+        SNAPSHOT: ${{ runner.temp }}/context-before.txt
+      run: |
+        set -euo pipefail
+        git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$RUNNER_TEMP/context-after.txt"
+        if ! diff -u "$SNAPSHOT" "$RUNNER_TEMP/context-after.txt"; then
+          echo "::error title=build-push-ecr::something wrote into the build context '$CTX' after it was recorded (lines above). Nothing was pushed. Point the tool's output or cache outside the context."
+          exit 1
+        fi
 
     - name: Build & push
       id: build
