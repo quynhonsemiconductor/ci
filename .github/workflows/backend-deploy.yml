@@ -50,7 +50,7 @@ on:
       # Whatever is passed MUST be the readiness probe, never liveness — see the
       # "Post-deploy readiness check" step for why that distinction is load-bearing.
       health_path:     { type: string, default: "/v1/readyz" }
-      # Build cache backend: `registry` (default), `gha` or `none`. Passed straight to
+      # Build cache backend: `gha` (default), `none` or `registry`. Passed straight to
       # actions/build-push-ecr, whose `cache-backend` input carries the full reasoning.
       #
       # Exposed here because the right answer is PER PRODUCT and depends on image size.
@@ -62,7 +62,10 @@ on:
       #
       # On a PUBLIC repository, Actions minutes are unmetered — so for a large image the
       # cache buys wall-clock and costs real money. `none` is the honest trade there.
-      cache_backend:   { type: string, default: "registry" }
+      #
+      # The default was `registry` until 2026-10-18. It is `gha` now: the repositories are IMMUTABLE, which rejects the `:buildcache`
+      # overwrite registry mode needs, and it is the one backend that pulls from ECR to a runner on every build.
+      cache_backend:   { type: string, default: "gha" }
     secrets:
       AWS_ACCOUNT_ID:       { required: true }
       SLACK_DEPLOY_WEBHOOK: { required: false }
@@ -267,22 +270,12 @@ jobs:
           platforms: ${{ matrix.arch == 'amd64' && 'linux/amd64' || matrix.arch == 'arm64' && 'linux/arm64' || inputs.image_platforms }}
           # Multi-arch: each leg pushes an UNTAGGED image by digest; the `merge` job tags once (IMMUTABLE repositories).
           push-by-digest: ${{ inputs.multi_arch && 'true' || 'false' }}
-
-      - name: Scan ${{ matrix.service }} image
-        if: ${{ !inputs.multi_arch }}
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: '${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}:${{ env.IMAGE_TAG }}'
-          format: table
-          exit-code: '1'
-          severity: CRITICAL
-          ignore-unfixed: true
-        # Trivy resolves a remote image index to linux/amd64 unless told otherwise, so a
-        # single-arch arm64 image fails with "no child with platform linux/amd64 in
-        # index". Derived from the RUNNER, not from `image_platforms`: the build ran on
-        # this same runner, so its architecture IS the one the image was built for.
-        env:
-          TRIVY_PLATFORM: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+          # SCAN BEFORE PUSH, from the local build. This used to be a Trivy step after the push that took the image by its ECR
+          # reference, which makes the runner download the whole image from ECR (a GitHub-hosted runner is outside AWS, so that
+          # is internet egress): qnsc-kb's 3-4 GB images, three per push, were 206 GB and $24.78 in 17 days. In multi-arch mode
+          # each leg scans its own native image, so the merge job no longer scans. A CRITICAL finding now stops the build BEFORE
+          # anything is pushed, where it used to leave the image in ECR.
+          scan: 'true'
 
       - name: Attest ${{ matrix.service }} image
         if: ${{ !inputs.multi_arch }}
@@ -334,7 +327,10 @@ jobs:
   # ── MERGE (multi-arch only) — one tag over every architecture ──────────────
   # The tag is created HERE, once, because the image repositories are IMMUTABLE (task 0.8): the per-arch legs pushed untagged images, and
   # a tag cannot be written twice. `docker buildx imagetools create` builds the index from the leg digests without pulling any layer.
-  # Scan and attestation belong to the INDEX (the deploy job verifies the API attestation against this digest), so they run here.
+  # The ATTESTATION belongs to the INDEX (the deploy job verifies the API attestation against this digest), so it is made here. The
+  # SCAN does not run here any more: each leg scanned its own native image before pushing it (build-push-ecr `scan`), and this job only
+  # accepts an index made of exactly those legs' digests. A scan here took the images by ECR reference, which downloads both architectures
+  # from ECR to the runner on every merge: internet egress.
   merge:
     name: Merge ${{ matrix.service }} manifest
     if: github.ref_type != 'tag' && inputs.multi_arch
@@ -423,28 +419,6 @@ jobs:
           done
           echo "image-digest=$digest" >> "$GITHUB_OUTPUT"
           echo "$SERVICE $IMAGE_TAG -> $digest (amd64 + arm64)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Scan ${{ matrix.service }} image (amd64)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
-          format: table
-          exit-code: '1'
-          severity: CRITICAL
-          ignore-unfixed: true
-        env:
-          TRIVY_PLATFORM: linux/amd64
-
-      - name: Scan ${{ matrix.service }} image (arm64)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
-          format: table
-          exit-code: '1'
-          severity: CRITICAL
-          ignore-unfixed: true
-        env:
-          TRIVY_PLATFORM: linux/arm64
 
       - name: Attest ${{ matrix.service }} image
         uses: quynhonsemiconductor/ci/actions/attest-image@v1
