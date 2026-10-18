@@ -1,7 +1,8 @@
 name: Build & Push image to Amazon ECR
 description: >
   Set up Docker Buildx, log in to ECR via OIDC credentials already configured
-  in the calling job, and build+push a single image.
+  in the calling job, and build+push a single image. With `scan: true` the image is scanned for CRITICAL CVEs BEFORE it is
+  pushed, from the local build, so no step ever has to pull a pushed image back to the runner (see `scan` below).
   Caller must have already run `aws-actions/configure-aws-credentials` and
   `aws-actions/amazon-ecr-login`.
 
@@ -55,15 +56,16 @@ inputs:
     default: default
   cache-backend:
     description: >
-      Where the build cache lives: `registry` (default), `gha`, or `none`.
+      Where the build cache lives: `gha` (default), `none`, or `registry`. `registry` is opt-in only (see below): it is no longer
+      the default.
 
       READ THE COST NOTE BELOW BEFORE CHOOSING `registry` FOR A MULTI-GB IMAGE.
 
-      REGISTRY is the default because the GitHub Actions cache is capped at 10 GB PER
-      REPOSITORY, shared with every other workflow in it. A product whose images carry
-      multi-GB layers blows through that on its own and evicts constantly — qnsc-kb
-      re-downloaded a 2.2 GB model on most builds while appearing to be cached, and
-      starved the rest of the repo's caches doing it. Registry cache has no such cap.
+      GHA is the default (it used to be `registry`). The GitHub Actions cache is capped at 10 GB PER REPOSITORY, shared with every
+      other workflow in it, so a product whose images carry multi-GB layers can blow through that on its own and evict constantly:
+      qnsc-kb re-downloaded a 2.2 GB model on most builds while appearing to be cached, and starved the rest of the repo's caches
+      doing it; such a product uses `none`. Registry cache has no cap, but it is paid for in internet egress on every build and
+      cannot work against an IMMUTABLE repository, so it is not the default.
 
       COST, CORRECTED. This input previously described the cost as "a `:buildcache` tag
       per image repository, a few GB at $0.10/GB-month". That counted STORAGE and missed
@@ -107,7 +109,7 @@ inputs:
       switching a product to `none` does NOT reclaim its existing cache tag — delete it
       once by hand with `aws ecr batch-delete-image --image-ids imageTag=buildcache`.
     required: false
-    default: registry
+    default: gha
   push-by-digest:
     description: >
       Push the image by DIGEST ONLY, with no tag: `outputs: type=image,push-by-digest=true`. For the per-architecture legs of a multi-arch
@@ -116,6 +118,28 @@ inputs:
       `sha-<commit>`, and a leg cannot re-tag after the merge. `image-tag` is ignored when this is true. Default false: unchanged behaviour.
     required: false
     default: 'false'
+  scan:
+    description: >
+      `true` scans the image for CRITICAL CVEs BEFORE it is pushed, and fails the step (nothing is pushed) if one is found.
+      Default `false`: unchanged behaviour.
+
+      WHY HERE AND NOT AFTER THE PUSH. A scan of the pushed image by its ECR reference makes the runner DOWNLOAD the whole image
+      from ECR. A GitHub-hosted runner is outside AWS, so that is internet egress at $0.12/GB: qnsc-kb's api and worker images are
+      3-4 GB each, three images per push, 34 pushes in 17 days, which was 206 GB and $24.78 of `DataTransfer-Out` against $2.11 of
+      storage. The image is already on the runner when it is built, so the scan reads it there.
+
+      HOW. A first build of the same Dockerfile, target and platform runs with `load: true` and `push: false`, without
+      attestations (the Docker exporter cannot carry them), the loaded image is scanned, and only then the real build runs with
+      push and with provenance and SBOM. The second build is a hit on the first one's layers in the same builder, so it re-runs
+      nothing and the pushed layers are the scanned layers (checked: identical layer digests). Needs a SINGLE platform
+      (`platforms` empty or one value): a multi-platform build cannot be loaded into the Docker daemon. The per-architecture legs
+      of a multi-arch build each scan their own native image this way, and the merge job needs no scan of its own.
+    required: false
+    default: 'false'
+  scan-severity:
+    description: Severity that fails the pre-push scan (Trivy syntax, e.g. `CRITICAL` or `HIGH,CRITICAL`). Unfixed CVEs are ignored.
+    required: false
+    default: CRITICAL
   node-auth-token:
     description: >
       Token used by the Dockerfile's `pnpm install` to fetch private
@@ -204,6 +228,49 @@ runs:
         echo "from=$FROM" >> "$GITHUB_OUTPUT"
         echo "to=$TO"     >> "$GITHUB_OUTPUT"
         echo "cache backend: ${BACKEND}" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Check the scan can run
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        PLATFORMS: ${{ inputs.platforms }}
+      run: |
+        # `load: true` puts the image in the local Docker daemon, which holds one platform.
+        if [[ "$PLATFORMS" == *,* ]]; then
+          echo "::error title=build-push-ecr::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
+          exit 1
+        fi
+
+    # Build for the scan: local only, nothing is pushed and nothing is written to the cache. Same context, Dockerfile, target,
+    # platform, secrets and cache-from as the real build, so it is the same image. No provenance/SBOM: the Docker exporter cannot
+    # export an image index; the real build below adds them.
+    - name: Build for scan (local, nothing pushed)
+      id: build-local
+      if: ${{ inputs.scan == 'true' }}
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.build-target }}
+        platforms: ${{ inputs.platforms }}
+        load: true
+        push: false
+        tags: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        cache-from: ${{ steps.cache.outputs.from }}
+        provenance: false
+        sbom: false
+        secrets: |
+          node_auth_token=${{ inputs.node-auth-token }}
+
+    - name: Scan before push (CRITICAL blocks; nothing has been pushed yet)
+      if: ${{ inputs.scan == 'true' }}
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        format: table
+        exit-code: '1'
+        severity: ${{ inputs.scan-severity }}
+        ignore-unfixed: true
 
     - name: Build & push
       id: build
