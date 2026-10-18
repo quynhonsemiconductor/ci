@@ -88,8 +88,8 @@ inputs:
       minutes are unmetered: the cache is then buying wall-clock, not money, and the
       egress is real money. Builds are slower and fully reproducible from scratch.
 
-      `gha` remains available for a product with small images that would rather not hold
-      cache in ECR at all. Nothing else changes between the three.
+      `gha` (the default) suits a product with small images, and keeps the cache out of ECR
+      entirely. Only the cache location changes between the three.
 
       Registry mode requires a MUTABLE ECR repository, because each build overwrites the
       `buildcache` tag. As of task 0.8 the image repositories are IMMUTABLE (the ecr
@@ -121,7 +121,8 @@ inputs:
   scan:
     description: >
       `true` scans the image for CRITICAL CVEs BEFORE it is pushed, and fails the step (nothing is pushed) if one is found.
-      Default `false`: unchanged behaviour.
+      After the push, the pushed image's layers must equal the scanned ones (compared by diff_id); any difference fails the step,
+      so nothing downstream (attest, merge, deploy) runs on an image the scan did not see. Default `false`: unchanged behaviour.
 
       WHY HERE AND NOT AFTER THE PUSH. A scan of the pushed image by its ECR reference makes the runner DOWNLOAD the whole image
       from ECR. A GitHub-hosted runner is outside AWS, so that is internet egress at $0.12/GB: qnsc-kb's api and worker images are
@@ -160,6 +161,17 @@ outputs:
 runs:
   using: composite
   steps:
+    # A typo here would otherwise skip the scan silently: every scan step tests `== 'true'`.
+    - name: Check the scan input
+      shell: bash
+      env:
+        SCAN: ${{ inputs.scan }}
+      run: |
+        case "$SCAN" in
+          true|false) ;;
+          *) echo "::error title=build-push-ecr::scan must be exactly 'true' or 'false' (got '$SCAN')"; exit 1 ;;
+        esac
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
@@ -229,14 +241,27 @@ runs:
         echo "to=$TO"     >> "$GITHUB_OUTPUT"
         echo "cache backend: ${BACKEND}" >> "$GITHUB_STEP_SUMMARY"
 
+    # The scan builds the image twice on this runner, and the hosted image ships with several GB of SDKs this build never uses.
+    # Remove the largest ones first; the summary shows the disk before and after, so a future out-of-space failure is readable.
+    - name: Free runner disk for the scan
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      run: |
+        disk() { printf '### Disk %s\n```\n%s\n```\n' "$1" "$(df -h /)" >> "$GITHUB_STEP_SUMMARY"; }
+        disk before
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        disk after
+
     - name: Check the scan can run
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
         PLATFORMS: ${{ inputs.platforms }}
       run: |
-        # `load: true` puts the image in the local Docker daemon, which holds one platform.
-        if [[ "$PLATFORMS" == *,* ]]; then
+        # `load: true` puts the image in the local Docker daemon, which holds one platform. Any separator counts: the comma of a
+        # buildx list or a space in a hand-written one.
+        multi='[,[:space:]]'
+        if [[ "$PLATFORMS" =~ $multi ]]; then
           echo "::error title=build-push-ecr::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
           exit 1
         fi
@@ -272,6 +297,19 @@ runs:
         severity: ${{ inputs.scan-severity }}
         ignore-unfixed: true
 
+    # What was scanned, by layer diff_id. The push below rebuilds from the same Dockerfile, so it can differ: a cache miss after
+    # BuildKit pruned its cache rebuilds a layer, and an unpinned base or `apt-get upgrade` can move under it. The verify step after
+    # the push fails on any difference. The scan image is then removed: the push does not need it, and its layers take the disk.
+    - name: Record the scanned layers, then drop the scan image
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+      run: |
+        set -euo pipefail
+        docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}' > "$RUNNER_TEMP/scanned-layers.json"
+        docker image rm "$IMAGE"
+
     - name: Build & push
       id: build
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
@@ -301,6 +339,21 @@ runs:
         # @quynhonsemiconductor/* deps so a cold build (evicted cache) doesn't 401.
         secrets: |
           node_auth_token=${{ inputs.node-auth-token }}
+
+    # The image that was pushed must have the layers that were scanned. A manifest-level read of the pushed digest, nothing pulled.
+    - name: Verify the pushed image has the scanned layers
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.ecr-registry }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+        SAME_LAYERS: ${{ github.action_path }}/same_layers.sh
+      run: |
+        set -euo pipefail
+        [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
+        docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" --format '{{json .Image}}' > "$RUNNER_TEMP/pushed-layers.json"
+        "$SAME_LAYERS" "$RUNNER_TEMP/scanned-layers.json" "$RUNNER_TEMP/pushed-layers.json"
 
     - name: Expose image URI and digest
       id: expose

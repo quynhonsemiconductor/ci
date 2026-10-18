@@ -492,6 +492,9 @@ Call `setup-aws-oidc` with `ecr-login: true` first.
 | `build-context` | `.` | Docker build context |
 | `build-target` | `` | Multi-stage build target |
 | `cache-scope` | `default` | GHA cache scope key (use unique value per image) |
+| `cache-backend` | `gha` | Build cache: `gha`, `none`, or `registry`. `registry` cannot be used with IMMUTABLE repositories (the default) and pays ECR egress on every build; see the action's `cache-backend` input |
+| `scan` | `false` | `true` scans for CRITICAL CVEs from the local build, before the push. Nothing is pushed if one is found. Needs a single platform. After the push, the pushed image's layers are checked against the scanned ones. Use `backend-deploy` (`scan: 'true'`) rather than setting this by hand |
+| `scan-severity` | `CRITICAL` | Severity that fails the pre-push scan (Trivy syntax, e.g. `HIGH,CRITICAL`); unfixed CVEs are ignored |
 
 | Output | Description |
 |---|---|
