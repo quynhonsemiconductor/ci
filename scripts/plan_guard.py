@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Refuse a plan that destroys or replaces a data resource, unless it says so.
+"""Refuse a plan that destroys or replaces a gated resource (data, or a serving or configuration
+resource: see DATA_TYPES and OUTAGE_TYPES), unless it says so.
 
 Task 0.3, §17b. This is the estate's answer to "nothing stops a green plan from
 deleting a database", and it is deliberately NOT `lifecycle { prevent_destroy }`.
@@ -34,7 +35,7 @@ Three reasons, all of them learned the hard way on 2026-09-19/20:
 
 ── WHAT THIS DOES INSTEAD ───────────────────────────────────────────────────
 
-It reads the plan — the actual proposed change — and fails if any data resource is
+It reads the plan — the actual proposed change — and fails if any gated resource is
 being deleted or replaced. Properties that fall out of that:
 
   * version-independent. It parses `tofu show -json`, which 1.9.1 emits happily.
@@ -48,7 +49,7 @@ being deleted or replaced. Properties that fall out of that:
 
 ── THE OVERRIDE IS A FILE, ON PURPOSE ───────────────────────────────────────
 
-To destroy a data resource you add its address to `.allow-data-destroy` in the
+To destroy a gated resource you add its address to `.allow-data-destroy` in the
 stack directory, with a reason. Not a workflow input and not a PR label, because
 both of those vanish from the record. A file is a diff someone reviews, and it has
 to be removed afterwards — and this script reports a stale entry, so it is.
@@ -73,9 +74,9 @@ from collections.abc import Iterator
 # which is why an ECS service, a security group and a route table are absent: they
 # are a re-apply away.
 #
-# `aws_db_subnet_group` and `aws_db_parameter_group` are deliberately NOT here.
-# They hold no data, they point at it, and rova-subnet-group-rebuild.md is a
-# rebuild of exactly one of them. Protect what holds data, not what points at it.
+# `aws_db_subnet_group` is deliberately NOT here. It holds no data, it points at it, and
+# rova-subnet-group-rebuild.md is a rebuild of exactly one of them. Protect what holds data,
+# not what points at it. Parameter groups are not data either; they are gated as OUTAGE_TYPES below.
 DATA_TYPES: frozenset[str] = frozenset({
     # relational
     "aws_db_instance",
@@ -236,10 +237,10 @@ def main() -> int:
 
     if not unallowed:
         if found:
-            print(f"\n  {len(found)} data resource(s) destroyed, every one declared in "
+            print(f"\n  {len(found)} gated resource(s) destroyed, every one declared in "
                   f"{allow_file.name}. Allowed.")
         else:
-            print("\n  no data resource is destroyed or replaced by this plan")
+            print("\n  no gated resource is destroyed or replaced by this plan")
         return 0
 
     print(f"\n  REFUSING THIS PLAN — {len(unallowed)} gated resource(s) would be lost\n")
