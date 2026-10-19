@@ -38,7 +38,7 @@ def plan(*changes) -> dict:
 def test_empty_plan_passes(tmp_path):
     code, out = run(tmp_path, plan())
     assert code == 0
-    assert "no data resource is destroyed" in out
+    assert "no gated resource is destroyed" in out
 
 
 def test_creating_a_database_is_fine(tmp_path):
