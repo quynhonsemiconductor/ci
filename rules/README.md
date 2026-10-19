@@ -62,12 +62,12 @@ Anthropic-shaped request to a GLM endpoint fails on the request body, which does
 with:
   product: rova
   profiles: typescript,sql
-  llm_url: https://open.bigmodel.cn/api/paas/v4   # coding plan: .../api/coding/paas/v4
+  llm_url: https://api.z.ai/api/coding/paas/v4    # pay-as-you-go: https://api.z.ai/api/paas/v4
   use_anthropic_protocol: 'false'
   llm_extra_body: '{}'                            # the default disables Anthropic thinking
-  model: glm-5.2                                  # glm-5.3, 5.2, 5.1, 5, 5-turbo are recognised
+  model: glm-5.3-flash                            # or glm-5.3 for slower, deeper reviews
 secrets:
-  llm_token: ${{ secrets.Z_AI_API_KEY }}
+  llm_token: ${{ secrets.Z_AI_CODING_API_KEY }}
 ```
 
 Rules are prompts, not a DSL, so a weaker model produces weaker review rather than an error. Worth

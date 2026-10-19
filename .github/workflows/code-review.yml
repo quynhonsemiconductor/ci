@@ -35,15 +35,16 @@ on:
         description: 'Model to review with.'
         required: false
         type: string
-        default: 'glm-5.3'
+        default: 'glm-5.3-flash'
       llm_url:
         description: >
           Endpoint for the model. Anthropic wants the messages path; an OpenAI-protocol provider wants
-          its base URL. For GLM that is `https://open.bigmodel.cn/api/paas/v4`, or
-          `https://open.bigmodel.cn/api/coding/paas/v4` on a coding plan.
+          its base URL. For GLM on Z.ai that is `https://api.z.ai/api/paas/v4` (billed per token), or
+          `https://api.z.ai/api/coding/paas/v4` on a GLM Coding Plan, which is what the organisation
+          pays for. The mainland platform (`open.bigmodel.cn`) is a separate account and key.
         required: false
         type: string
-        default: 'https://open.bigmodel.cn/api/coding/paas/v4'
+        default: 'https://api.z.ai/api/coding/paas/v4'
       use_anthropic_protocol:
         description: >
           Whether the endpoint speaks Anthropic's protocol. Set to 'false' for an OpenAI-compatible
