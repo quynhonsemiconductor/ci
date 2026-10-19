@@ -107,6 +107,47 @@ def test_postgresql_database_is_refused(tmp_path):
     assert code == 1
 
 
+def test_target_group_destroy_is_refused(tmp_path):
+    """Destroying a target group drops the ALB's route to the service behind it."""
+    code, out = run(tmp_path, plan(
+        change("m.s.aws_lb_target_group.api", "aws_lb_target_group", ["delete"])))
+    assert code == 1
+    assert "m.s.aws_lb_target_group.api" in out
+
+
+def test_target_group_replace_is_refused(tmp_path):
+    code, out = run(tmp_path, plan(
+        change("m.s.aws_lb_target_group.api", "aws_lb_target_group", ["create", "delete"])))
+    assert code == 1
+    assert "REPLACE" in out
+
+
+def test_parameter_group_destroy_is_refused(tmp_path):
+    code, out = run(tmp_path, plan(
+        change("m.p.aws_db_parameter_group.this", "aws_db_parameter_group", ["delete"])))
+    assert code == 1
+
+
+def test_cluster_parameter_group_destroy_is_refused(tmp_path):
+    code, out = run(tmp_path, plan(
+        change("m.p.aws_rds_cluster_parameter_group.this", "aws_rds_cluster_parameter_group", ["delete"])))
+    assert code == 1
+
+
+def test_target_group_create_and_update_are_fine(tmp_path):
+    code, out = run(tmp_path, plan(
+        change("m.s.aws_lb_target_group.api", "aws_lb_target_group", ["create"]),
+        change("m.s.aws_db_parameter_group.this", "aws_db_parameter_group", ["update"])))
+    assert code == 0, out
+
+
+def test_allowance_permits_a_target_group_destroy(tmp_path):
+    code, out = run(tmp_path, plan(
+        change("m.s.aws_lb_target_group.api", "aws_lb_target_group", ["delete"])),
+        allow="m.s.aws_lb_target_group.api  -- service moved to a new target group, reviewed in this PR")
+    assert code == 0, out
+
+
 # ── the allowance file ───────────────────────────────────────────────────────
 
 def test_allowance_permits_the_named_address(tmp_path):

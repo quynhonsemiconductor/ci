@@ -99,6 +99,18 @@ DATA_TYPES: frozenset[str] = frozenset({
     "aws_rds_cluster_snapshot",
 })
 
+# Not data, but a destroy takes a serving path or a database's configuration down with it, and the fix is
+# not "re-run the apply": a target group destroy drops the listener rule's target set (an outage until the
+# re-create and re-attach land), and a parameter group replace on a live instance is a reboot-or-fail change.
+# Gated like data, so the destroy is a line in `.allow-data-destroy` with a reason, reviewed in the same PR.
+OUTAGE_TYPES: frozenset[str] = frozenset({
+    "aws_lb_target_group",
+    "aws_db_parameter_group",
+    "aws_rds_cluster_parameter_group",
+})
+
+GATED_TYPES: frozenset[str] = DATA_TYPES | OUTAGE_TYPES
+
 DESTRUCTIVE = {"delete"}
 
 
@@ -154,7 +166,7 @@ def findings(doc: dict) -> Iterator[Finding]:
         if not DESTRUCTIVE.intersection(actions):
             continue
         rtype = rc.get("type") or ""
-        if rtype not in DATA_TYPES:
+        if rtype not in GATED_TYPES:
             continue
         yield Finding(address=rc.get("address") or "<unknown>", rtype=rtype, actions=actions)
 
@@ -230,7 +242,7 @@ def main() -> int:
             print("\n  no data resource is destroyed or replaced by this plan")
         return 0
 
-    print(f"\n  REFUSING THIS PLAN — {len(unallowed)} data resource(s) would be lost\n")
+    print(f"\n  REFUSING THIS PLAN — {len(unallowed)} gated resource(s) would be lost\n")
     for f in unallowed:
         print(f"    {f.verb}  {f.address}")
         print(f"      type: {f.rtype}")
