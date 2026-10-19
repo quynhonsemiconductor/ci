@@ -298,7 +298,7 @@ jobs:
       # versa. This repo pins upload-artifact v7 elsewhere (web-deploy, rally CI) with no
       # matching download — bumping only one side here breaks the deploy at the download
       # step, after the images are already built and pushed.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: matrix.service == 'api' && !inputs.multi_arch
         with:
           name: api-digest
@@ -317,7 +317,7 @@ jobs:
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest from the $SERVICE/$ARCH build"; exit 1; }
           mkdir -p digests && echo "$IMAGE_DIGEST" > "digests/$SERVICE-$ARCH.txt"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: inputs.multi_arch
         with:
           name: digest-${{ matrix.service }}-${{ matrix.arch }}
@@ -360,7 +360,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: digest-${{ matrix.service }}-*
           path: digests
@@ -431,7 +431,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.merge.outputs.image-digest }}
         run: echo "$IMAGE_DIGEST" > api-digest.txt
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: matrix.service == 'api'
         with:
           name: api-digest
@@ -722,7 +722,7 @@ jobs:
       - name: Fetch API digest from the build
         if: github.ref_type != 'tag'
         # Same major as the upload above — see the warning there before bumping either.
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: api-digest
 
