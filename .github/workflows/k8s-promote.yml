@@ -45,20 +45,14 @@ on:
         type: string
         default: ap-southeast-1
     secrets:
-      QNSC_AUTOMATION_PRIVATE_KEY:
-        description: >-
-          Private key of the qnsc-automation App (org secret; the App id comes
-          from the org variable). Mints the gitops-scoped token in deploy-dev.
-        required: false
       aws-role-arn:
         required: true
-      gitops-token:
-        description: >
-          DEPRECATED — leave it unset. The reusable mints a `qnsc-automation` App
-          token scoped to `gitops`; it can open a pull request, never merge
-          (§10b). Kept optional only so callers that still pass one keep
-          starting while they migrate.
-        required: false
+      QNSC_AUTOMATION_PRIVATE_KEY:
+        description: >-
+          Private key of the qnsc-automation App. REQUIRED: the caller passes it
+          explicitly, and there is no fallback — an absent key fails the token
+          step, not the promotion PR.
+        required: true
 
 permissions:
   contents: read
@@ -138,10 +132,11 @@ jobs:
           # remember to do it.
 
       # §13.1 P0-21 — the gitops identity is the `qnsc-automation` GitHub App, not a
-      # long-lived PAT secret. App token scoped to the `gitops` repository; it can
-      # open a pull request, never merge (§10b, the review is the control). The
-      # `gitops-token` secret stays accepted (optional) only until callers stop
-      # passing it.
+      # long-lived PAT secret. The caller passes QNSC_AUTOMATION_PRIVATE_KEY
+      # explicitly (org secrets do NOT flow into a reusable workflow uninvited).
+      # The token is scoped to the `gitops` repository: contents:write to push the
+      # branch, pull-requests:write to open the promotion PR — and it can never
+      # merge (§10b, the review is the control).
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: gitops-app-token
         with:
@@ -149,6 +144,8 @@ jobs:
           private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: gitops
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Open the promotion pull request
         uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@v1.22.0
@@ -158,4 +155,4 @@ jobs:
           services: ${{ inputs.services }}
           tag: ${{ inputs.version }}
           mode: pull-request
-          gitops-token: ${{ secrets.gitops-token || steps.gitops-app-token.outputs.token }}
+          gitops-token: ${{ steps.gitops-app-token.outputs.token }}
