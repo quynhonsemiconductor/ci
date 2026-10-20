@@ -18,7 +18,7 @@ the cost is real. Three examples found in a single audit on 2026-09-12:
      the state it described — and there, the cache is the Celery broker.
 
   3. The Valkey `db_index` registry was inline in all three modules in three different
-     states: rova's said "0 rally" after the product was renamed and omitted opshub,
+     states: rova's said "0 <old product name>" after the product was renamed and omitted opshub,
      opshub's was complete, qnsc-kb's was absent.
 
 Every one of those looked reasonable in the copy you happened to be reading. That is what

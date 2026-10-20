@@ -2,7 +2,7 @@
 """Report where consumer repos disagree with each other, or with the newest release,
 on a shared version pin.
 
-WHY THIS EXISTS. On 2026-08-12 every rally infra PR went red:
+WHY THIS EXISTS. On 2026-08-12 every rova infra PR went red:
 
     Error: reading Secrets Manager Secret Version (.../tunnel-token-tf-*):
     AccessDeniedException: not authorized to perform: secretsmanager:GetSecretValue
@@ -72,13 +72,13 @@ def consumer_repos() -> tuple[list[str], list[str]]:
     """Every active repo in the org that could pin a shared version.
 
     DISCOVERED, NOT LISTED, and the first version of this file got that wrong. It named
-    rally and qnsc-kb-backend; the org has a dozen active repos, and the one repo still on
+    rova and qnsc-kb-backend; the org has a dozen active repos, and the one repo still on
     an old qnsc-ci pin — qnsc-kb-frontend — was the one the list omitted. A report whose
     coverage is hand-maintained has the same defect it exists to find, one level up. It
     would also have missed opshub, which shares this boilerplate by policy, and qnsc-infra,
     which consumes the terraform modules directly.
 
-    Archived repos are excluded: rally-api, rally-infra, opshub-api and friends are frozen
+    Archived repos are excluded: rova-api, rova-infra, opshub-api and friends are frozen
     predecessors, so their pins are history rather than drift.
 
     PRIVATE repos are excluded too, and that is a real limitation rather than a choice —

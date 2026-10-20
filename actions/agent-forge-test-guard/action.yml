@@ -54,7 +54,7 @@ runs:
       # `${{ }}` expands before the shell sees it, so a branch called `$(curl evil)`
       # would execute. This is not hypothetical for this particular action: the
       # copied version of it shipped the interpolated form until zizmor flagged it
-      # in rally (#495).
+      # in rova (#495).
       env:
         BASE_REF: ${{ inputs.base-ref }}
         HEAD_REF: ${{ inputs.head-ref }}
