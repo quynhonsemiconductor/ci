@@ -227,18 +227,25 @@ jobs:
       # verbatim keeps its digest, so the attestation above covers the GHCR image
       # too. When the move retires ECR (§13.1 A-6) only this step survives.
       - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
         run: |
-          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       - name: Push the same image to GHCR
         id: ghcr
         env:
           SERVICE: ${{ matrix.service }}
+          DIGEST: ${{ steps.build.outputs.image-digest }}
+          ECR_REGISTRY: ${{ steps.aws.outputs.ecr-registry }}
+          PRODUCT: ${{ inputs.product }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          DIGEST="${{ steps.build.outputs.image-digest }}"
-          SRC="${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${SERVICE}@${DIGEST}"
-          DST="ghcr.io/${{ github.repository_owner }}/${{ inputs.product }}-${SERVICE}:${{ steps.tag.outputs.tag }}"
+          SRC="${ECR_REGISTRY}/${PRODUCT}-${SERVICE}@${DIGEST}"
+          DST="ghcr.io/${OWNER}/${PRODUCT}-${SERVICE}:${IMAGE_TAG}"
           docker buildx imagetools create -t "$DST" "$SRC"
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "image=${DST}" >> "$GITHUB_OUTPUT"
