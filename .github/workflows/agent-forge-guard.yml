@@ -18,7 +18,7 @@
 # check. Without it an approved change keeps a red tick nobody can clear.
 #
 # The caller should NOT add a concurrency group. Combined with `edited`, a group
-# with cancel-in-progress is the shape that produced false greens on rally and
+# with cancel-in-progress is the shape that produced false greens on rova and
 # opshub: an edit cancels the real run and GitHub counts the replacement's skipped
 # jobs as passing. That failure needed a second ingredient this workflow does not
 # have, so it would be safe today — and it is left out anyway, because this is a
@@ -26,7 +26,7 @@
 #
 # WHY THIS IS SHARED RATHER THAN COPIED. It used to be two files copied into each
 # repository: a workflow and a ~280-line script. The script then drifted, and drifted
-# in the direction nobody watches — rally's copy was fixed for a shell-injection
+# in the direction nobody watches — rova's copy was fixed for a shell-injection
 # finding (#495) and the fix never returned to the canonical template, so every
 # repository onboarded after that point would have received the vulnerable version.
 # One copy, versioned like the rest of this repo's contents, removes that failure
@@ -39,7 +39,7 @@
 # and the reported check is the pair.
 #
 # That makes this the WRONG form for a repository that already requires `test-guard`,
-# which includes rally: the ruleset would match nothing, and a required check that
+# which includes rova: the ruleset would match nothing, and a required check that
 # never reports does not fail — it blocks every merge, indefinitely, showing as
 # "Expected" in the protection UI. Those repositories should call
 # `actions/agent-forge-test-guard` directly, which keeps the job local and the check
@@ -99,7 +99,7 @@ jobs:
         # reference, so the action and the workflow calling it are released together.
         # Pinning a SHA here would mean every release of this repo has to rewrite this
         # line to point at its own new commit, which cannot be done before the commit
-        # exists. Same reasoning as rally pinning `actions-security.yml@v1`.
+        # exists. Same reasoning as rova pinning `actions-security.yml@v1`.
         uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1
         with:
           base-ref: ${{ inputs.base_ref || github.event.pull_request.base.ref }}

@@ -176,7 +176,7 @@ def added_dependencies(base: str, head: str, path: str) -> set[str] | None:
     ADDED ONLY. A version bump is not a new dependency, and a removal is not a supply-chain risk —
     which is the whole reason this asks about names rather than about the file. The check used to
     fire on the manifest CHANGING, so every `chore(release)` pull request that bumped its own
-    `version` field failed it: rally's #494 touched `package.json`, `CHANGELOG.md` and
+    `version` field failed it: rova's #494 touched `package.json`, `CHANGELOG.md` and
     `.release-please-manifest.json` and was told to declare a dependency it had not added. It merged
     past the failure, which is the real damage — a check that cries wolf on every release teaches
     everyone to override it, and then it is overridden on the pull request that mattered.

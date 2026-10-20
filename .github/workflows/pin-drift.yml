@@ -9,7 +9,7 @@ name: Pin drift
 on:
   schedule:
     # Monday 08:00 Asia/Ho_Chi_Minh. Cron is UTC-only, hence 01:00. Weekly because the
-    # cost of a stale pin is measured in days — rally's was ten of them.
+    # cost of a stale pin is measured in days — rova's was ten of them.
     - cron: '0 1 * * 1'
   workflow_dispatch:
 

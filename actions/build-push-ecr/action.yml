@@ -78,7 +78,7 @@ inputs:
       the bill that grows when the team ships more. Size the decision per product:
 
         qnsc-kb   `:buildcache` is 4.28 GB   -> pulled in full on every build
-        rally     `:buildcache` is 0.33 GB   -> effectively free, keep it
+        rova     `:buildcache` is 0.33 GB   -> effectively free, keep it
 
       A self-hosted runner inside the VPC would make this free (same-region traffic), and
       is the real fix if registry cache is ever wanted for a large image.
@@ -95,7 +95,7 @@ inputs:
       `buildcache` tag. As of task 0.8 the image repositories are IMMUTABLE (the ecr
       module's default), so `registry` cache is INCOMPATIBLE with them — a `buildcache`
       overwrite is rejected exactly as a second `:latest` push would be. That is why the
-      products moved off it: rally and opshub use `gha`, qnsc-kb uses `none`. Do not set
+      products moved off it: rova and opshub use `gha`, qnsc-kb uses `none`. Do not set
       `registry` against an IMMUTABLE repository; use `gha` or `none`, or a self-hosted
       in-VPC runner if registry cache is ever genuinely wanted (see the egress note above).
 

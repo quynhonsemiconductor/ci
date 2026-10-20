@@ -5,7 +5,7 @@ description: >
   gitleaks/gitleaks-action wrapper — that wrapper's terms require a paid
   license for private-org usage; the CLI binary itself is MIT-licensed and
   free to run directly). Matches the exact invocation already proven in
-  rally's backend-security.yml.
+  rova's backend-security.yml.
 
   Run on every push and PR. Gitleaks scans the full git history for secrets
   in commits — not just the current diff — so it catches rotated-but-not-revoked

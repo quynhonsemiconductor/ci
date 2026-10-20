@@ -3,7 +3,7 @@
 #
 # actionlint and zizmor check the SHAPE of a workflow. Neither can tell whether
 # `agent_forge_test_guard.py` correctly identifies a deleted assertion, and that
-# script is a REQUIRED check on rally's main branch: a bug in it either blocks
+# script is a REQUIRED check on rova's main branch: a bug in it either blocks
 # every merge or waves through the weakening it exists to catch.
 #
 # It arrived here with its tests rather than without them. The alternative was

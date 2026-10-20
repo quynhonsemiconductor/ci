@@ -37,12 +37,12 @@ on:
       # because the repositories are IMMUTABLE (task 0.8). Default false: every existing caller is unchanged.
       multi_arch: { type: boolean, default: false }
       # Path of the READINESS probe, appended to the environment's APP_URL for the
-      # post-deploy gate below. Defaults to rally's/opshub's `/v1/readyz`, so a caller
+      # post-deploy gate below. Defaults to rova's/opshub's `/v1/readyz`, so a caller
       # that passes nothing keeps today's behaviour byte for byte.
       #
       # It is an input rather than a fixed string because health endpoints are
       # INFRASTRUCTURE, not API surface, and products place them differently:
-      # rally serves `/v1/readyz` (inside the version prefix), qnsc-kb serves
+      # rova serves `/v1/readyz` (inside the version prefix), qnsc-kb serves
       # `/health/ready` (outside its own `/api/v1`). Renaming either to match the
       # other would cost an app change, an infra change (`health_check_path`, the
       # Route 53 check) and a deploy, for no behaviour change.
@@ -57,7 +57,7 @@ on:
       # A GitHub-hosted runner sits outside AWS, so registry cache is pulled back out of
       # ECR across the internet on every build, and that egress — not the cache storage —
       # is the cost. Measured 2026-08-01..16: 147.3 GB, $10.90/mo, against $1.51/mo of
-      # storage. qnsc-kb's cache is 4.28 GB and rally's is 0.33 GB, so the same default
+      # storage. qnsc-kb's cache is 4.28 GB and rova's is 0.33 GB, so the same default
       # was cheap for one product and the largest growing line on the bill for the other.
       #
       # On a PUBLIC repository, Actions minutes are unmetered — so for a large image the
@@ -295,7 +295,7 @@ jobs:
 
       # ⚠ upload-artifact and download-artifact MUST STAY ON THE SAME MAJOR. v4 changed
       # the artifact backend, so a v4 upload cannot be read by a v3 download or vice
-      # versa. This repo pins upload-artifact v7 elsewhere (web-deploy, rally CI) with no
+      # versa. This repo pins upload-artifact v7 elsewhere (web-deploy, rova CI) with no
       # matching download — bumping only one side here breaks the deploy at the download
       # step, after the images are already built and pushed.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -445,7 +445,7 @@ jobs:
   # the other. Started here it runs alongside the build and is finished before the
   # deploy job asks for a database.
   #
-  # DEVELOP ONLY, and not because production never sleeps — rally's production RDS is
+  # DEVELOP ONLY, and not because production never sleeps — rova's production RDS is
   # idled pre-launch and genuinely needs this. It is that a second job carrying
   # `environment: production` would demand a SECOND reviewer approval per release. The
   # deploy job still calls the same action, so production is covered there.
@@ -658,14 +658,14 @@ jobs:
       # THIS STEP IS ONE HALF OF A LOOP. A previous version of this comment said no
       # scheduler did the sleeping; that is no longer true, and consuming products
       # should not be read as if it were. Product stacks create EventBridge schedules
-      # that stop RDS and scale services to zero off-hours (rally: `idle_schedule` in
+      # that stop RDS and scale services to zero off-hours (rova: `idle_schedule` in
       # infra/live/develop/main.tf, firing 21:00 and 03:00 Asia/Ho_Chi_Minh), and this
       # step is what brings the environment back on the next deploy.
       #
       # Two consequences worth knowing before changing either half:
       #
       #   - A deploy landing after the stop WAKES the environment and nothing puts it
-      #     back until the next scheduled pass. Rally ran 24/7 for weeks against a
+      #     back until the next scheduled pass. Rova ran 24/7 for weeks against a
       #     single nightly stop for exactly this reason (measured 2026-08-02). If a
       #     product reports its idle schedule "not working", suspect the interaction
       #     with this step before suspecting the schedule.
@@ -680,12 +680,12 @@ jobs:
       # (continue-on-error), so this call is what actually guarantees the migration step
       # has a database.
       #
-      # STILL develop-only, unchanged. Extending it to production looks right — rally's
+      # STILL develop-only, unchanged. Extending it to production looks right — rova's
       # production RDS is idled pre-launch and its own comment claims `ensure_rds` starts
       # it — but the ECS half of this action scales services from 0 to 1, and production
       # sits at min_count = 0 DELIBERATELY before go-live. Waking it on every release
       # would start tasks nobody asked for and quietly bill for them. That gap between
-      # rally's comment and this gate is real and worth closing, separately and on
+      # rova's comment and this gate is real and worth closing, separately and on
       # purpose, not as a side effect of moving a step into a job.
       - name: Ensure environment is awake (RDS + ECS)
         if: env.ENVIRONMENT == 'develop'

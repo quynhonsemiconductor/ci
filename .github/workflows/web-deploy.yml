@@ -3,7 +3,7 @@
 # Cloudflare Pages. One workflow for every QNSC frontend.
 #
 # Two deploy shapes, selected by `single_environment`:
-#   • DUAL  (default, single_environment='') — 2-env products (rally, opshub):
+#   • DUAL  (default, single_environment='') — 2-env products (rova, opshub):
 #       main push → develop (auto),  v*.*.* tag → production (env-gated).
 #   • SINGLE (single_environment='production') — 1-env apps (landing, ceo-suite):
 #       main push → that one environment. No tag/promotion — deploy on merge.
@@ -26,7 +26,7 @@
 #
 # `working_directory` is the CWD for the wrangler deploy. It defaults to the repo
 # root, which suits standalone apps. Monorepos whose web app lives in a subdir
-# (e.g. rally: apps/web) must set it so wrangler discovers that package's
+# (e.g. rova: apps/web) must set it so wrangler discovers that package's
 # file-based Pages Functions (the `functions/` dir is resolved relative to the
 # wrangler CWD). `web_dist_path` is then relative to `working_directory`.
 # =============================================================================
@@ -154,7 +154,7 @@ jobs:
       # VITE_API_URL and VITE_API_BASE_URL are BOTH here because the two SPA shapes we
       # run are genuinely different, and collapsing them onto one name would be a trap:
       #
-      #   same-origin BFF (rally)  — builds with VITE_API_URL deliberately EMPTY, so the
+      #   same-origin BFF (rova)  — builds with VITE_API_URL deliberately EMPTY, so the
       #     app calls relative /v1/* paths that a Pages Function proxies to the API. That
       #     is required for its __Host- session cookie.
       #   direct bearer-token API (qnsc-kb) — needs the ABSOLUTE api origin baked in,
@@ -281,7 +281,7 @@ jobs:
 
       # ── Publish to Cloudflare Pages ────────────────────────────────────────
       # wrangler-action auto-detects the package manager by looking for a
-      # lockfile INSIDE workingDirectory. Monorepo callers (rally, opshub) set
+      # lockfile INSIDE workingDirectory. Monorepo callers (rova, opshub) set
       # working_directory to the web package's own subdir (e.g. apps/web),
       # which has no lockfile of its own — the pnpm lockfile lives at the repo
       # root. Detection then falls through to npm, whose `npm install`/`npx`

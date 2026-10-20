@@ -1,6 +1,6 @@
 # =============================================================================
 # Static validation — this repo IS the org's CI/CD supply chain: every
-# composite action here is consumed by rally, opshub, and every future
+# composite action here is consumed by rova, opshub, and every future
 # product. A YAML mistake or bad shell in a `run:` block would silently break
 # CI/deploys everywhere on the next version bump, with no other gate to catch
 # it before a consumer's pipeline fails. actionlint checks workflow/action
