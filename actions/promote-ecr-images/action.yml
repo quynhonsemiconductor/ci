@@ -56,7 +56,7 @@ runs:
           # should not be losing in the first place, and the number is derived from the
           # release that proved 10 min was not enough rather than picked round:
           #
-          #   rally v0.7.13, 2026-08-31. The prod promote gave up at 11:18:01 while the
+          #   rova v0.7.13, 2026-08-31. The prod promote gave up at 11:18:01 while the
           #   develop deploy's "Wait for Backend · CI" gate did not clear until 11:18:22
           #   and its api image landed at 11:21:56 — so the budget expired 21 SECONDS
           #   before the thing it waits for even started building. Backend · CI had gone

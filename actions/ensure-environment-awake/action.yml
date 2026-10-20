@@ -57,7 +57,7 @@ runs:
           fi
           # 15 minutes, from ONE pair of constants. The budget used to be 8 minutes
           # restated in three places (the banner, the loop bound, the failure line), and a
-          # cold start of a stopped single-AZ instance regularly exceeds it — rally's
+          # cold start of a stopped single-AZ instance regularly exceeds it — rova's
           # 2026-08-05 deploy timed out at 8:00 and the instance came up shortly after, so
           # the retry passed with no change. Note what that failure looks like: this step
           # SUCCEEDS in starting RDS and then fails on the wait, leaving a woken database,

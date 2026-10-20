@@ -6,7 +6,7 @@
 # production Environment's reviewer gate sits INSIDE that group: an unapproved tag
 # deploy stays `waiting` indefinitely while still holding the lock, and every later
 # release then queues behind it with ZERO jobs created and no notification
-# anywhere. Observed in rally: two unapproved releases 12 days apart silently
+# anywhere. Observed in rova: two unapproved releases 12 days apart silently
 # blocked a third for 24 hours.
 #
 # This cannot be a job inside the deploy workflow — workflow-level concurrency

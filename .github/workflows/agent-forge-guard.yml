@@ -18,7 +18,7 @@
 # check. Without it an approved change keeps a red tick nobody can clear.
 #
 # The caller should NOT add a concurrency group. Combined with `edited`, a group
-# with cancel-in-progress is the shape that produced false greens on rally and
+# with cancel-in-progress is the shape that produced false greens on rova and
 # opshub: an edit cancels the real run and GitHub counts the replacement's skipped
 # jobs as passing. That failure needed a second ingredient this workflow does not
 # have, so it would be safe today — and it is left out anyway, because this is a
