@@ -1,6 +1,7 @@
 # =============================================================================
-# Reusable: web (SPA) deploy — build the Vite/Astro bundle, publish to
-# Cloudflare Pages. One workflow for every QNSC frontend.
+# Reusable: web (SPA) deploy — build the Vite/Astro bundle, publish it to
+# Cloudflare Pages (target: pages, today) or to a Worker with Static Assets
+# (target: workers, §8.2). One workflow for every QNSC frontend.
 #
 # Two deploy shapes, selected by `single_environment`:
 #   • DUAL  (default, single_environment='') — 2-env products (rova, opshub):
@@ -42,6 +43,9 @@ on:
       web_dist_path:      { type: string, default: "apps/web/dist" }  # relative to working_directory
       working_directory:  { type: string, default: "." }            # wrangler CWD; set to the web pkg dir (e.g. apps/web) so file-based Pages Functions resolve
       single_environment: { type: string, default: "" }            # set (e.g. production) for 1-env apps
+      target:             { type: string, default: "pages" }       # pages (today) | workers (§8.2: Static Assets + versions upload/deploy)
+      workers_dev_env:    { type: string, default: "dev" }         # wrangler.jsonc env name for the dev deploy (workers target only)
+      workers_prod_env:   { type: string, default: "prod" }        # wrangler.jsonc env name for the prod upload/deploy (workers target only)
       run_d1_migrations:  { type: boolean, default: false }        # apply D1 migrations before deploy
       d1_database:        { type: string, default: "" }            # D1 database name (with run_d1_migrations)
       backup_before_migrate: { type: boolean, default: false }     # export D1 to a restore point BEFORE migrating (data apps)
@@ -102,6 +106,8 @@ jobs:
     needs: context
     environment: ${{ needs.context.outputs.environment }}
     timeout-minutes: 20
+    outputs:
+      worker_version_id: ${{ steps.workers-upload.outputs.version_id }}
     permissions:
       contents: read
       packages: read   # pull private @scope/* deps from GitHub Packages during pnpm install
@@ -302,6 +308,7 @@ jobs:
       # actions/setup-node's built-in caching; disabling it costs real build time for a
       # finding with no realistic trigger here.
       - name: Deploy to Cloudflare Pages
+        if: inputs.target == 'pages'
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0  # v4.0.0  # zizmor: ignore[cache-poisoning]
         with:
           apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -312,6 +319,48 @@ jobs:
             pages deploy ${{ inputs.web_dist_path }}
             --project-name=${{ vars.PAGES_PROJECT }}
             --branch=main
+
+      # ── Workers target (§8.2 / §11.1): the SPA is served by a Worker with Static
+      # Assets; routes and DNS live in live/edge, NOT in this deploy. Dev deploys
+      # immediately on merge (`wrangler deploy`). Prod NEVER redeploys over traffic:
+      # a release tag uploads a NEW VERSION with no traffic skew (`versions upload`),
+      # and the promote-spa job below rolls it only after a human approves the
+      # `production` environment — given once ArgoCD shows the API Healthy on the
+      # new digest (§11.1, no SPA/API skew).
+      - name: Deploy the Worker (dev)
+        id: workers-dev
+        if: inputs.target == 'workers' && github.ref_type != 'tag'
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
+          WRANGLER_ENV: ${{ inputs.workers_dev_env }}
+        run: |
+          set -euo pipefail
+          npx --yes "wrangler@${WRANGLER_VERSION}" deploy --env "$WRANGLER_ENV"
+
+      - name: Upload the Worker version (prod, no traffic)
+        id: workers-upload
+        if: inputs.target == 'workers' && github.ref_type == 'tag'
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
+          WRANGLER_ENV: ${{ inputs.workers_prod_env }}
+        run: |
+          set -euo pipefail
+          npx --yes "wrangler@${WRANGLER_VERSION}" versions upload --env "$WRANGLER_ENV" 2>&1 | tee upload.log
+          # The upload prints "Version ID: <uuid>" — everything else on that line is
+          # decoration. If the format ever drifts, fail loudly rather than promote blind.
+          ID="$(grep -oE 'Version ID: [0-9a-f-]+' upload.log | tail -n1 | awk '{print $3}')"
+          [[ "$ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+            echo "::error ::could not read a Version ID from the upload output — refusing to continue." >&2
+            cat upload.log
+            exit 1
+          }
+          echo "version_id=$ID" >> "$GITHUB_OUTPUT"
 
       - name: Post-deploy health check
         if: vars.APP_URL != ''
@@ -327,12 +376,14 @@ jobs:
           STATUS: ${{ job.status }}
           ACTOR: ${{ github.actor }}
           PAGES_PROJECT: ${{ vars.PAGES_PROJECT }}
+          TARGET: ${{ inputs.target }}
         run: |
           {
             echo "### Deploy $STATUS — $ENVIRONMENT"
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| **Asset tag** | \`$ASSET_TAG\` |"
+            echo "| **Target** | \`$TARGET\` |"
             echo "| **Pages project** | \`$PAGES_PROJECT\` |"
             echo "| **Actor** | $ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -346,3 +397,37 @@ jobs:
           service: ${{ inputs.product }}-web
           environment: ${{ env.ENVIRONMENT }}
           version: ${{ env.ASSET_TAG }}
+
+  # ── Prod SPA rollout (Workers target) — the second half of §11.1 ──────────
+  # `versions upload` put the new version on Cloudflare with ZERO traffic. This
+  # job rolls `<id>@100%` — and nothing else changes, so a bad SPA version rolls
+  # back with one `versions rollback`. The `production` environment gate is the
+  # human control: approve it once the API deploy (ArgoCD) is Healthy on the new
+  # digest, per §11.1.
+  promote-spa:
+    name: Roll the SPA version to 100%
+    needs: [context, deploy]
+    if: >-
+      inputs.target == 'workers' &&
+      github.ref_type == 'tag' &&
+      inputs.single_environment == '' &&
+      needs.deploy.outputs.worker_version_id != ''
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Deploy the uploaded SPA version to 100%
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_VERSION: ${{ inputs.wrangler_version }}
+          VERSION_ID: ${{ needs.deploy.outputs.worker_version_id }}
+          WRANGLER_ENV: ${{ inputs.workers_prod_env }}
+        run: |
+          set -euo pipefail
+          npx --yes "wrangler@${WRANGLER_VERSION}" versions deploy "${VERSION_ID}@100%" --env "$WRANGLER_ENV"
+          echo "| **SPA version** | \`${VERSION_ID}\` → 100% |" >> "$GITHUB_STEP_SUMMARY"
