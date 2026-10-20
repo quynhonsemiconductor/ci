@@ -124,7 +124,7 @@ jobs:
       contents: read
       id-token: write      # OIDC to AWS — no long-lived access keys
       attestations: write  # build provenance
-      packages: read       # private @quynhonsemiconductor/* from GitHub Packages
+      packages: write      # push to ghcr.io (§11.1) AND pull private @quynhonsemiconductor/* from GitHub Packages
     strategy:
       # One image per service. A product is N services sharing a repository, and
       # each gets its own ECR repository named <product>-<service> (§7c).
@@ -133,6 +133,10 @@ jobs:
       fail-fast: false
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      # Meaningful only when the matrix has ONE service. The multi-service digest map
+      # is assembled in deploy-dev from the per-service artifacts (GitHub cannot merge
+      # job outputs across a matrix), and every digest is also printed to the summary.
+      digest: ${{ steps.ghcr.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
         # This job builds an image; it never pushes a git ref. The tag bump
@@ -215,12 +219,76 @@ jobs:
           # the native arm64 runner and `packages: read`.
           image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.build.outputs.image-digest }}
 
+      # ── GHCR: the image leaves ECR (§11.1 flow B) ─────────────────────────
+      # ECR stays the registry the DEV deploy consumes until the on-prem move
+      # (gitops still pulls from ECR, and its ghcr pull secret arrives with the
+      # move), so BOTH registries get the same bytes from here on. The copy runs
+      # server-side from the pushed digest — no rebuild — and a manifest copied
+      # verbatim keeps its digest, so the attestation above covers the GHCR image
+      # too. When the move retires ECR (§13.1 A-6) only this step survives.
+      - name: Log in to GHCR
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push the same image to GHCR
+        id: ghcr
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          DIGEST="${{ steps.build.outputs.image-digest }}"
+          SRC="${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${SERVICE}@${DIGEST}"
+          DST="ghcr.io/${{ github.repository_owner }}/${{ inputs.product }}-${SERVICE}:${{ steps.tag.outputs.tag }}"
+          docker buildx imagetools create -t "$DST" "$SRC"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image=${DST}" >> "$GITHUB_OUTPUT"
+          {
+            echo "| service | image | digest |"
+            echo "|---|---|---|"
+            echo "| ${SERVICE} | \`${DST}\` | \`${DIGEST}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s %s\n' "${SERVICE}" "${DIGEST}" > "digest-${SERVICE}.txt"
+
+      - name: Upload the digest record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.service }}
+          path: digest-*.txt
+          if-no-files-found: error
+
 
   deploy-dev:
     needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the build jobs' digest artifacts
+    outputs:
+      # {"api": "sha256:...", "worker": "..."} — consumed by the gitops digest
+      # flip (§13.1 M-3) once tags.{dev,prod}.yaml move to GHCR-by-digest.
+      digests-json: ${{ steps.digests.outputs.json }}
     steps:
+      - name: Download the digest records
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Assemble the service digest map
+        id: digests
+        run: |
+          set -euo pipefail
+          {
+            echo "json=$(cat digests/* | jq -R -s -c 'split("\n") | map(select(length > 0)) | map(split(" ") | { (.[0]): .[1] }) | add // {}')"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Service digests (dev deploy)"
+            echo '```'
+            cat digests/*
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # The only thing that "deploys". No kubectl, no cluster credentials, no
       # access to the cluster at all — this edits one line in another repository.
       - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
