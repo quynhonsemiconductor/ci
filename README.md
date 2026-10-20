@@ -120,7 +120,7 @@ check silently passes any result GitHub adds later.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1
+      - uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1.21.0
         with:
           results: ${{ join(needs.*.result, ',') }}
 ```
@@ -163,13 +163,13 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.txt"
-      - uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1
+      - uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1.21.0
         with:
           base-ref: ${{ github.event.pull_request.base.ref }}
           body-file: ${{ runner.temp }}/pr-body.txt
 ```
 
-The reusable workflow (`.github/workflows/agent-forge-guard.yml@v1`) is shorter and
+The reusable workflow (`.github/workflows/agent-forge-guard.yml@v1.21.0`) is shorter and
 carries the checkout and body handling for you. It is the right choice only for a
 repository that has **no** existing `test-guard` requirement, and whose ruleset can
 name `test-guard / test-guard` from the start.
@@ -638,12 +638,12 @@ Gives `validate-openapi-contract` its baseline: the spec that the base branch's 
 ```yaml
 - name: Fetch the base spec
   if: github.event_name == 'pull_request'
-  uses: quynhonsemiconductor/ci/actions/fetch-openapi-base-spec@v1
+  uses: quynhonsemiconductor/ci/actions/fetch-openapi-base-spec@v1.21.0
   with:
     workflow: backend-ci.yml           # the workflow that uploads the specs
 - name: Breaking change check
   if: github.event_name == 'pull_request'
-  uses: quynhonsemiconductor/ci/actions/validate-openapi-contract@v1
+  uses: quynhonsemiconductor/ci/actions/validate-openapi-contract@v1.21.0
   with:
     current-spec-path: openapi.json
     base-spec-path: base-spec/openapi.json
@@ -736,13 +736,19 @@ The `combine` input on both workflows is deprecated and ignored (it is still acc
 Pin to a release tag for production stability:
 ```yaml
 # Production — pin to a tag
-uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1
+uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1.21.0
 
 # Dev / fast iteration
 uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
 ```
 
-This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Consuming repos should pin to `@v1` or `@v1.2.0` in production workflows.
+This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Consuming repos must pin to a released `@vX.Y.Z` **plus its commit digest** (Renovate does both, via the org preset's `pinDigests`), e.g.
+
+```yaml
+uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@4ab9d053b565b4fef50da119b0ff675de19217e0 # v1.21.0
+```
+
+The floating `v1` / `v1.21` tags are retired (2026-10-20): a push to ci main can no longer change any consumer's pipeline — bumps land only through reviewed Renovate PRs.
 
 ## Adding new actions
 
