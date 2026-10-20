@@ -8,11 +8,11 @@ WHY THIS EXISTS. On 2026-08-12 every rally infra PR went red:
     AccessDeniedException: not authorized to perform: secretsmanager:GetSecretValue
 
 The fix already existed in qnsc-ci — `fix(infra-plan): plan without reading secret
-values`, released in v1.7.2 — and qnsc-kb-backend was already on it. rally was on
-v1.6.6, uniformly, across all 11 references. Nothing about rally was wrong. It was a
+values`, released in v1.7.2 — and qnsc-kb-backend was already on it. rova was on
+v1.6.6, uniformly, across all 11 references. Nothing about rova was wrong. It was a
 stale pin, and nothing anywhere reported that.
 
-The same day showed the other half: rally was AHEAD on cf-tunnel while kb was ahead on
+The same day showed the other half: rova was AHEAD on cf-tunnel while kb was ahead on
 iam-oidc and secrets. Neither repo was canonical, so "copy the good one" had no answer.
 That is what makes divergence expensive — not being behind, but nobody knowing which way.
 
