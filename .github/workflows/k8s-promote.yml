@@ -68,7 +68,7 @@ jobs:
     # to prevent.
     environment: production
     steps:
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         id: aws
         with:
           role-arn: ${{ secrets.aws-role-arn }}
@@ -131,7 +131,7 @@ jobs:
           # remember to do it.
 
       - name: Open the promotion pull request
-        uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
+        uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@v1.22.0
         with:
           product: ${{ inputs.product }}
           env: prod
