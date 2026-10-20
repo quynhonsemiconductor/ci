@@ -78,8 +78,8 @@ def consumer_repos() -> tuple[list[str], list[str]]:
     would also have missed opshub, which shares this boilerplate by policy, and qnsc-infra,
     which consumes the terraform modules directly.
 
-    Archived repos are excluded: rova-api, rova-infra, opshub-api and friends are frozen
-    predecessors, so their pins are history rather than drift.
+    Archived repos are excluded: a frozen predecessor's pins are history rather than
+    drift, so naming them adds nothing.
 
     PRIVATE repos are excluded too, and that is a real limitation rather than a choice —
     the job holds no cross-repo token, so it cannot clone them. It is reported in the
