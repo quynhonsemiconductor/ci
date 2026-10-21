@@ -211,12 +211,18 @@ def test_merge_group_without_shas_runs_everything(tmp_path):
     assert calls == ""
 
 
-def test_merge_group_when_gh_fails_runs_everything(tmp_path):
-    # an ignore list that would match anything at all — only the missing listing must save it
-    import os as _os
-    _os.environ["CP_IGNORE"] = "**"
-    run, _ = run_step(tmp_path, "merge_group", {}, count_files=0)
+def test_merge_group_when_gh_fails_runs_everything(tmp_path, monkeypatch):
+    # an ignore list that would match EVERYTHING — only gh failing (non-zero exit) saves the
+    # run from a false "skip"; this is the fail-open path the merge_group branch exists for
+    monkeypatch.setenv("CP_IGNORE", "**")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n")
+    gh.chmod(0o755)
+    run, calls = run_step(tmp_path, "merge_group", {}, count_files=0)
     assert run == "true"
+    assert "compare/" in calls
 
 
 def test_pull_request_branch_still_uses_the_pr_files_endpoint(tmp_path):
