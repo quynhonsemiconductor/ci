@@ -87,7 +87,7 @@ on:
         description: 'Ref of this repository to read `rules/` from. Keep in step with the workflow ref.'
         required: false
         type: string
-        default: 'v1'
+        default: 'v1.22.0'
       resolve_outdated:
         description: >
           Resolve the bot's own inline threads once their lines no longer exist. `false`, `report`

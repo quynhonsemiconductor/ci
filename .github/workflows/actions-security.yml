@@ -17,7 +17,7 @@
 #
 #   jobs:
 #     actions-security:
-#       uses: quynhonsemiconductor/ci/.github/workflows/actions-security.yml@v1
+#       uses: quynhonsemiconductor/ci/.github/workflows/actions-security.yml@v1.22.0
 #
 # Then point the ruleset's required status check at this job's name —
 # "Workflow security (actionlint, zizmor)" — instead of `Analyze (actions)` / `CodeQL`.
@@ -112,11 +112,11 @@ jobs:
           persist-credentials: false
 
       - name: Workflow lint (actionlint)
-        uses: quynhonsemiconductor/ci/actions/lint-workflows@v1
+        uses: quynhonsemiconductor/ci/actions/lint-workflows@v1.22.0
 
       - name: Actions security (zizmor)
         if: ${{ !cancelled() }}
-        uses: quynhonsemiconductor/ci/actions/audit-workflows@v1
+        uses: quynhonsemiconductor/ci/actions/audit-workflows@v1.22.0
         with:
           path: ${{ inputs.path }}
           min-severity: ${{ inputs.min_severity }}

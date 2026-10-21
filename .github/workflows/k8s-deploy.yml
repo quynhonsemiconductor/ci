@@ -153,7 +153,7 @@ jobs:
           # the same image at promotion; nothing is rebuilt.
           echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         id: aws
         with:
           role-arn: ${{ secrets.aws-role-arn }}
@@ -162,7 +162,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-ecr@main
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@v1.22.0
         with:
           ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
           # §7c — the ECR repository carries NO environment. Promotion is "the
@@ -196,7 +196,7 @@ jobs:
           cache-scope: ${{ inputs.product }}-${{ matrix.service }}
 
       - name: Attest
-        uses: quynhonsemiconductor/ci/actions/attest-image@main
+        uses: quynhonsemiconductor/ci/actions/attest-image@v1.22.0
         with:
           # ── A DIGEST REFERENCE, NOT A TAG ────────────────────────────────────
           # This passed `image-uri`, which is `<registry>/<name>:<tag>`, and the
@@ -298,7 +298,7 @@ jobs:
 
       # The only thing that "deploys". No kubectl, no cluster credentials, no
       # access to the cluster at all — this edits one line in another repository.
-      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
+      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@v1.22.0
         with:
           product: ${{ inputs.product }}
           env: dev
