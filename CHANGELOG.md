@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.23.0](https://github.com/quynhonsemiconductor/ci/compare/v1.22.0...v1.23.0) (2026-10-21)
+
+
+### Features
+
+* **changed-paths:** compare the merge-queue head against its base ([#235](https://github.com/quynhonsemiconductor/ci/issues/235)) ([4cacc94](https://github.com/quynhonsemiconductor/ci/commit/4cacc94493580e0514d343687beb23415509c9f7))
+* **k8s-deploy:** mint the gitops token from the qnsc-automation app ([#232](https://github.com/quynhonsemiconductor/ci/issues/232)) ([95a374e](https://github.com/quynhonsemiconductor/ci/commit/95a374ea458620760cbdcc933f900894a2695d18))
+* **release:** retire the floating v1 tags; consumers pin vX.Y.Z by digest ([#230](https://github.com/quynhonsemiconductor/ci/issues/230)) ([67e5365](https://github.com/quynhonsemiconductor/ci/commit/67e53658d3c40d98891fbe8f1d60ebc7d3ec4f77))
+* **workflows:** call ci siblings by exact release ref, never [@v1](https://github.com/v1) or [@main](https://github.com/main) ([#234](https://github.com/quynhonsemiconductor/ci/issues/234)) ([ba31d52](https://github.com/quynhonsemiconductor/ci/commit/ba31d52d54c760c40fb5cde36194aad32c162583))
+
 ## [1.22.0](https://github.com/quynhonsemiconductor/ci/compare/v1.21.0...v1.22.0) (2026-10-20)
 
 
