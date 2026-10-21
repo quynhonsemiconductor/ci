@@ -6,7 +6,8 @@ description: >
   at 20 concurrent jobs and one product push started ~20.
 
   THE DIRECTION OF EVERY DOUBT IS `true`. This skips CI, and a skipped required check counts as PASSING, so it fails open on purpose:
-    * any event but `pull_request` (a push to main ALWAYS runs: deploys wait for that run);
+    * any event but `pull_request` and `merge_group` (a push to main ALWAYS runs: deploys wait for that run);
+    * a merge_group run whose base/head shas are missing, whose comparison cannot be listed, or that hits the compare API's 300-file cap;
     * the files cannot be listed (API error, no token), or the list is empty, or it hit the API's 3,000-file ceiling;
     * ANY changed file that matches none of `ignore`.
   Only "every changed file is on the ignore list" turns `run` off. Use the SAME list the product's deploy workflow keeps in `paths-ignore`:
@@ -59,18 +60,40 @@ runs:
         REPO: ${{ github.repository }}
         IGNORE: ${{ inputs.ignore }}
         SKIP_HEADS: ${{ inputs.skip-heads }}
+        MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
       run: |
         set -uo pipefail
         emit() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "changed-paths: run=$1 ($2)"; }
-
-        if [ "$EVENT" != "pull_request" ]; then emit true "event is $EVENT, not pull_request"; exit 0; fi
 
         # One JSON object per changed path, WITH its diff (the diff is what lets a rule check "only the version field changed").
         # Written to a file and read by the script by path: a large pull request carries megabytes of diff, and passing that through
         # an environment variable or argv fails with E2BIG ("Argument list too long") and would turn both CI gates red.
         list_file="$RUNNER_TEMP/changed-paths-files.jsonl"
-        if ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
-          emit true "could not list the changed files"; exit 0
+
+        if [ "$EVENT" = "pull_request" ]; then
+          if ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
+            emit true "could not list the changed files"; exit 0
+          fi
+        elif [ "$EVENT" = "merge_group" ]; then
+          # GitHub's merge queue runs the required checks on a synthetic `gh-readonly-queue` ref.
+          # Compare the queue head against the queue base BY SHA (`merge_group.base_sha`), not by
+          # the base branch name: the branch tip moves, the queue entry does not. EVERY doubt runs
+          # everything (a skipped required check counts as passing): missing refs, a failed
+          # listing, or the compare API's 300-file cap is `run=true`, never false.
+          if [ -z "$MERGE_BASE_SHA" ] || [ -z "$MERGE_HEAD_SHA" ]; then
+            emit true "merge_group event without base/head shas"; exit 0
+          fi
+          if ! gh api --paginate "repos/$REPO/compare/$MERGE_BASE_SHA...$MERGE_HEAD_SHA" --jq '.files[]? | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
+            emit true "could not list the merge-queue changes"; exit 0
+          fi
+          # The compare endpoint returns AT MOST 300 files per request; beyond that the listing is
+          # silently truncated, so "everything listed is ignorable" proves nothing.
+          if [ "$(wc -l < "$list_file")" -ge 300 ]; then
+            emit true "compare API 300-file cap reached"; exit 0
+          fi
+        else
+          emit true "event is $EVENT, not pull_request or merge_group"; exit 0
         fi
 
         FILES_PATH="$list_file" python3 "$GITHUB_ACTION_PATH/changed_paths.py"

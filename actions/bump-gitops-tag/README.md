@@ -8,7 +8,7 @@ builds an image and edits one line in another repository. ArgoCD reconciles from
 there.
 
 ```yaml
-- uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@main
+- uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@v1.22.0
   with:
     product: rova
     env: dev

@@ -157,7 +157,7 @@ jobs:
 
       - name: Setup AWS OIDC + ECR login
         id: aws
-        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
@@ -175,7 +175,7 @@ jobs:
           echo "list=$LIST" >> "$GITHUB_OUTPUT"
 
       - name: Promote images ${{ env.SOURCE_TAG }} → ${{ env.IMAGE_TAG }}
-        uses: quynhonsemiconductor/ci/actions/promote-ecr-images@v1
+        uses: quynhonsemiconductor/ci/actions/promote-ecr-images@v1.22.0
         with:
           image-names: ${{ steps.images.outputs.list }}
           source-tag:  ${{ env.SOURCE_TAG }}
@@ -195,7 +195,7 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest promoted API image
-        uses: quynhonsemiconductor/ci/actions/attest-image@v1
+        uses: quynhonsemiconductor/ci/actions/attest-image@v1.22.0
         with:
           image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-api@${{ steps.promoted-api-digest.outputs.digest }}
 
@@ -240,7 +240,7 @@ jobs:
 
       - name: Setup AWS OIDC + ECR login
         id: aws
-        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
@@ -250,7 +250,7 @@ jobs:
       # that convention is what lets this be one matrix instead of three blocks.
       - name: Build & push ${{ matrix.service }}
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-ecr@v1
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@v1.22.0
         with:
           ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
@@ -279,7 +279,7 @@ jobs:
 
       - name: Attest ${{ matrix.service }} image
         if: ${{ !inputs.multi_arch }}
-        uses: quynhonsemiconductor/ci/actions/attest-image@v1
+        uses: quynhonsemiconductor/ci/actions/attest-image@v1.22.0
         with:
           image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.build.outputs.image-digest }}
 
@@ -352,7 +352,7 @@ jobs:
     steps:
       - name: Setup AWS OIDC + ECR login
         id: aws
-        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
@@ -421,7 +421,7 @@ jobs:
           echo "$SERVICE $IMAGE_TAG -> $digest (amd64 + arm64)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attest ${{ matrix.service }} image
-        uses: quynhonsemiconductor/ci/actions/attest-image@v1
+        uses: quynhonsemiconductor/ci/actions/attest-image@v1.22.0
         with:
           image-ref: ${{ steps.aws.outputs.ecr-registry }}/${{ inputs.product }}-${{ matrix.service }}@${{ steps.merge.outputs.image-digest }}
 
@@ -470,13 +470,13 @@ jobs:
           persist-credentials: false
 
       - name: Setup AWS OIDC (deploy role)
-        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ needs.context.outputs.environment }}
           region: ${{ inputs.aws_region }}
 
       - name: Ensure environment is awake (RDS + ECS)
-        uses: quynhonsemiconductor/ci/actions/ensure-environment-awake@v1
+        uses: quynhonsemiconductor/ci/actions/ensure-environment-awake@v1.22.0
         with:
           rds-identifier: ${{ vars.RDS_INSTANCE_ID }}
           ecs-cluster: ${{ vars.ECS_CLUSTER }}
@@ -502,7 +502,7 @@ jobs:
       ENVIRONMENT: ${{ needs.context.outputs.environment }}
     steps:
       - name: Setup AWS OIDC (deploy role)
-        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1
+        uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
         with:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ env.ENVIRONMENT }}
           region: ${{ inputs.aws_region }}
@@ -632,7 +632,7 @@ jobs:
       # image (qnsc-kb's Celery beat) kept ':latest', which does not exist in an immutable repository.
       - name: Update API task definition to ${{ env.IMAGE_TAG }}
         id: api-taskdef
-        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1.22.0
         with:
           family: ${{ vars.ECS_CLUSTER }}-${{ vars.ECS_API_SERVICE }}
           container: api
@@ -642,7 +642,7 @@ jobs:
       - name: Update Worker task definition to ${{ env.IMAGE_TAG }}
         id: worker-taskdef
         if: inputs.has_worker
-        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1.22.0
         with:
           family: ${{ vars.ECS_CLUSTER }}-${{ vars.ECS_WORKER_SERVICE }}
           container: worker
@@ -689,7 +689,7 @@ jobs:
       # purpose, not as a side effect of moving a step into a job.
       - name: Ensure environment is awake (RDS + ECS)
         if: env.ENVIRONMENT == 'develop'
-        uses: quynhonsemiconductor/ci/actions/ensure-environment-awake@v1
+        uses: quynhonsemiconductor/ci/actions/ensure-environment-awake@v1.22.0
         with:
           rds-identifier: ${{ vars.RDS_INSTANCE_ID }}
           ecs-cluster: ${{ vars.ECS_CLUSTER }}
@@ -698,7 +698,7 @@ jobs:
       - name: Update Migrator task definition to ${{ env.IMAGE_TAG }}
         id: migrator-taskdef
         if: inputs.has_migrator
-        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1
+        uses: quynhonsemiconductor/ci/actions/update-task-definition@v1.22.0
         with:
           family: ${{ vars.ECS_MIGRATOR_TASK_DEF }}
           container: migrator
@@ -707,7 +707,7 @@ jobs:
 
       - name: Run database migrations
         if: inputs.has_migrator
-        uses: quynhonsemiconductor/ci/actions/run-db-migration@v1
+        uses: quynhonsemiconductor/ci/actions/run-db-migration@v1.22.0
         with:
           cluster: ${{ vars.ECS_CLUSTER }}
           task-definition: ${{ steps.migrator-taskdef.outputs.arn }}
@@ -857,7 +857,7 @@ jobs:
       # touching a dependency, which is exactly what makes it useless as a deploy gate.
       - name: Post-deploy readiness check
         if: vars.APP_URL != ''
-        uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@v1
+        uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@v1.22.0
         with:
           url: ${{ vars.APP_URL }}${{ inputs.health_path }}
           timeout-seconds: '120'
@@ -882,7 +882,7 @@ jobs:
 
       - name: Notify deploy result
         if: always()
-        uses: quynhonsemiconductor/ci/actions/notify-deploy@v1
+        uses: quynhonsemiconductor/ci/actions/notify-deploy@v1.22.0
         with:
           webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
           status: ${{ job.status == 'success' && 'success' || (steps.verify.outputs.outcome == 'rollback' && 'rollback' || 'failure') }}

@@ -6,7 +6,7 @@
 # Caller:
 #   jobs:
 #     comment:
-#       uses: quynhonsemiconductor/ci/.github/workflows/release-commenter.yml@v1
+#       uses: quynhonsemiconductor/ci/.github/workflows/release-commenter.yml@v1.22.0
 # =============================================================================
 name: Reusable · Release Commenter
 
