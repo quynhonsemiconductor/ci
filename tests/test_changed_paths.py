@@ -137,15 +137,92 @@ def test_a_python_release_pr_is_version_only_in_pyproject(tmp_path):
     assert run([("pyproject.toml", TOML_PATCH + dep)], skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=true"
 
 
-def test_the_merge_group_branch_fails_open_and_compares_the_queue_base():
-    """The merge_group half lives in the bash step (it drives gh api), so pin its SHAPE:
-    the queue base/head must feed the compare, and every doubt must emit run=true."""
+def run_step(tmp_path, event, monkeypatch_env, fake_gh=None, count_files=0, pr="836"):
+    """EXECUTE the action's bash step (not a text check): fake `gh` on PATH, real python."""
+    import json as _json
+    import stat
+
     action = (pathlib.Path(__file__).resolve().parents[1] / "actions/changed-paths/action.yml").read_text()
-    assert "github.event.merge_group.base_ref" in action
-    assert "github.event.merge_group.head_ref" in action
-    assert "/compare/$BASE...$MERGE_HEAD_REF" in action
-    # strip refs/heads/ off the base before comparing
-    assert 'BASE="${MERGE_BASE_REF#refs/heads/}"' in action
-    # every doubt emits true BEFORE the compare is trusted
-    assert 'emit true "merge_group event without base/head refs"' in action
-    assert 'emit true "could not list the merge-queue changes"' in action
+    i = action.find("      run: |")
+    block = []
+    for line in action[i:].splitlines()[1:]:
+        if line.startswith("        ") or line.strip() == "":
+            block.append(line[8:])
+        else:
+            break
+    script = "\n".join(block)
+    script = script.replace('$GITHUB_ACTION_PATH/changed_paths.py', str(pathlib.Path(__file__).resolve().parents[1] / "actions/changed-paths/changed_paths.py"))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    payload = "".join(
+        _json.dumps({"filename": f"docs/file{n}.md", "patch": "+x"}) + "\n" for n in range(count_files)
+    )
+    seen = {}
+    gh.write_text(
+        "#!/bin/sh\n"
+        'echo "$@" >> "' + str(tmp_path / "gh-calls.log") + '"\n'
+        "cat <<'JSON'\n" + payload + "JSON\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+
+    out = tmp_path / "out.txt"
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "EVENT": event,
+        "REPO": "quynhonsemiconductor/probe",
+        "PR": pr,
+        "HEAD_REF": "",
+        "AUTHOR": "",
+        "IGNORE": os.environ.get("CP_IGNORE", "**/*.md"),
+        "SKIP_HEADS": "",
+        "MERGE_BASE_SHA": monkeypatch_env.get("BASE", "1111111"),
+        "MERGE_HEAD_SHA": monkeypatch_env.get("HEAD", "2222222"),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(out),
+        "GITHUB_ACTION_PATH": str(pathlib.Path(__file__).resolve().parents[1] / "actions/changed-paths"),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    proc = subprocess.run(["bash", "-c", script], env={**os.environ, **env}, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    value = dict(line.split("=", 1) for line in out.read_text().splitlines())["run"]
+    calls = (tmp_path / "gh-calls.log").read_text() if (tmp_path / "gh-calls.log").exists() else ""
+    return value, calls
+
+
+@pytest.mark.parametrize(
+    "count,expected",
+    [(3, "false"), (299, "false"), (300, "true")],  # 3 md files ignorable; 299 still under the cap; 300 hits it
+)
+def test_merge_group_executes_and_respects_the_compare_cap(tmp_path, count, expected):
+    run, _ = run_step(tmp_path, "merge_group", {}, count_files=count)
+    assert run == expected
+
+
+def test_merge_group_compares_base_sha_to_head_sha(tmp_path):
+    _, calls = run_step(tmp_path, "merge_group", {"BASE": "aaa111", "HEAD": "bbb222"}, count_files=3)
+    assert "compare/aaa111...bbb222" in calls
+
+
+def test_merge_group_without_shas_runs_everything(tmp_path):
+    run, calls = run_step(tmp_path, "merge_group", {"BASE": "", "HEAD": ""})
+    assert run == "true"
+    assert calls == ""
+
+
+def test_merge_group_when_gh_fails_runs_everything(tmp_path):
+    # an ignore list that would match anything at all — only the missing listing must save it
+    import os as _os
+    _os.environ["CP_IGNORE"] = "**"
+    run, _ = run_step(tmp_path, "merge_group", {}, count_files=0)
+    assert run == "true"
+
+
+def test_pull_request_branch_still_uses_the_pr_files_endpoint(tmp_path):
+    # the PR path is untouched by the merge_group work: same endpoint, same filtering
+    run, calls = run_step(tmp_path, "pull_request", {}, count_files=3)
+    assert run == "false"
+    assert "/pulls/836/files" in calls
+    assert "compare/" not in calls
+

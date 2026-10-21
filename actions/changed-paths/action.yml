@@ -7,7 +7,7 @@ description: >
 
   THE DIRECTION OF EVERY DOUBT IS `true`. This skips CI, and a skipped required check counts as PASSING, so it fails open on purpose:
     * any event but `pull_request` and `merge_group` (a push to main ALWAYS runs: deploys wait for that run);
-    * a merge_group run whose base/head refs are missing or whose comparison cannot be listed;
+    * a merge_group run whose base/head shas are missing, whose comparison cannot be listed, or that hits the compare API's 300-file cap;
     * the files cannot be listed (API error, no token), or the list is empty, or it hit the API's 3,000-file ceiling;
     * ANY changed file that matches none of `ignore`.
   Only "every changed file is on the ignore list" turns `run` off. Use the SAME list the product's deploy workflow keeps in `paths-ignore`:
@@ -60,8 +60,8 @@ runs:
         REPO: ${{ github.repository }}
         IGNORE: ${{ inputs.ignore }}
         SKIP_HEADS: ${{ inputs.skip-heads }}
-        MERGE_BASE_REF: ${{ github.event.merge_group.base_ref }}
-        MERGE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
       run: |
         set -uo pipefail
         emit() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "changed-paths: run=$1 ($2)"; }
@@ -77,15 +77,20 @@ runs:
           fi
         elif [ "$EVENT" = "merge_group" ]; then
           # GitHub's merge queue runs the required checks on a synthetic `gh-readonly-queue` ref.
-          # Compare the queue head against the queue's base branch, so path filtering keeps working
-          # in the queue. EVERY doubt runs everything (this skips CI and a skipped required check
-          # counts as passing): a missing base/head ref or a failed listing is `run=true`, never false.
-          BASE="${MERGE_BASE_REF#refs/heads/}"
-          if [ -z "$BASE" ] || [ -z "$MERGE_HEAD_REF" ]; then
-            emit true "merge_group event without base/head refs"; exit 0
+          # Compare the queue head against the queue base BY SHA (`merge_group.base_sha`), not by
+          # the base branch name: the branch tip moves, the queue entry does not. EVERY doubt runs
+          # everything (a skipped required check counts as passing): missing refs, a failed
+          # listing, or the compare API's 300-file cap is `run=true`, never false.
+          if [ -z "$MERGE_BASE_SHA" ] || [ -z "$MERGE_HEAD_SHA" ]; then
+            emit true "merge_group event without base/head shas"; exit 0
           fi
-          if ! gh api --paginate "repos/$REPO/compare/$BASE...$MERGE_HEAD_REF" --jq '.files[]? | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
+          if ! gh api --paginate "repos/$REPO/compare/$MERGE_BASE_SHA...$MERGE_HEAD_SHA" --jq '.files[]? | {filename, previous_filename, patch} | tojson' > "$list_file" 2>/dev/null; then
             emit true "could not list the merge-queue changes"; exit 0
+          fi
+          # The compare endpoint returns AT MOST 300 files per request; beyond that the listing is
+          # silently truncated, so "everything listed is ignorable" proves nothing.
+          if [ "$(wc -l < "$list_file")" -ge 300 ]; then
+            emit true "compare API 300-file cap reached"; exit 0
           fi
         else
           emit true "event is $EVENT, not pull_request or merge_group"; exit 0
