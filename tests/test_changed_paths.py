@@ -135,3 +135,17 @@ def test_a_python_release_pr_is_version_only_in_pyproject(tmp_path):
     (tmp_path / "out").unlink()  # run() appends to one output file
     dep = '@@ -9,3 +9,3 @@\n-dependencies = ["a"]\n+dependencies = ["a", "evil"]\n'
     assert run([("pyproject.toml", TOML_PATCH + dep)], skip=rule, head="release-please--x", author=BOT, tmp_path=tmp_path) == "run=true"
+
+
+def test_the_merge_group_branch_fails_open_and_compares_the_queue_base():
+    """The merge_group half lives in the bash step (it drives gh api), so pin its SHAPE:
+    the queue base/head must feed the compare, and every doubt must emit run=true."""
+    action = (pathlib.Path(__file__).resolve().parents[1] / "actions/changed-paths/action.yml").read_text()
+    assert "github.event.merge_group.base_ref" in action
+    assert "github.event.merge_group.head_ref" in action
+    assert "/compare/$BASE...$MERGE_HEAD_REF" in action
+    # strip refs/heads/ off the base before comparing
+    assert 'BASE="${MERGE_BASE_REF#refs/heads/}"' in action
+    # every doubt emits true BEFORE the compare is trusted
+    assert 'emit true "merge_group event without base/head refs"' in action
+    assert 'emit true "could not list the merge-queue changes"' in action
