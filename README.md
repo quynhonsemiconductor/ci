@@ -169,10 +169,9 @@ jobs:
           body-file: ${{ runner.temp }}/pr-body.txt
 ```
 
-The reusable workflow (`.github/workflows/agent-forge-guard.yml@v1.21.0`) is shorter and
-carries the checkout and body handling for you. It is the right choice only for a
-repository that has **no** existing `test-guard` requirement, and whose ruleset can
-name `test-guard / test-guard` from the start.
+The former reusable workflow (`.github/workflows/agent-forge-guard.yml`) was removed —
+it had no org-wide consumers. Repos without an existing `test-guard` requirement should
+call the action directly as shown above.
 
 ### Notifications
 | Action | Description |
