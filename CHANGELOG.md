@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.1](https://github.com/quynhonsemiconductor/ci/compare/v1.23.0...v1.23.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **infra-plan:** skip deleted stacks in detect-changes ([#239](https://github.com/quynhonsemiconductor/ci/issues/239)) ([8ee4d7a](https://github.com/quynhonsemiconductor/ci/commit/8ee4d7ac4103f8bb3a85e3dda147594b18b3ae71))
+
 ## [1.23.0](https://github.com/quynhonsemiconductor/ci/compare/v1.22.0...v1.23.0) (2026-10-21)
 
 
