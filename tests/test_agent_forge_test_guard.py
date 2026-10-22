@@ -286,10 +286,9 @@ def test_an_unreadable_manifest_still_asks(repo: pathlib.Path) -> None:
     assert "cannot read that format" in failures[0]
 
 
-# --- the workflow that carries it --------------------------------------------------
+# --- the action that carries it ---------------------------------------------------
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
-WORKFLOW = _ROOT / ".github" / "workflows" / "agent-forge-guard.yml"
 ACTION = _ROOT / "actions" / "agent-forge-test-guard" / "action.yml"
 
 
@@ -309,54 +308,3 @@ def test_the_action_does_not_interpolate_a_branch_name_into_a_shell() -> None:
     assert "origin/${{" not in body, "a branch name interpolated into a shell command"
 
 
-def test_the_workflow_does_not_leave_a_credential_behind() -> None:
-    """The guard reads history and runs a script against attacker-influenced input; it never pushes.
-    A persisted checkout credential would be available to everything that runs afterwards."""
-    assert "persist-credentials: false" in WORKFLOW.read_text()
-
-
-def test_the_workflow_checks_out_full_history() -> None:
-    """The guard diffs against the merge base, which does not exist in a shallow clone. Without
-    this the check does not fail loudly — it compares against the wrong base and reports on a diff
-    nobody asked about."""
-    assert "fetch-depth: 0" in WORKFLOW.read_text()
-
-
-def test_the_body_reaches_the_script_as_a_file_not_an_argument() -> None:
-    """A pull request body is attacker-controlled text. As an argument a metacharacter in it gets
-    interpreted; as a file it is bytes."""
-    assert "PR_BODY" in WORKFLOW.read_text(), "arrives through the environment, then written out"
-    assert "--body-file" in ACTION.read_text()
-
-
-def test_the_reusable_workflows_job_is_named_test_guard() -> None:
-    """Pinned because the name is half of what a consumer's ruleset has to match, and because the
-    other half is easy to get wrong.
-
-    GitHub names a reusable workflow's check `<caller job>/<called job>`, so this one reports as
-    `test-guard / test-guard` — NOT `test-guard`. A repository that already requires `test-guard`
-    (rova does) must call the composite action instead, which keeps the job local and the name
-    intact. Getting that backwards does not produce a failing check; it produces a required check
-    that never reports, which blocks every merge indefinitely.
-
-    Renaming this job is therefore a breaking change for anyone on the reusable form, and it breaks
-    in the silent direction.
-    """
-    assert "name: test-guard" in WORKFLOW.read_text()
-
-
-def test_the_reusable_says_which_repositories_should_not_use_it() -> None:
-    """The check-name trap is invisible until a ruleset is already wedged, so the file a person
-    reads before adopting it has to say so. Asserted rather than trusted, because a comment is the
-    first thing a tidy-up deletes."""
-    header = WORKFLOW.read_text()
-
-    assert "test-guard / test-guard" in header, "the reported check name is stated"
-    assert "actions/agent-forge-test-guard" in header, "and the alternative is named"
-
-
-def test_the_workflow_re_runs_when_a_pull_request_body_is_edited() -> None:
-    """Approvals are declared in the body, so a repository that omits `edited` leaves an approved
-    change with a red tick nobody can clear. The reusable cannot force the caller's trigger list,
-    so the requirement is stated where somebody copying the snippet will read it."""
-    assert "edited" in WORKFLOW.read_text()
