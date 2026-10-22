@@ -72,11 +72,23 @@ jobs:
           if [ -n "$MODULE_PREFIX" ] && echo "$FILES" | grep -q "^${MODULE_PREFIX}"; then
             echo "Shared module changed under ${MODULE_PREFIX} — planning every live workspace."
             # Enumerate from the CHECKOUT, not from the diff: the point is to plan
-            # workspaces this PR did not touch. `-maxdepth 2` matches the `cut -d/ -f1-3`
-            # depth below, so both branches yield the same shape of path.
+            # workspaces this PR did not touch. `-maxdepth 1 -type d` already lists only
+            # dirs that exist, so a deleted stack can never appear here.
             DIRS=$(find "${PREFIX%/}" -mindepth 1 -maxdepth 1 -type d | sort)
           else
-            DIRS=$(echo "$FILES" | grep "^${PREFIX}" | cut -d/ -f1-3 | sort -u || true)
+            # Keep only stack dirs that still EXIST at the head commit. The diff lists a
+            # DELETED stack too (opshub#464 removed infra/live/prod and the plan job died
+            # on `working directory ...: No such file or directory` then ENOENT plan.txt) —
+            # a deleted stack has nothing to plan, so notice it and skip it.
+            DIRS=""
+            while IFS= read -r d; do
+              [ -z "$d" ] && continue
+              if [ -d "$d" ]; then
+                DIRS="${DIRS}${d}"$'\n'
+              else
+                echo "::notice::stack ${d} was deleted in this PR — nothing to plan, skipping it."
+              fi
+            done < <(echo "$FILES" | grep "^${PREFIX}" | cut -d/ -f1-3 | sort -u)
           fi
 
           CHANGED=$(printf '%s\n' "$DIRS" | jq -Rc 'select(length>0)' | jq -sc '.')
