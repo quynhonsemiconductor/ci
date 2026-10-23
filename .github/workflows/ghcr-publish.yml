@@ -1,0 +1,223 @@
+# =============================================================================
+# Reusable · GHCR publish — build once per merge to main, push to GHCR.
+#
+# The on-prem delivery path (ONPREM-PLAN §11.1, "Build" row): every product
+# image is published to ghcr.io/quynhonsemiconductor/<product>-<service> with
+# the immutable identity tag sha-<commit>, so the gitops manifests can move off
+# ECR before the AWS cutover. This runs ALONGSIDE backend-deploy.yml /
+# k8s-deploy.yml, which keep pushing to ECR until the cutover — both pipelines
+# build the same commit, so the two registries hold identical bytes.
+#
+# Differences from the ECR path, and why:
+#   - linux/amd64 only. The k3s host is amd64; ECS keeps pulling the arm64 entry
+#     of the ECR images, so this workflow does not rebuild for it.
+#   - GITHUB_TOKEN with packages: write. No AWS OIDC, no IAM role — GHCR auth
+#     comes from the calling repo's token, so the caller must grant
+#     `packages: write` (a job-level grant: workflow-level permissions REPLACE
+#     the inherited set, they do not add to it — see k8s-deploy.yml).
+#   - Trivy scans vulnerabilities AND secrets. The ECR path scans vulns only;
+#     a public package makes a leaked credential a public disclosure, so the
+#     secret scanner gates this push.
+#   - No attestation for now. §11.1 defers Cosign/Sigstore on the on-prem path;
+#     the ECS path keeps its attestation unchanged.
+#
+# Digests: a matrix leg cannot publish a job output (the legs share one output
+# namespace — see backend-deploy.yml), so each leg uploads an artifact and the
+# `digests` job reduces them to ONE `digests` output, a JSON object mapping
+# service → sha256 digest. That output is what a later `k8s-deploy` change
+# writes into gitops' tags.dev.yaml.
+#
+# Consuming repos call this thin (SHA-pinned — ci's v1 tag moves on every merge):
+#
+#   jobs:
+#     publish:
+#       permissions: { contents: read, packages: write }
+#       uses: quynhonsemiconductor/ci/.github/workflows/ghcr-publish.yml@<full-sha>
+#       with:
+#         product: rova
+#         services-json: '["api","worker","migrator"]'
+# =============================================================================
+name: Reusable · GHCR Publish
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Short slug — the GHCR image namespace is <product>-<service>.'
+        type: string
+        required: true
+      services-json:
+        description: 'The services to build, as JSON: ["api","worker","migrator"].'
+        type: string
+        required: true
+      platforms:
+        description: 'The k3s host is amd64; keep the default unless the host changes.'
+        type: string
+        default: linux/amd64
+      build_runner:
+        description: >
+          BUILD ON THE TARGET ARCHITECTURE. The default pairs with `platforms`
+          (amd64 on ubuntu-24.04); setting one without the other yields either a
+          QEMU-emulated build that times out on a pnpm + Nest compile or an image
+          that cannot start on the host. See k8s-deploy.yml for the full lesson.
+        type: string
+        default: ubuntu-24.04
+      dockerfile:
+        type: string
+        default: Dockerfile
+    outputs:
+      tag:
+        description: 'The identity tag pushed to every image (sha-<commit>).'
+        value: ${{ jobs.build.outputs.tag }}
+      digests:
+        description: 'JSON object mapping service → image digest (sha256:...).'
+        value: ${{ jobs.digests.outputs.digests }}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-publish-${{ inputs.product }}
+  cancel-in-progress: false
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_NAMESPACE: ghcr.io/quynhonsemiconductor
+
+jobs:
+  build:
+    name: Build ${{ matrix.service }}
+    runs-on: ${{ inputs.build_runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # The Dockerfile's `pnpm install` pulls private @quynhonsemiconductor/*
+      # from GitHub Packages with this same token, and the push below needs
+      # packages: write — one grant covers both.
+      packages: write
+    strategy:
+      # One image per service, matching the ECR convention: <product>-<service>,
+      # one Dockerfile stage per service, `build-target: <service>` (k8s-deploy.yml
+      # records the byte-identical-images incident this convention prevents).
+      matrix:
+        service: ${{ fromJSON(inputs.services-json) }}
+      fail-fast: false
+    outputs:
+      # Shared across the matrix; it is the same commit for every leg, so any
+      # leg's value is the right one.
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Builds and pushes an image; never pushes a git ref.
+        with: { persist-credentials: false }
+
+      - name: Compute the tag
+        id: tag
+        run: |
+          # Same convention as k8s-deploy.yml: sha-<commit> is the IDENTITY tag,
+          # immutable by construction. Promotion to prod later adds a v tag to
+          # the SAME digest; nothing is rebuilt.
+          echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # The composite is registry-agnostic — it only prefixes tags and never
+      # authenticates by itself — so the GHCR login above plays the role the
+      # ECR login plays on the other path, and everything else (buildx setup,
+      # provenance, SBOM, node_auth_token for private packages, GHA cache)
+      # stays one shared implementation instead of a fork.
+      - name: Build & push ${{ matrix.service }}
+        id: build
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@v1
+        with:
+          ecr-registry: ${{ env.GHCR_NAMESPACE }}
+          image-name: ${{ inputs.product }}-${{ matrix.service }}
+          image-tag: ${{ steps.tag.outputs.tag }}
+          build-target: ${{ matrix.service }}
+          dockerfile: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          cache-backend: gha
+          # Same scope as the ECR path on purpose: the layers are identical, so
+          # the two pipelines warm one cache instead of two.
+          cache-scope: ${{ inputs.product }}-${{ matrix.service }}
+
+      - name: Scan ${{ matrix.service }} image (vuln + secret)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: '${{ env.GHCR_NAMESPACE }}/${{ inputs.product }}-${{ matrix.service }}:${{ steps.tag.outputs.tag }}'
+          format: table
+          # CRITICAL unfixed vulns gate the push, same bar as the ECR path —
+          # and secrets gate too, because this package is PUBLIC: a credential
+          # baked into a layer is a disclosure the moment the push lands.
+          scanners: vuln,secret
+          exit-code: '1'
+          severity: CRITICAL
+          ignore-unfixed: true
+        # Trivy resolves a remote image index to linux/amd64 unless told
+        # otherwise; derived from the RUNNER (see backend-deploy.yml).
+        env:
+          TRIVY_PLATFORM: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+
+      # A matrix leg cannot set a workflow output (the legs share one output
+      # namespace), so each leg uploads its digest and `digests` reduces them.
+      - name: Record this leg's digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.image-digest }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest from the $SERVICE build"; exit 1; }
+          mkdir -p digests && echo "$IMAGE_DIGEST" > "digests/$SERVICE.txt"
+
+      # upload-artifact and download-artifact MUST STAY ON THE SAME MAJOR (see
+      # backend-deploy.yml — a v4 upload cannot be read by a v3 download).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ghcr-digest-${{ matrix.service }}
+          path: digests/${{ matrix.service }}.txt
+          retention-days: 1
+
+  digests:
+    name: Reduce digests
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      digests: ${{ steps.reduce.outputs.digests }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: ghcr-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Reduce to one JSON output
+        id: reduce
+        env:
+          PRODUCT: ${{ inputs.product }}
+          NAMESPACE: ${{ env.GHCR_NAMESPACE }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### GHCR images ($NAMESPACE/$PRODUCT)"
+            echo "tag: \`$TAG\`"
+            echo "| service | image ref |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          json='{}'
+          for f in digests/*.txt; do
+            svc=$(basename "$f" .txt)
+            d=$(cat "$f")
+            [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $svc: $d"; exit 1; }
+            json=$(jq -c --arg s "$svc" --arg d "$d" '. + {($s): $d}' <<< "$json")
+            echo "| $svc | \`$NAMESPACE/$PRODUCT-$svc@$d\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "digests=$json" >> "$GITHUB_OUTPUT"
