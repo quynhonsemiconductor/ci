@@ -149,12 +149,13 @@ jobs:
           password: ${{ github.token }}
 
       # FULL SHA of the composite change this workflow needs (the
-      # scan-scanners/labels inputs, ci#243). A same-repo SHA cannot name a
-      # composite edited in the same PR — hence the split; @v1/@main move on
-      # every merge and would not do (zizmor, unpinned-uses).
+      # scan-scanners/labels inputs) — the ci#243 squash-merge commit on main.
+      # A same-repo SHA cannot name a composite edited in the same PR — hence
+      # the split; @v1/@main move on every merge and would not do (zizmor,
+      # unpinned-uses).
       - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-ecr@6e8482a90fc8b138f461c2ec2fd54b0577f0e90d
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@a6146a0980d2d9329b4cbc8b9fcf41118700a261  # ci#243
         with:
           ecr-registry: ${{ env.GHCR_NAMESPACE }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
