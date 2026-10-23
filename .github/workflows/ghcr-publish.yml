@@ -1,25 +1,42 @@
 # =============================================================================
-# Reusable · GHCR publish — build once per merge to main, push to GHCR.
+# Reusable · GHCR publish — build once per merge to main, scan BEFORE push,
+# push to GHCR.
 #
 # The on-prem delivery path (ONPREM-PLAN §11.1, "Build" row): every product
 # image is published to ghcr.io/quynhonsemiconductor/<product>-<service> with
 # the immutable identity tag sha-<commit>, so the gitops manifests can move off
 # ECR before the AWS cutover. This runs ALONGSIDE backend-deploy.yml /
-# k8s-deploy.yml, which keep pushing to ECR until the cutover — both pipelines
-# build the same commit, so the two registries hold identical bytes.
+# k8s-deploy.yml, which keep pushing to ECR until the cutover. The two pipelines
+# build the same commit but are INDEPENDENT builds — do not assume byte-equality
+# across registries; each digest stands on its own.
 #
 # Differences from the ECR path, and why:
 #   - linux/amd64 only. The k3s host is amd64; ECS keeps pulling the arm64 entry
-#     of the ECR images, so this workflow does not rebuild for it.
+#     of the ECR images, so this workflow does not rebuild for it. The GHA cache
+#     scope is suffixed -amd64 for the same reason (k8s-deploy builds arm64 and
+#     must not fight this workflow for one scope).
+#   - Scan BEFORE push, and the scan covers vulns AND secrets (`scan-scanners:
+#     vuln,secret`, severity HIGH,CRITICAL): the packages are PUBLIC, so a
+#     failed scan must leave nothing in the registry. The composite's pre-push
+#     scan (build-push-ecr `scan: true`) builds locally, scans, then verifies
+#     the pushed layers equal the scanned ones.
+#   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
+#     gate the push — unfixed ones are reported, not fatal. Same bar as the ECR
+#     path for vulns; the secret scan has no such concept and always gates.
 #   - GITHUB_TOKEN with packages: write. No AWS OIDC, no IAM role — GHCR auth
 #     comes from the calling repo's token, so the caller must grant
 #     `packages: write` (a job-level grant: workflow-level permissions REPLACE
 #     the inherited set, they do not add to it — see k8s-deploy.yml).
-#   - Trivy scans vulnerabilities AND secrets. The ECR path scans vulns only;
-#     a public package makes a leaked credential a public disclosure, so the
-#     secret scanner gates this push.
+#   - org.opencontainers.image.source labels the image with the CALLING repo, so
+#     GHCR links each package to that repo's page.
 #   - No attestation for now. §11.1 defers Cosign/Sigstore on the on-prem path;
 #     the ECS path keeps its attestation unchanged.
+#
+# Concurrency: one run per product at a time, no cancellation. A run started by
+# push A that is still building when push B arrives finishes and pushes
+# sha-A<12>; B then pushes sha-B<12> — an intermediate sha- tag can be skipped
+# only by a FAILED run, never overwritten by a later one (tags are unique per
+# commit and GHCR accepts re-push, but nothing here re-pushes a tag).
 #
 # Digests: a matrix leg cannot publish a job output (the legs share one output
 # namespace — see backend-deploy.yml), so each leg uploads an artifact and the
@@ -88,6 +105,9 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.service }}
+    # Builds happen ONLY for a merge to main (or a dispatch against it). The
+    # first step below would otherwise publish whatever ref triggered the call.
+    if: github.ref == 'refs/heads/main'
     runs-on: ${{ inputs.build_runner }}
     timeout-minutes: 45
     permissions:
@@ -127,14 +147,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # The composite is registry-agnostic — it only prefixes tags and never
-      # authenticates by itself — so the GHCR login above plays the role the
-      # ECR login plays on the other path, and everything else (buildx setup,
-      # provenance, SBOM, node_auth_token for private packages, GHA cache)
-      # stays one shared implementation instead of a fork.
-      - name: Build & push ${{ matrix.service }}
+      # LOCAL PATH, not a full slug: the reusable and the composite ship in the
+      # SAME commit of this repo, so the action is pinned BY DEFINITION — a SHA
+      # pin here is impossible without splitting the composite change into its
+      # own release first, and @v1/@main would be a moving ref (zizmor,
+      # unpinned-uses). Local path is the org's established pattern for
+      # same-repo actions (setup-node-pnpm-test.yml, iac-actions-smoke.yml).
+      - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-ecr@v1
+        uses: ./actions/build-push-ecr
         with:
           ecr-registry: ${{ env.GHCR_NAMESPACE }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
@@ -142,27 +163,23 @@ jobs:
           build-target: ${{ matrix.service }}
           dockerfile: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
+          # PRE-PUSH scan: a CRITICAL/HIGH unfixed vuln or ANY secret found in
+          # the local build fails the step and NOTHING reaches the (public)
+          # package; the composite then verifies the pushed layers equal the
+          # scanned ones. Scan-severity is HIGH,CRITICAL (stricter than the ECR
+          # path's CRITICAL-only) because most Trivy secret rules report HIGH —
+          # a CRITICAL-only filter would let them through.
+          scan: 'true'
+          scan-scanners: vuln,secret
+          scan-severity: 'HIGH,CRITICAL'
           cache-backend: gha
-          # Same scope as the ECR path on purpose: the layers are identical, so
-          # the two pipelines warm one cache instead of two.
-          cache-scope: ${{ inputs.product }}-${{ matrix.service }}
-
-      - name: Scan ${{ matrix.service }} image (vuln + secret)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: '${{ env.GHCR_NAMESPACE }}/${{ inputs.product }}-${{ matrix.service }}:${{ steps.tag.outputs.tag }}'
-          format: table
-          # CRITICAL unfixed vulns gate the push, same bar as the ECR path —
-          # and secrets gate too, because this package is PUBLIC: a credential
-          # baked into a layer is a disclosure the moment the push lands.
-          scanners: vuln,secret
-          exit-code: '1'
-          severity: CRITICAL
-          ignore-unfixed: true
-        # Trivy resolves a remote image index to linux/amd64 unless told
-        # otherwise; derived from the RUNNER (see backend-deploy.yml).
-        env:
-          TRIVY_PLATFORM: linux/${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+          # -amd64 SUFFIX: k8s-deploy.yml builds the same product-service for
+          # arm64 under the plain scope; sharing one scope across platforms
+          # would have the two pipelines evict each other's entries.
+          cache-scope: ${{ inputs.product }}-${{ matrix.service }}-amd64
+          # Links the GHCR package to the CALLING repo's page (github.repository
+          # is the caller: reusable workflows run in the caller's context).
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # A matrix leg cannot set a workflow output (the legs share one output
       # namespace), so each leg uploads its digest and `digests` reduces them.
