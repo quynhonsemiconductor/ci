@@ -15,11 +15,12 @@
 #     of the ECR images, so this workflow does not rebuild for it. The GHA cache
 #     scope is suffixed -amd64 for the same reason (k8s-deploy builds arm64 and
 #     must not fight this workflow for one scope).
-#   - Scan BEFORE push, and the scan covers vulns AND secrets (`scan-scanners:
-#     vuln,secret`, severity HIGH,CRITICAL): the packages are PUBLIC, so a
-#     failed scan must leave nothing in the registry. The composite's pre-push
-#     scan (build-push-ecr `scan: true`) builds locally, scans, then verifies
-#     the pushed layers equal the scanned ones.
+#   - Scan BEFORE push, and the scan covers vulns AND secrets: the packages
+#     are PUBLIC, so a failed scan must leave nothing in the registry. The
+#     composite's pre-push scan (build-push-ecr `scan: true`) builds locally,
+#     scans, then verifies the pushed layers equal the scanned ones. Gate
+#     policy = the ECR path's: CRITICAL fixable vulns block, HIGH vulns are
+#     reported only, and ANY secret blocks.
 #   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
 #     gate the push — unfixed ones are reported, not fatal. Same bar as the ECR
 #     path for vulns; the secret scan has no such concept and always gates.
@@ -147,15 +148,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # LOCAL PATH, not a full slug: the reusable and the composite ship in the
-      # SAME commit of this repo, so the action is pinned BY DEFINITION — a SHA
-      # pin here is impossible without splitting the composite change into its
-      # own release first, and @v1/@main would be a moving ref (zizmor,
-      # unpinned-uses). Local path is the org's established pattern for
-      # same-repo actions (setup-node-pnpm-test.yml, iac-actions-smoke.yml).
+      # FULL SHA of the composite change this workflow needs (the
+      # scan-scanners/labels inputs, ci#243). A same-repo SHA cannot name a
+      # composite edited in the same PR — hence the split; @v1/@main move on
+      # every merge and would not do (zizmor, unpinned-uses).
       - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
-        uses: ./actions/build-push-ecr
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@6e8482a90fc8b138f461c2ec2fd54b0577f0e90d
         with:
           ecr-registry: ${{ env.GHCR_NAMESPACE }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
@@ -163,15 +162,17 @@ jobs:
           build-target: ${{ matrix.service }}
           dockerfile: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
-          # PRE-PUSH scan: a CRITICAL/HIGH unfixed vuln or ANY secret found in
-          # the local build fails the step and NOTHING reaches the (public)
-          # package; the composite then verifies the pushed layers equal the
-          # scanned ones. Scan-severity is HIGH,CRITICAL (stricter than the ECR
-          # path's CRITICAL-only) because most Trivy secret rules report HIGH —
-          # a CRITICAL-only filter would let them through.
+          # PRE-PUSH scan: nothing reaches the (public) package unless the scan
+          # passed, and the composite verifies the pushed layers equal the
+          # scanned ones. Two gates, matching the ECR path's policy:
+          #   vulns   — CRITICAL only, ignore-unfixed (HIGH is reported, not
+          #             gating: unfixable-upstream findings must not block)
+          #   secrets — ANY finding blocks (the composite's separate no-filter
+          #             secret pass; a leaked credential in a public package is
+          #             a disclosure the moment the push lands)
           scan: 'true'
           scan-scanners: vuln,secret
-          scan-severity: 'HIGH,CRITICAL'
+          scan-severity: 'CRITICAL'
           cache-backend: gha
           # -amd64 SUFFIX: k8s-deploy.yml builds the same product-service for
           # arm64 under the plain scope; sharing one scope across platforms

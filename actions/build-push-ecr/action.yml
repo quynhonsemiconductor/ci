@@ -141,22 +141,6 @@ inputs:
     description: Severity that fails the pre-push scan (Trivy syntax, e.g. `CRITICAL` or `HIGH,CRITICAL`). Unfixed CVEs are ignored.
     required: false
     default: CRITICAL
-  scan-scanners:
-    description: >
-      Trivy `scanners` for the pre-push scan, e.g. `vuln` (default) or `vuln,secret`.
-      `secret` adds Trivy's secret scanner over the image layers — use it when the
-      registry the image lands in is PUBLIC, where a baked-in credential is a
-      disclosure the moment the push lands.
-    required: false
-    default: vuln
-  labels:
-    description: >
-      OCI labels applied to the pushed image, newline-separated `key=value` (passed
-      straight to the docker/build-push-action `labels` input). Callers pushing to a
-      registry where the package must link back to its repository set
-      `org.opencontainers.image.source=<server_url>/<repository>`.
-    required: false
-    default: ''
   node-auth-token:
     description: >
       Token used by the Dockerfile's `pnpm install` to fetch private
@@ -326,7 +310,6 @@ runs:
         format: table
         exit-code: '1'
         severity: ${{ inputs.scan-severity }}
-        scanners: ${{ inputs.scan-scanners }}
         ignore-unfixed: true
         # trivy-action defaults this to ${{ github.workspace }}/.cache/trivy, which is inside the build context: the push build's
         # `COPY . .` then shipped the trivy database in the image, and the layers no longer matched the scan. Keep it outside.
@@ -384,8 +367,6 @@ runs:
         # simply populates it, and the first build after DISABLING it just runs cold.
         cache-from: ${{ steps.cache.outputs.from }}
         cache-to: ${{ steps.cache.outputs.to }}
-        # Empty labels = no `--label` flags, exactly like the empty cache inputs above.
-        labels: ${{ inputs.labels }}
         provenance: mode=max   # SLSA L3: full build graph with materials
         sbom: true             # embed SBOM as OCI attestation (CycloneDX)
         # Authenticates `pnpm install` against GitHub Packages for private
