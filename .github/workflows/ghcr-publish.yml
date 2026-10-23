@@ -1,0 +1,242 @@
+# =============================================================================
+# Reusable · GHCR publish — build once per merge to main, scan BEFORE push,
+# push to GHCR.
+#
+# The on-prem delivery path (ONPREM-PLAN §11.1, "Build" row): every product
+# image is published to ghcr.io/quynhonsemiconductor/<product>-<service> with
+# the immutable identity tag sha-<commit>, so the gitops manifests can move off
+# ECR before the AWS cutover. This runs ALONGSIDE backend-deploy.yml /
+# k8s-deploy.yml, which keep pushing to ECR until the cutover. The two pipelines
+# build the same commit but are INDEPENDENT builds — do not assume byte-equality
+# across registries; each digest stands on its own.
+#
+# Differences from the ECR path, and why:
+#   - linux/amd64 only. The k3s host is amd64; ECS keeps pulling the arm64 entry
+#     of the ECR images, so this workflow does not rebuild for it. The GHA cache
+#     scope is suffixed -amd64 for the same reason (k8s-deploy builds arm64 and
+#     must not fight this workflow for one scope).
+#   - Scan BEFORE push, and the scan covers vulns AND secrets: the packages
+#     are PUBLIC, so a failed scan must leave nothing in the registry. The
+#     composite's pre-push scan (build-push-ecr `scan: true`) builds locally,
+#     scans, then verifies the pushed layers equal the scanned ones. Gate
+#     policy = the ECR path's: CRITICAL fixable vulns block, HIGH vulns are
+#     reported only, and ANY secret blocks.
+#   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
+#     gate the push — unfixed ones are reported, not fatal. Same bar as the ECR
+#     path for vulns; the secret scan has no such concept and always gates.
+#   - GITHUB_TOKEN with packages: write. No AWS OIDC, no IAM role — GHCR auth
+#     comes from the calling repo's token, so the caller must grant
+#     `packages: write` (a job-level grant: workflow-level permissions REPLACE
+#     the inherited set, they do not add to it — see k8s-deploy.yml).
+#   - org.opencontainers.image.source labels the image with the CALLING repo, so
+#     GHCR links each package to that repo's page.
+#   - No attestation for now. §11.1 defers Cosign/Sigstore on the on-prem path;
+#     the ECS path keeps its attestation unchanged.
+#
+# Concurrency: one run per product at a time, no cancellation. A run started by
+# push A that is still building when push B arrives finishes and pushes
+# sha-A<12>; B then pushes sha-B<12> — an intermediate sha- tag can be skipped
+# only by a FAILED run, never overwritten by a later one (tags are unique per
+# commit and GHCR accepts re-push, but nothing here re-pushes a tag).
+#
+# Digests: a matrix leg cannot publish a job output (the legs share one output
+# namespace — see backend-deploy.yml), so each leg uploads an artifact and the
+# `digests` job reduces them to ONE `digests` output, a JSON object mapping
+# service → sha256 digest. That output is what a later `k8s-deploy` change
+# writes into gitops' tags.dev.yaml.
+#
+# Consuming repos call this thin (SHA-pinned — ci's v1 tag moves on every merge):
+#
+#   jobs:
+#     publish:
+#       permissions: { contents: read, packages: write }
+#       uses: quynhonsemiconductor/ci/.github/workflows/ghcr-publish.yml@<full-sha>
+#       with:
+#         product: rova
+#         services-json: '["api","worker","migrator"]'
+# =============================================================================
+name: Reusable · GHCR Publish
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Short slug — the GHCR image namespace is <product>-<service>.'
+        type: string
+        required: true
+      services-json:
+        description: 'The services to build, as JSON: ["api","worker","migrator"].'
+        type: string
+        required: true
+      platforms:
+        description: 'The k3s host is amd64; keep the default unless the host changes.'
+        type: string
+        default: linux/amd64
+      build_runner:
+        description: >
+          BUILD ON THE TARGET ARCHITECTURE. The default pairs with `platforms`
+          (amd64 on ubuntu-24.04); setting one without the other yields either a
+          QEMU-emulated build that times out on a pnpm + Nest compile or an image
+          that cannot start on the host. See k8s-deploy.yml for the full lesson.
+        type: string
+        default: ubuntu-24.04
+      dockerfile:
+        type: string
+        default: Dockerfile
+    outputs:
+      tag:
+        description: 'The identity tag pushed to every image (sha-<commit>).'
+        value: ${{ jobs.build.outputs.tag }}
+      digests:
+        description: 'JSON object mapping service → image digest (sha256:...).'
+        value: ${{ jobs.digests.outputs.digests }}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-publish-${{ inputs.product }}
+  cancel-in-progress: false
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_NAMESPACE: ghcr.io/quynhonsemiconductor
+
+jobs:
+  build:
+    name: Build ${{ matrix.service }}
+    # Builds happen ONLY for a merge to main (or a dispatch against it). The
+    # first step below would otherwise publish whatever ref triggered the call.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ inputs.build_runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # The Dockerfile's `pnpm install` pulls private @quynhonsemiconductor/*
+      # from GitHub Packages with this same token, and the push below needs
+      # packages: write — one grant covers both.
+      packages: write
+    strategy:
+      # One image per service, matching the ECR convention: <product>-<service>,
+      # one Dockerfile stage per service, `build-target: <service>` (k8s-deploy.yml
+      # records the byte-identical-images incident this convention prevents).
+      matrix:
+        service: ${{ fromJSON(inputs.services-json) }}
+      fail-fast: false
+    outputs:
+      # Shared across the matrix; it is the same commit for every leg, so any
+      # leg's value is the right one.
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Builds and pushes an image; never pushes a git ref.
+        with: { persist-credentials: false }
+
+      - name: Compute the tag
+        id: tag
+        run: |
+          # Same convention as k8s-deploy.yml: sha-<commit> is the IDENTITY tag,
+          # immutable by construction. Promotion to prod later adds a v tag to
+          # the SAME digest; nothing is rebuilt.
+          echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # FULL SHA of the composite change this workflow needs (the
+      # scan-scanners/labels inputs) — the ci#243 squash-merge commit on main.
+      # A same-repo SHA cannot name a composite edited in the same PR — hence
+      # the split; @v1/@main move on every merge and would not do (zizmor,
+      # unpinned-uses).
+      - name: Build, scan (pre-push), push ${{ matrix.service }}
+        id: build
+        uses: quynhonsemiconductor/ci/actions/build-push-ecr@a6146a0980d2d9329b4cbc8b9fcf41118700a261  # ci#243
+        with:
+          ecr-registry: ${{ env.GHCR_NAMESPACE }}
+          image-name: ${{ inputs.product }}-${{ matrix.service }}
+          image-tag: ${{ steps.tag.outputs.tag }}
+          build-target: ${{ matrix.service }}
+          dockerfile: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          # PRE-PUSH scan: nothing reaches the (public) package unless the scan
+          # passed, and the composite verifies the pushed layers equal the
+          # scanned ones. Two gates, matching the ECR path's policy:
+          #   vulns   — CRITICAL only, ignore-unfixed (HIGH is reported, not
+          #             gating: unfixable-upstream findings must not block)
+          #   secrets — ANY finding blocks (the composite's separate no-filter
+          #             secret pass; a leaked credential in a public package is
+          #             a disclosure the moment the push lands)
+          scan: 'true'
+          scan-scanners: vuln,secret
+          scan-severity: 'CRITICAL'
+          cache-backend: gha
+          # -amd64 SUFFIX: k8s-deploy.yml builds the same product-service for
+          # arm64 under the plain scope; sharing one scope across platforms
+          # would have the two pipelines evict each other's entries.
+          cache-scope: ${{ inputs.product }}-${{ matrix.service }}-amd64
+          # Links the GHCR package to the CALLING repo's page (github.repository
+          # is the caller: reusable workflows run in the caller's context).
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # A matrix leg cannot set a workflow output (the legs share one output
+      # namespace), so each leg uploads its digest and `digests` reduces them.
+      - name: Record this leg's digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.image-digest }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image digest from the $SERVICE build"; exit 1; }
+          mkdir -p digests && echo "$IMAGE_DIGEST" > "digests/$SERVICE.txt"
+
+      # upload-artifact and download-artifact MUST STAY ON THE SAME MAJOR (see
+      # backend-deploy.yml — a v4 upload cannot be read by a v3 download).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ghcr-digest-${{ matrix.service }}
+          path: digests/${{ matrix.service }}.txt
+          retention-days: 1
+
+  digests:
+    name: Reduce digests
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      digests: ${{ steps.reduce.outputs.digests }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: ghcr-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Reduce to one JSON output
+        id: reduce
+        env:
+          PRODUCT: ${{ inputs.product }}
+          NAMESPACE: ${{ env.GHCR_NAMESPACE }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### GHCR images ($NAMESPACE/$PRODUCT)"
+            echo "tag: \`$TAG\`"
+            echo "| service | image ref |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          json='{}'
+          for f in digests/*.txt; do
+            svc=$(basename "$f" .txt)
+            d=$(cat "$f")
+            [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $svc: $d"; exit 1; }
+            json=$(jq -c --arg s "$svc" --arg d "$d" '. + {($s): $d}' <<< "$json")
+            echo "| $svc | \`$NAMESPACE/$PRODUCT-$svc@$d\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "digests=$json" >> "$GITHUB_OUTPUT"
