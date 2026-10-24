@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.0](https://github.com/quynhonsemiconductor/ci/compare/v1.23.1...v1.24.0) (2026-10-24)
+
+
+### Features
+
+* **build-push-ecr:** scan-scanners and labels inputs for pre-push scans ([#243](https://github.com/quynhonsemiconductor/ci/issues/243)) ([a6146a0](https://github.com/quynhonsemiconductor/ci/commit/a6146a0980d2d9329b4cbc8b9fcf41118700a261))
+* **ci:** reusable ghcr-publish workflow (on-prem build path) ([#242](https://github.com/quynhonsemiconductor/ci/issues/242)) ([034964c](https://github.com/quynhonsemiconductor/ci/commit/034964c48e181ab2ccb13e09f2f7cec302e2bb33))
+
 ## [1.23.1](https://github.com/quynhonsemiconductor/ci/compare/v1.23.0...v1.23.1) (2026-10-22)
 
 
