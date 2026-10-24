@@ -18,7 +18,7 @@ VERSION_PATCH = '@@ -1,6 +1,6 @@\n {\n   "name": "rova",\n-  "version": "0.7.18"
 DEP_PATCH = '@@ -9,3 +9,3 @@\n-    "fastify": "5.12.5",\n+    "fastify": "5.12.6",\n'
 
 
-def run(files, ignore="", skip="", head="feat/x", author="someone", tmp_path=None):
+def run(files, ignore="", skip="", force="", head="feat/x", author="someone", tmp_path=None):
     """files: list of names, or (name, patch) tuples."""
     out = tmp_path / "out"
     rows = []
@@ -27,7 +27,7 @@ def run(files, ignore="", skip="", head="feat/x", author="someone", tmp_path=Non
         rows.append(json.dumps({"filename": name, "previous_filename": None, "patch": patch}))
     listing = tmp_path / "files.jsonl"
     listing.write_text("\n".join(rows))
-    env = dict(os.environ, FILES_PATH=str(listing), IGNORE=ignore, SKIP_HEADS=skip, HEAD_REF=head, AUTHOR=author,
+    env = dict(os.environ, FILES_PATH=str(listing), IGNORE=ignore, SKIP_HEADS=skip, FORCE_RUN=force, HEAD_REF=head, AUTHOR=author,
                GITHUB_OUTPUT=str(out))
     subprocess.run([sys.executable, str(SCRIPT)], env=env, check=True, capture_output=True)
     return out.read_text().strip()
@@ -232,3 +232,38 @@ def test_pull_request_branch_still_uses_the_pr_files_endpoint(tmp_path):
     assert "/pulls/836/files" in calls
     assert "compare/" not in calls
 
+
+
+FORCE_RUN = "package.json\n**/package.json\npnpm-lock.yaml\n**/pnpm-lock.yaml\npnpm-workspace.yaml\n**/pnpm-workspace.yaml"
+
+
+def test_force_run_wins_over_ignore(tmp_path):
+    """A lockfile-only change runs even when every path would be ignorable."""
+    assert run(["pnpm-lock.yaml", "README.md"], ignore=WEB_ONLY_IGNORES, force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_single_lockfile(tmp_path):
+    assert run(["pnpm-lock.yaml"], force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_nested_lockfile(tmp_path):
+    assert run(["apps/web/pnpm-lock.yaml"], force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_nested_manifest(tmp_path):
+    assert run(["apps/api/package.json"], force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_workspace_file(tmp_path):
+    assert run(["pnpm-workspace.yaml"], force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_empty_changes_nothing(tmp_path):
+    assert run(["apps/api/src/a.ts"], ignore=WEB_ONLY_IGNORES, force=FORCE_RUN, tmp_path=tmp_path) == "run=true"
+
+
+def test_force_run_skips_release_rule(tmp_path):
+    """force-run beats skip-heads: a release bump that also touches the lockfile runs."""
+    files = ["CHANGELOG.md", ".release-please-manifest.json", "package.json", "pnpm-lock.yaml"]
+    patches = [(f, VERSION_PATCH if f == "package.json" else None) for f in files]
+    assert run(patches, ignore=WEB_ONLY_IGNORES, skip=RELEASE_RULE, force=FORCE_RUN, tmp_path=tmp_path) == "run=true"

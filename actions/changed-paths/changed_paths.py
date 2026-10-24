@@ -123,6 +123,11 @@ def main() -> None:
         if all_match([g.strip() for g in globs.split(",") if g.strip()]):
             emit("false", f"{author} on {head!r}: every one of {len(paths)} path(s) fits the {prefix!r} rule")
 
+    forced_globs = [rx(g) for g in lines("FORCE_RUN")]
+    forced = [name for name, _ in paths if any(c.match(name) for c in forced_globs)]
+    if forced:
+        emit("true", f"{len(forced)} changed path(s) match force-run (dependency files always run)")
+
     if all_match(lines("IGNORE")):
         emit("false", f"all {len(paths)} changed path(s) are on the ignore list")
     emit("true", f"{len(paths)} changed path(s), at least one not ignorable")

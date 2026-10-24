@@ -25,6 +25,15 @@ inputs:
       Empty means nothing is ignorable, so `run` is always `true`.
     required: false
     default: ''
+  force-run:
+    description: >
+      Newline-separated globs. When ANY changed path matches one, `run` is `true` even if every changed file is
+      also on the `ignore` list. For dependencies the other gates can hand-wave away: lockfiles and workspace
+      files DO affect the artifact (a resolution change can pull different code), and package.json manifests
+      anywhere do. `force-run` wins over `ignore` and over `skip-heads` — it is evaluated first, right after the
+      changed-file list is read.
+    required: false
+    default: ''
   skip-heads:
     description: >
       Newline-separated rules `<head-branch-prefix>@<author>[,<author>...]=<glob>[,<glob>...]`. A rule applies only when the head branch
@@ -59,6 +68,7 @@ runs:
         AUTHOR: ${{ github.event.pull_request.user.login }}
         REPO: ${{ github.repository }}
         IGNORE: ${{ inputs.ignore }}
+        FORCE_RUN: ${{ inputs.force-run }}
         SKIP_HEADS: ${{ inputs.skip-heads }}
         MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
