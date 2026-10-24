@@ -24,6 +24,38 @@
 # SARIF uploads to the GitHub Security tab remain `continue-on-error` — they
 # are the only GHAS-gated pieces and no-op on the free plan without failing
 # the run. They light up automatically after a plan upgrade, no rework.
+#
+# ── Scheduled daily scans ──────────────────────────────────────────────
+# The PR/push gates scan the branch under test; a dependency that lands clean
+# can still become vulnerable LATER, when the advisory is published. Renovate
+# does not automerge production dependencies (owner decision 2026-10-24), so
+# each product also calls this reusable from a scheduled workflow that lives
+# on its default branch — schedule triggers only fire there. Findings FAIL the
+# run so GitHub notifies:
+#
+#   # .github/workflows/scheduled-security.yml
+#   on:
+#     schedule:
+#       - cron: '5 1 * * *' # UTC; stagger per repo so the runners don't stack
+#     workflow_dispatch:     # for the flip-a-flag / "scan now" case
+#     pull_request:
+#       paths: ['.github/workflows/scheduled-security.yml'] # exercise the workflow when it changes
+#   permissions:
+#     contents: read         # read-only: the scheduled run changes nothing
+#   jobs:
+#     security:
+#       # Job-level permissions REPLACE the inherited set — the reusable's jobs need
+#       # security-events (SARIF upload) and packages (private @quynhonsemiconductor/*
+#       # during the image build). A caller granting only contents: read fails at startup.
+#       permissions:
+#         contents: read
+#         security-events: write
+#         packages: read
+#       uses: quynhonsemiconductor/ci/.github/workflows/security.yml@v1.23.1 # SHA-pin
+#       with:
+#         product: rova
+#         scan_container: false # image CVEs are gated on push; the schedule is source scans only
+#         osv_blocking: true    # the point of the schedule: a new advisory ⇒ red run ⇒ notification
 # =============================================================================
 name: Reusable · Security Scan
 
