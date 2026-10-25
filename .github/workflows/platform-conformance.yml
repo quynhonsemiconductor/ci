@@ -39,15 +39,15 @@ jobs:
       # persist-credentials: false on all three — this job reads three
       # repositories and pushes to none, so leaving a token in .git/config just
       # widens what a later step (or an uploaded artifact) could carry off.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { path: ci, persist-credentials: false }
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: quynhonsemiconductor/gitops
           path: gitops
           token: ${{ steps.token.outputs.token }}
           persist-credentials: false
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: quynhonsemiconductor/infra
           path: infra
@@ -57,7 +57,7 @@ jobs:
       # `module-refs` asks whether the ref a live stack pins actually exists, and
       # a shallow clone carries none, so the contract would report every ref as
       # unverifiable rather than checking it.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: quynhonsemiconductor/tf-modules
           path: tf-modules
@@ -70,7 +70,7 @@ jobs:
       # The rendered manifests are what the secret-refs contract reads, and a
       # stale rendered/ would check yesterday's output. gitops CI fails on a stale
       # render, so this is belt-and-braces rather than a second source of truth.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with: { version: "3.22.0" }
       - run: cd gitops && ./scripts/render.sh
 
