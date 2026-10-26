@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.3](https://github.com/quynhonsemiconductor/ci/compare/v1.24.2...v1.24.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* **deploy:** account ids come from vars, not secrets; drop the EKS workflows ([#252](https://github.com/quynhonsemiconductor/ci/issues/252)) ([c9d32d7](https://github.com/quynhonsemiconductor/ci/commit/c9d32d7a5be550d7ee807865e4c6ee6ac1d88476))
+* **deploy:** drop the Slack deploy notifications ([#254](https://github.com/quynhonsemiconductor/ci/issues/254)) ([6dbfced](https://github.com/quynhonsemiconductor/ci/commit/6dbfced5d2f2500686c4e52ad354530caa9bf4e0))
+
 ## [1.24.2](https://github.com/quynhonsemiconductor/ci/compare/v1.24.1...v1.24.2) (2026-10-26)
 
 
