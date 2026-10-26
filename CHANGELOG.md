@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.2](https://github.com/quynhonsemiconductor/ci/compare/v1.24.1...v1.24.2) (2026-10-26)
+
+
+### Bug Fixes
+
+* **ci:** pin the wrangler the Pages deploy action installs ([#250](https://github.com/quynhonsemiconductor/ci/issues/250)) ([074e1b7](https://github.com/quynhonsemiconductor/ci/commit/074e1b7ab0a275ee3934a4e908d427aebf007d03))
+
 ## [1.24.1](https://github.com/quynhonsemiconductor/ci/compare/v1.24.0...v1.24.1) (2026-10-26)
 
 
