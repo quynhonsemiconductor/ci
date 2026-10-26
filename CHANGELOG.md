@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.1](https://github.com/quynhonsemiconductor/ci/compare/v1.24.0...v1.24.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **ci:** let setup-node-pnpm fall back to packageManager when no pnpm version is passed ([#247](https://github.com/quynhonsemiconductor/ci/issues/247)) ([3efe734](https://github.com/quynhonsemiconductor/ci/commit/3efe73447aba7297ea140cee6eb2ad6477eddae4))
+
 ## [1.24.0](https://github.com/quynhonsemiconductor/ci/compare/v1.23.1...v1.24.0) (2026-10-24)
 
 
