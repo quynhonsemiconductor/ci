@@ -56,7 +56,6 @@ on:
       pnpm_version:       { type: string, default: "" }             # empty = the caller's packageManager decides (setup-node-pnpm)
     secrets:
       CLOUDFLARE_API_TOKEN:  { required: true }
-      SLACK_DEPLOY_WEBHOOK:  { required: false }
 
 # Safe-by-default at the shared layer (callers also set their own group). Never
 # cancel a running web deploy — a half-applied Pages publish / D1 migration is
@@ -396,15 +395,6 @@ jobs:
             echo "| **Actor** | $ACTOR |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify deploy result
-        if: always()
-        uses: quynhonsemiconductor/ci/actions/notify-deploy@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
-        with:
-          webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
-          status: ${{ job.status == 'success' && 'success' || 'failure' }}
-          service: ${{ inputs.product }}-web
-          environment: ${{ env.ENVIRONMENT }}
-          version: ${{ env.ASSET_TAG }}
 
   # ── Prod SPA rollout (Workers target) — the second half of §11.1 ──────────
   # `versions upload` put the new version on Cloudflare with ZERO traffic. This
