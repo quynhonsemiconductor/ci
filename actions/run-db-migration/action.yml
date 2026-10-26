@@ -56,7 +56,7 @@ runs:
   steps:
     - name: Run migration task
       id: migrate
-      uses: quynhonsemiconductor/ci/actions/ecs-run-task@v1.22.0
+      uses: quynhonsemiconductor/ci/actions/ecs-run-task@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
       with:
         cluster: ${{ inputs.cluster }}
         task-definition: ${{ inputs.task-definition }}
