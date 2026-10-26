@@ -53,7 +53,7 @@ on:
       require_health_check:  { type: boolean, default: false }     # fail the deploy if APP_URL is unset (no post-deploy verification possible)
       wrangler_version:   { type: string, default: "4.107.0" }     # pin wrangler for reproducible D1 export/migrate (never floating latest)
       node_version:       { type: string, default: "22" }
-      pnpm_version:       { type: string, default: "10.33.2" }
+      pnpm_version:       { type: string, default: "" }             # empty = the caller's packageManager decides (setup-node-pnpm)
     secrets:
       CLOUDFLARE_API_TOKEN:  { required: true }
       CLOUDFLARE_ACCOUNT_ID: { required: true }
