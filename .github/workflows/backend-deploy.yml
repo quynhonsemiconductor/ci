@@ -67,7 +67,6 @@ on:
       # overwrite registry mode needs, and it is the one backend that pulls from ECR to a runner on every build.
       cache_backend:   { type: string, default: "gha" }
     secrets:
-      SLACK_DEPLOY_WEBHOOK: { required: false }
 
 permissions:
   contents: read
@@ -888,12 +887,3 @@ jobs:
             echo "| **API URL** | \`$APP_URL\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify deploy result
-        if: always()
-        uses: quynhonsemiconductor/ci/actions/notify-deploy@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
-        with:
-          webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
-          status: ${{ job.status == 'success' && 'success' || (steps.verify.outputs.outcome == 'rollback' && 'rollback' || 'failure') }}
-          service: ${{ inputs.product }}-api
-          environment: ${{ env.ENVIRONMENT }}
-          version: ${{ env.IMAGE_TAG }}
