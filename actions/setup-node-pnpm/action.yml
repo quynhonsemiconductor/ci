@@ -9,9 +9,9 @@ inputs:
     required: false
     default: '22'
   pnpm-version:
-    description: pnpm version (must match `packageManager` in package.json)
+    description: pnpm version; empty = decide from `packageManager` in package.json (one source of truth)
     required: false
-    default: '10.33.2'
+    default: ''
   install-deps:
     description: Run `pnpm install --frozen-lockfile` after setup
     required: false
@@ -79,7 +79,17 @@ runs:
         grep -q '^//npm\.pkg\.github\.com/:_authToken=' "$file" || echo "$auth" >> "$file"
         echo "NPM_CONFIG_USERCONFIG=$file" >> "$GITHUB_ENV"
 
-    - name: Setup pnpm
+    # With no explicit version, pnpm/action-setup reads `packageManager` from package.json, so the
+    # checked-out repo decides. Passing a fixed version here made the two disagree the moment a repo
+    # bumped `packageManager` (opshub to pnpm 11): the action answered
+    # "Multiple versions of pnpm specified ... ERR_PNPM_BAD_PM_VERSION" and the deploy died. An explicit
+    # pnpm-version still wins when a caller passes one (the matrix test pins both a 10 and an 11).
+    - name: Setup pnpm (from packageManager)
+      if: inputs.pnpm-version == ''
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+    - name: Setup pnpm (pinned by the caller)
+      if: inputs.pnpm-version != ''
       uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
       with:
         version: ${{ inputs.pnpm-version }}
