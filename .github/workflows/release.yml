@@ -37,8 +37,25 @@ jobs:
       major: ${{ steps.release.outputs.major }}
       minor: ${{ steps.release.outputs.minor }}
     steps:
+      # Same identity treatment as the reusable this repo ships to products
+      # (release-please.yml): mint the qnsc-automation App token so the release PR,
+      # tag and GitHub Release are authored by the App, not github-actions[bot]. The
+      # org secret's selected-repositories scope was extended to ci for exactly this
+      # (owner, 2026-10-26) — and it had no effect while this file called
+      # release-please directly with GITHUB_TOKEN. Falls back to github.token when
+      # the App is not installed on this repository.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
           release-type: simple
