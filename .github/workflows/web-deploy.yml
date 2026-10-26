@@ -56,7 +56,6 @@ on:
       pnpm_version:       { type: string, default: "" }             # empty = the caller's packageManager decides (setup-node-pnpm)
     secrets:
       CLOUDFLARE_API_TOKEN:  { required: true }
-      CLOUDFLARE_ACCOUNT_ID: { required: true }
       SLACK_DEPLOY_WEBHOOK:  { required: false }
 
 # Safe-by-default at the shared layer (callers also set their own group). Never
@@ -128,6 +127,12 @@ jobs:
       # A data app that requires post-deploy verification must have somewhere to
       # verify. Catch a missing APP_URL up front rather than silently shipping
       # unverified (the health-check step below is skipped when APP_URL is empty).
+      - name: Pre-flight — Cloudflare account id
+        if: vars.CLOUDFLARE_ACCOUNT_ID == ''
+        run: |
+          echo "::error ::vars.CLOUDFLARE_ACCOUNT_ID is empty. The account id is an identifier, not a secret: the reusable reads the ORG VARIABLE directly, so no caller passes anything. Set the CLOUDFLARE_ACCOUNT_ID org variable (Actions > Variables) if it is missing." >&2
+          exit 1
+
       - name: Pre-flight — required config
         if: inputs.require_health_check && vars.APP_URL == ''
         env:
@@ -236,7 +241,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE: ${{ inputs.d1_database }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
         run: |
@@ -261,7 +266,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PRODUCT: ${{ inputs.product }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
           D1_BACKUP_BUCKET: ${{ inputs.d1_backup_bucket }}
@@ -280,7 +285,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE: ${{ inputs.d1_database }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
         run: npx --yes "wrangler@${WRANGLER_VERSION}" d1 migrations apply "${D1_DATABASE}" --remote
@@ -312,7 +317,7 @@ jobs:
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0  # v4.1.3  # zizmor: ignore[cache-poisoning]
         with:
           apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ inputs.working_directory }}
           packageManager: ${{ inputs.package_manager }}
           # Without this the action installs wrangler LATEST for the deploy itself
@@ -336,7 +341,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
           WRANGLER_ENV: ${{ inputs.workers_dev_env }}
         run: |
@@ -349,7 +354,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
           WRANGLER_ENV: ${{ inputs.workers_prod_env }}
         run: |
@@ -426,7 +431,7 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         env:
           CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_VERSION: ${{ inputs.wrangler_version }}
           VERSION_ID: ${{ needs.deploy.outputs.worker_version_id }}
           WRANGLER_ENV: ${{ inputs.workers_prod_env }}

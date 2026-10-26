@@ -67,7 +67,6 @@ on:
       # overwrite registry mode needs, and it is the one backend that pulls from ECR to a runner on every build.
       cache_backend:   { type: string, default: "gha" }
     secrets:
-      AWS_ACCOUNT_ID:       { required: true }
       SLACK_DEPLOY_WEBHOOK: { required: false }
 
 permissions:
@@ -87,6 +86,15 @@ jobs:
       # it can only read a value another job produced.
       services:    ${{ steps.ctx.outputs.services }}
     steps:
+      # The AWS account id is an OIDC identifier, not a secret: the reusable reads the ORG
+      # VARIABLE directly and no caller passes anything. Fail here, in the first job, rather
+      # than inside the first role-arn of each later job.
+      - name: Pre-flight — AWS account id
+        if: vars.AWS_ACCOUNT_ID == ''
+        run: |
+          echo "::error ::vars.AWS_ACCOUNT_ID is empty. Set the AWS_ACCOUNT_ID org variable (Actions > Variables)." >&2
+          exit 1
+
       # Fail before any build starts. `registry` cache writes ONE `:buildcache` tag per image repository; the two architecture legs would
       # overwrite each other's cache, and the repositories are IMMUTABLE (task 0.8), which rejects the overwrite outright (see the
       # cache-backend note in actions/build-push-ecr). Use `gha` (per-arch scopes) or `none`.
@@ -159,7 +167,7 @@ jobs:
         id: aws
         uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
+          role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
           ecr-login: 'true'
 
@@ -242,7 +250,7 @@ jobs:
         id: aws
         uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
+          role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
           ecr-login: 'true'
 
@@ -354,7 +362,7 @@ jobs:
         id: aws
         uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
+          role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-ecr-push
           region: ${{ inputs.aws_region }}
           ecr-login: 'true'
 
@@ -472,7 +480,7 @@ jobs:
       - name: Setup AWS OIDC (deploy role)
         uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ needs.context.outputs.environment }}
+          role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ needs.context.outputs.environment }}
           region: ${{ inputs.aws_region }}
 
       - name: Ensure environment is awake (RDS + ECS)
@@ -504,7 +512,7 @@ jobs:
       - name: Setup AWS OIDC (deploy role)
         uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ env.ENVIRONMENT }}
+          role-arn: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-deploy-${{ env.ENVIRONMENT }}
           region: ${{ inputs.aws_region }}
           # ECR docker login so `gh attestation verify` (below) can pull the
           # image manifest from the private registry; otherwise it 401s.
@@ -748,7 +756,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # registryId == AWS account id; reuse the same secret used for the
           # deploy role ARN above (single source, no ecr:DescribeRegistry).
-          REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com
+          REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com
           # digest resolved & attested in build/promote (no ecr:DescribeImages).
           DIGEST: ${{ steps.api-digest.outputs.digest }}
           PRODUCT: ${{ inputs.product }}
