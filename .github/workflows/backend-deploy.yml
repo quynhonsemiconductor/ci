@@ -66,7 +66,6 @@ on:
       # The default was `registry` until 2026-10-18. It is `gha` now: the repositories are IMMUTABLE, which rejects the `:buildcache`
       # overwrite registry mode needs, and it is the one backend that pulls from ECR to a runner on every build.
       cache_backend:   { type: string, default: "gha" }
-    secrets:
 
 permissions:
   contents: read
