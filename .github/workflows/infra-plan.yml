@@ -24,7 +24,6 @@ on:
       tofu_version: { type: string, default: "1.9.1" }
       tf_vars_json: { type: string, default: "{}" }
     secrets:
-      AWS_ACCOUNT_ID:      { required: true }
       tf_secret_vars_json: { required: false }
       # Private key for the read-only qnsc-repo-reader GitHub App (contents: read), used to
       # mint a short-lived token so `tofu init` can clone the private tf-modules. The App id
@@ -104,10 +103,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # OIDC identifier, not a secret: read from the org variable, fail loudly if unset.
+      - name: Pre-flight — AWS account id
+        if: vars.AWS_ACCOUNT_ID == ''
+        run: |
+          echo "::error ::vars.AWS_ACCOUNT_ID is empty. Set the AWS_ACCOUNT_ID org variable (Actions > Variables)." >&2
+          exit 1
+
       - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
           # fmt needs no cloud access; assume the read-only plan role for parity.
-          role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
+          role-arn:     arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}
           tofu-version: ${{ inputs.tofu_version }}
 
@@ -142,7 +148,7 @@ jobs:
 
       - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
-          role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
+          role-arn:     arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}
           tofu-version: ${{ inputs.tofu_version }}
           git-token:    ${{ steps.module-token.outputs.token }}
