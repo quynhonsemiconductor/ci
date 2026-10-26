@@ -315,6 +315,9 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ inputs.working_directory }}
           packageManager: ${{ inputs.package_manager }}
+          # Without this the action installs wrangler LATEST for the deploy itself
+          # (observed 4.152.0), while wrangler_version pins only the D1 steps below.
+          wranglerVersion: ${{ inputs.wrangler_version }}
           command: >-
             pages deploy ${{ inputs.web_dist_path }}
             --project-name=${{ vars.PAGES_PROJECT }}
