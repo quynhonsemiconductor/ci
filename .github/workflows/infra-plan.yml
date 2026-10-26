@@ -104,7 +104,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@v1.22.0
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
           # fmt needs no cloud access; assume the read-only plan role for parity.
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
@@ -130,7 +130,7 @@ jobs:
       # Mint a short-lived GitHub App token so `tofu init` can clone the PRIVATE
       # tf-modules over HTTPS. continue-on-error so repos with only public/
       # local modules (no private key wired) still run.
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         id: module-token
         continue-on-error: true
         with:
@@ -140,7 +140,7 @@ jobs:
           repositories: tf-modules
           permission-contents: read
 
-      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@v1.22.0
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
           role-arn:     arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}

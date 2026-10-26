@@ -69,7 +69,7 @@ jobs:
     # to prevent.
     environment: production
     steps:
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@v1.22.0
+      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         id: aws
         with:
           role-arn: ${{ secrets.aws-role-arn }}
@@ -137,7 +137,7 @@ jobs:
       # The token is scoped to the `gitops` repository: contents:write to push the
       # branch, pull-requests:write to open the promotion PR — and it can never
       # merge (§10b, the review is the control).
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: gitops-app-token
         with:
           app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
@@ -148,7 +148,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Open the promotion pull request
-        uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@v1.22.0
+        uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
         with:
           product: ${{ inputs.product }}
           env: prod

@@ -60,6 +60,6 @@ runs:
     - name: Size label
       # After the area labeler, and even if it failed: a broken label map is no reason to lose the size label.
       if: ${{ !cancelled() && inputs.size == 'true' }}
-      uses: quynhonsemiconductor/ci/actions/pr-size@v1.22.0
+      uses: quynhonsemiconductor/ci/actions/pr-size@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
       with:
         github-token: ${{ inputs.github-token }}
