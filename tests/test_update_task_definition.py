@@ -187,7 +187,9 @@ def test_cli_refuses_a_latest_tag_for_the_deploy_itself(tmp_path):
 # ── the workflow uses it, for all three services, and checks the worker ──────────────────────
 def test_backend_deploy_uses_the_action_for_api_worker_and_migrator_and_verifies_the_worker():
     text = (ROOT / ".github" / "workflows" / "backend-deploy.yml").read_text(encoding="utf-8")
-    assert text.count("actions/update-task-definition@v1") == 3
+    # The ref is whatever pinning currently uses (a moving tag or a digest pin) — the test only
+    # demands that all three services call THIS action, however the ref is spelled.
+    assert text.count("quynhonsemiconductor/ci/actions/update-task-definition@") == 3
     for name in ("container: api", "container: worker", "container: migrator"):
         assert name in text
     assert "- name: Verify Worker deployment" in text
