@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.5](https://github.com/quynhonsemiconductor/ci/compare/v1.24.4...v1.24.5) (2026-10-27)
+
+
+### Bug Fixes
+
+* **iac-lint:** install the real tofu binary (tofu_wrapper: false) ([#258](https://github.com/quynhonsemiconductor/ci/issues/258)) ([3c06b98](https://github.com/quynhonsemiconductor/ci/commit/3c06b98bad283a2273b88b1e18889af567fd11f9))
+
 ## [1.24.4](https://github.com/quynhonsemiconductor/ci/compare/v1.24.3...v1.24.4) (2026-10-27)
 
 
