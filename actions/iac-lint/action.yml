@@ -73,6 +73,13 @@ runs:
     - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
       with:
         tofu_version: ${{ inputs.tofu-version }}
+        # Install the REAL tofu binary, not the default wrapper. The wrapper
+        # captures stdout/stderr/exit-code as step outputs and makes `tofu`
+        # itself exit 0, which silently breaks `-detailed-exitcode`,
+        # `$?` and `${PIPESTATUS[0]}` (apply-gating / plan error detection) —
+        # and every gate below (`fmt -check`, `validate`), which judge tofu by
+        # its exit code. Same rationale as setup-tofu-aws.
+        tofu_wrapper: false
 
     - name: Fail fast on a misconfigured call
       shell: bash
