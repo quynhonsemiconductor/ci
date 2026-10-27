@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.4](https://github.com/quynhonsemiconductor/ci/compare/v1.24.3...v1.24.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* **release:** cut this repo's releases with the qnsc-automation App token ([#255](https://github.com/quynhonsemiconductor/ci/issues/255)) ([0d5c605](https://github.com/quynhonsemiconductor/ci/commit/0d5c6052a84c9ef35df12949dc6b1e0cac19792a))
+
 ## [1.24.3](https://github.com/quynhonsemiconductor/ci/compare/v1.24.2...v1.24.3) (2026-10-26)
 
 
