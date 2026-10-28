@@ -37,7 +37,7 @@ The allowlist (policy 2026-10-29) has three entry kinds, one per line:
                   metacharacters are refused — a path entry is a filename, not
                   a pattern — as is any trailing `/` (directory scopes are
                   what the policy forbids). An entry containing BOTH a slash
-                  and metacharacters (e.g. a CIDR like 10\.0\.0\.0/16) is
+                  and metacharacters (a CIDR such as 10 dot 0 dot 0 dot 0 slash 16) is
                   rejected as a disguised path pattern: allowlist the address
                   without the mask.
   any other regex suppresses when it matches the finding's TEXT. (Matching
