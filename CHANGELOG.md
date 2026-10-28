@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.0](https://github.com/quynhonsemiconductor/ci/compare/v1.24.5...v1.25.0) (2026-10-28)
+
+
+### Features
+
+* **code-review:** default model glm-5.3, add llm_reasoning_effort, raise token budget ([#260](https://github.com/quynhonsemiconductor/ci/issues/260)) ([b746792](https://github.com/quynhonsemiconductor/ci/commit/b7467923610e710c04b7c226e993c73e0c6a51fa))
+
 ## [1.24.5](https://github.com/quynhonsemiconductor/ci/compare/v1.24.4...v1.24.5) (2026-10-27)
 
 
