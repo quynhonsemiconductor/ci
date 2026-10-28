@@ -35,7 +35,16 @@ on:
         description: 'Model to review with.'
         required: false
         type: string
-        default: 'glm-5.3-flash'
+        default: 'glm-5.3'
+      llm_reasoning_effort:
+        description: >
+          Model reasoning depth (minimal|low|medium|high|max), forwarded to the review action's
+          `llm_reasoning_effort` and sent as `reasoning_effort` in the request body — OpenAI
+          protocol only, which is what GLM speaks here. NOT the review-rounds `effort` below.
+          Default `medium` per owner decision 2026-10-28.
+        required: false
+        type: string
+        default: 'medium'
       llm_url:
         description: >
           Endpoint for the model. Anthropic wants the messages path; an OpenAI-protocol provider wants
@@ -120,17 +129,21 @@ on:
         description: >
           Token budget for one review. NOT a hard ceiling, whatever its name suggests: it is checked
           when a group is DISPATCHED and before each further round, so every group already in flight
-          finishes its round. With concurrency 8 a 400,000 budget routinely spent 930,000–985,000
-          (rova#653, 2026-10-05). `review_concurrency` bounds the overshoot, not this number.
+          finishes its round. A 400,000 budget routinely spent 930,000–985,000 (rova#653, 2026-10-05),
+          which is why the default is now 1,500,000: a soft cap sized so a real review fits inside it
+          rather than overshooting it every time. `review_concurrency` bounds the overshoot, not
+          this number.
 
           Part of the checkpoint fingerprint: changing it makes the next run on every open pull
-          request a full review. Change it org-wide, deliberately, not per caller.
+          request a full review — changing this default re-reviews every open pull request ONCE.
+          Change it org-wide, deliberately, not per caller.
         required: false
         type: string
-        default: '400000'
+        default: '1500000'
       effort:
         description: >
           OCR review effort: `low` = one review round per group, `medium` = two, `high` = three.
+          This is REVIEW ROUNDS, not model reasoning — reasoning depth is `llm_reasoning_effort`.
 
           `low` because the binding constraint is the model plan's quota, not review depth: rova#653
           drew 37, 19 and 27 findings in three consecutive runs at `medium`, every one of which the
@@ -491,6 +504,7 @@ jobs:
           llm_url: ${{ inputs.llm_url }}
           llm_auth_token: ${{ secrets.llm_token }}
           llm_model: ${{ inputs.model }}
+          llm_reasoning_effort: ${{ inputs.llm_reasoning_effort }}
           llm_use_anthropic: ${{ inputs.use_anthropic_protocol }}
           llm_extra_body: ${{ inputs.llm_extra_body }}
           language: ${{ inputs.language }}
