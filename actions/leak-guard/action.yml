@@ -44,16 +44,19 @@ inputs:
   allowlist:
     description: >
       Path to the repository's allowlist, one entry per line, # comments and
-      blanks ignored. Three kinds: `key:<regex>` suppresses an identifier
-      finding (guid, entra-tenant) only when the finding is the VALUE of that
-      key — the text before it ends with the key and `: ` or `=` and an
-      optional quote. An entry containing `/` is a LITERAL single-file path
-      (metacharacters and a trailing `/` are refused: directory scopes are
-      what the identifier policy 2026-10-29 forbids). Any other entry is a
-      regex matched against the finding's TEXT only. The Azure subscription
-      id (tier 1) cannot be suppressed by any entry, and identifier findings
-      print with their value redacted. A missing file at the default path
-      means "no allowlist"; a missing custom path fails.
+      blanks ignored. Three kinds: `key:<regex>` — the ONLY way an identifier
+      finding (guid, entra-tenant) is suppressed, and only when the finding is
+      the VALUE of that key (the text before it ends with the key, `: ` or
+      `=`, an optional quote; the regex is wrapped and left-anchored so an
+      alternation binds as the key and `Id` cannot ride on `clientId`). An
+      entry containing `/` is a LITERAL single-file path (metacharacters and
+      a trailing `/` are refused: directory scopes are what the identifier
+      policy 2026-10-29 forbids). Any other entry is a regex matched against
+      a NON-identifier finding's TEXT only — hostnames, emails, addresses —
+      and is refused at load if it can match a GUID at all. The Azure
+      subscription id (tier 1) cannot be suppressed by any entry, and
+      identifier findings print with their value redacted. A missing file at
+      the default path means "no allowlist"; a missing custom path fails.
     required: false
     default: '.github/leak-guard-allowlist.txt'
   report-only:

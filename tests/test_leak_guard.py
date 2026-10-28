@@ -167,8 +167,11 @@ def test_key_entry_scopes_identifier_to_the_keys_value(tmp_path):
         f"see tenantId docs {FABRICATED_TENANT} for details\n"    # NOT suppressed: prose, not a value
         "someOtherGuid: 3f2504e0-4f89-11d3-9a0c-0305e82c3301\n"   # NOT suppressed: no key entry
         f"host: admin.qnsc.vn tenantId: {FABRICATED_TENANT}\n")   # hostname never key-scoped
+    # [A-Z_]*CLIENT_ID, not bare CLIENT_ID: the left anchor means an entry
+    # names the WHOLE key, and ENTRA_CLIENT_ID is a different key from
+    # CLIENT_ID (the suffix test below proves the anchor).
     values, paths, keys = load_allowlist_from_lines(
-        ["key:tenantId", "key:CLIENT_ID"])
+        ["key:tenantId", "key:[A-Z_]*CLIENT_ID"])
     findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), (values, paths), keys)
     assert findings == [
         "src/conf.yaml:3: [entra-tenant] (redacted)",
@@ -209,11 +212,10 @@ def test_azure_subscription_is_unsuppressible(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     (src / "conf.yaml").write_text(f"subscriptionId: {FABRICATED_SUBSCRIPTION}\n")
-    # A key entry that WOULD match, a text entry with the literal, and the file
-    # itself by path — tier 1 ignores all three.
+    # A key entry that WOULD match and the file itself by path — tier 1 ignores
+    # both. (A text entry with the literal is refused at load: it matches a GUID.)
     values, paths, keys = load_allowlist_from_lines([
         "key:subscriptionId",
-        f"^{FABRICATED_SUBSCRIPTION}$",
         "src/conf.yaml",
     ])
     findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), (values, paths), keys)
@@ -222,6 +224,53 @@ def test_azure_subscription_is_unsuppressible(tmp_path):
     # pattern's duplicate of the SAME value is key-suppressed — one report,
     # not two, and the tier-1 report itself stands.
     assert suppressed == 1
+
+
+@pytest.mark.parametrize("broad", [".*", "[0-9a-f-]+", "^3f2504e0-[0-9a-f-]+$"])
+def test_guid_matching_text_entries_are_refused(tmp_path, broad):
+    # Identifier findings are key-scoped only; a text regex broad enough to
+    # match a GUID is a key scope wearing a disguise, and is refused at load.
+    allow = tmp_path / "allow.txt"
+    allow.write_text(broad + "\n")
+    with pytest.raises(SystemExit) as exc:
+        leak_guard.load_allowlist(allow)
+    assert exc.value.code == 2
+
+
+def test_identifier_findings_are_key_scoped_only(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "conf.yaml").write_text(f"tenantId: {FABRICATED_TENANT}\n")
+    # The file itself by path — a perfectly valid entry — still does not
+    # suppress the identifier: only a key entry may.
+    values, paths, keys = load_allowlist_from_lines(["src/conf.yaml"])
+    findings, _ = leak_guard.scan(tmp_path, all_patterns(), (values, paths), keys)
+    assert findings == ["src/conf.yaml:1: [entra-tenant] (redacted)"]
+
+
+def test_key_alternation_binds_as_the_key(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "conf.yaml").write_text(
+        f"tenantId: {FABRICATED_TENANT}\n"
+        "clientId=3f2504e0-4f89-11d3-9a0c-0305e82c3301\n")
+    values, paths, keys = load_allowlist_from_lines(["key:tenantId|clientId"])
+    findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), (values, paths), keys)
+    # Without the (?:...) wrap the alternation would bind as `tenantId` OR
+    # `clientId\s*[:=]...` and the `=` form would not match. (3 suppressions:
+    # tenant + guid on line 1, guid on line 2.)
+    assert findings == [] and suppressed == 3
+
+
+def test_key_entries_do_not_match_a_keys_suffix(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "conf.yaml").write_text(
+        f"clientId: {FABRICATED_TENANT}\n"                          # tail of clientId: no match
+        "Id: 3f2504e0-4f89-11d3-9a0c-0305e82c3301\n")               # standalone Id: match
+    values, paths, keys = load_allowlist_from_lines(["key:Id"])
+    findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), (values, paths), keys)
+    assert findings == ["src/conf.yaml:1: [entra-tenant] (redacted)"]
 
 
 def test_cli_exit_codes_redaction_and_validation(tmp_path):
@@ -250,12 +299,15 @@ def test_cli_exit_codes_redaction_and_validation(tmp_path):
     assert "[azure-subscription] (redacted)" in r.stdout
     r = run("--report-only")
     assert r.returncode == 0 and "patterns armed:" in r.stdout
-    # The tenant id (tier 2) is suppressible by its text; the subscription
-    # (tier 1) is not, so this run still fails on it.
+    # The hostname is suppressible by text; identifier findings are
+    # key-scoped only (and a GUID-matching text entry would be refused at
+    # load), so tenant AND subscription still fail the run.
     allow = tmp_path / "allow.txt"
-    allow.write_text(f"admin\\.qnsc\\.vn\n{FABRICATED_TENANT}\n")
+    allow.write_text("admin\\.qnsc\\.vn\n")
     r = run("--allowlist", str(allow))
-    assert r.returncode == 1 and "[azure-subscription] (redacted)" in r.stdout
+    assert r.returncode == 1
+    assert "[entra-tenant] (redacted)" in r.stdout
+    assert "[azure-subscription] (redacted)" in r.stdout
     r = run("--allowlist", str(tmp_path / "nope.txt"))
     assert r.returncode == 2 and "not found" in r.stdout
 

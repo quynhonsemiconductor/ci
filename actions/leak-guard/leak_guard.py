@@ -40,9 +40,11 @@ The allowlist (policy 2026-10-29) has three entry kinds, one per line:
                   and metacharacters (a CIDR such as 10 dot 0 dot 0 dot 0 slash 16) is
                   rejected as a disguised path pattern: allowlist the address
                   without the mask.
-  any other regex suppresses when it matches the finding's TEXT. (Matching
-                  paths by substring went with directory scopes: a path is a
-                  file, named literally, or nothing.)
+  any other regex suppresses NON-identifier findings (hostnames, emails,
+                  addresses) when it matches the finding's text — and nothing
+                  else: identifier findings are key-scoped only, and a text
+                  regex that can match a GUID at all is refused at load, so
+                  `.*` or `[0-9a-f-]+` can never stand in for a key scope.
 
 The Azure subscription id is TIER 1 and cannot be suppressed by ANY entry:
 a finding means the value is removed from the tree, never allowlisted. Its
@@ -153,6 +155,15 @@ def iter_files(root: Path):
             yield path
 
 
+# Identifier findings (guid, entra-tenant, azure-subscription) are key-scoped
+# ONLY: no text or file entry suppresses them. Named for the check, not for a
+# behavior — azure-subscription is additionally unsuppressible outright.
+IDENTIFIER_PIDS = frozenset({'guid', 'entra-tenant', 'azure-subscription'})
+# A stand-in GUID for the load-time refusal of text entries broad enough to
+# match identifiers. Fabricated, not a real id.
+SAMPLE_GUID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+
+
 def load_allowlist(path: Path | None):
     """Returns (values, paths, keys): text regexes, literal file paths, `key:` regexes.
 
@@ -200,24 +211,39 @@ def load_allowlist(path: Path | None):
             paths.append(line)
             continue
         try:
-            values.append(re.compile(line))
+            pat = re.compile(line)
         except re.error as exc:
             print(f'::error::{path}:{lineno}: not a valid regular expression: {line} ({exc})')
             sys.exit(2)
+        # A text entry that can match a GUID would suppress identifier findings
+        # everywhere if text still applied to them — and identifier findings are
+        # key-scoped only now. Refuse it at load so the intent cannot hide in a
+        # broad regex: name the key, or leave the finding alone.
+        if pat.search(SAMPLE_GUID):
+            print(f'::error::{path}:{lineno}: text entry matches a GUID — identifier '
+                  f'findings are key-scoped only; use key:<name> — {line}')
+            sys.exit(2)
+        values.append(pat)
     return values, paths, keys
-def suppresses(values, paths, relpath: str, text: str) -> bool:
-    # Text entries match the finding's value; path entries are literal file
-    # names compared whole. Substring path matching went with directory scopes.
+def suppresses(pid, values, paths, relpath: str, text: str) -> bool:
+    # Text entries match NON-identifier findings by value; path entries are
+    # literal file names compared whole. Identifier findings (guid,
+    # entra-tenant, azure-subscription) are key-scoped only — no text or file
+    # entry touches them.
+    if pid in IDENTIFIER_PIDS:
+        return False
     return (any(p.search(text) for p in values)
             or relpath in paths)
 
 
 def key_matches(keys, prefix: str) -> bool:
     # The finding must be the VALUE of the key: the text immediately before it
-    # ends with `<key regex>` + \\s*[:=]\\s*\"?\" — a quoted or bare scalar. A key
-    # named anywhere else on the line (a comment, a far-away field) does not
-    # suppress.
-    return any(re.search(k.pattern + r'\s*[:=]\s*"?$', prefix) for k in keys)
+    # ends with the key, a joiner and an optional quote. The key regex is
+    # wrapped in (?:...) so an alternation binds as the KEY and not as
+    # key|joiner, and left-anchored with (?<![\w-]) so `key:Id` cannot match
+    # the tail of `clientId:` — a key entry names a key, not a key's suffix.
+    return any(re.search(r'(?<![\w-])(?:' + k.pattern + r')\s*[:=]\s*"?$', prefix)
+               for k in keys)
 
 
 # Identifier-shaped patterns whose findings a `key:` allowlist entry may
@@ -262,7 +288,7 @@ def scan(root: Path, patterns, allowlist=None, keys=None):
                     hit = m.group(0)
                     if pid in UNSUPPRESSIBLE:
                         pass  # tier 1: no allowlist can suppress it, by policy
-                    elif suppresses(values, paths, relpath, hit):
+                    elif suppresses(pid, values, paths, relpath, hit):
                         suppressed += 1
                         continue
                     elif pid in KEY_SCOPABLE and key_matches(keys, line[:m.start()]):
