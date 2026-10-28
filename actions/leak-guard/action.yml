@@ -29,7 +29,9 @@ inputs:
   azure-subscription-id:
     description: >
       The org's Azure subscription id (TIER 1), from vars.AZURE_SUBSCRIPTION_ID.
-      Empty (default) disarms that single pattern.
+      Empty (default) disarms that single pattern. A finding can NEVER be
+      allowlisted — the value is removed from the tree, per the identifier
+      policy 2026-10-29 — and is reported with the value redacted.
     required: false
     default: ''
   aws-account-id:
@@ -42,13 +44,16 @@ inputs:
   allowlist:
     description: >
       Path to the repository's allowlist, one entry per line, # comments and
-      blanks ignored. A `key:<regex>` entry suppresses an identifier finding
-      (guid, entra-tenant, azure-subscription) only when the regex matches the
-      key on the finding's own line. Any other entry is a regex matched against
-      the finding's text OR its repository-relative path — and a path entry
-      must name ONE FILE: entries ending in `/` are refused (identifier policy
-      2026-10-29 — whole-directory scopes are never allowed). A missing file at
-      the default path means "no allowlist"; a missing custom path fails.
+      blanks ignored. Three kinds: `key:<regex>` suppresses an identifier
+      finding (guid, entra-tenant) only when the finding is the VALUE of that
+      key — the text before it ends with the key and `: ` or `=` and an
+      optional quote. An entry containing `/` is a LITERAL single-file path
+      (metacharacters and a trailing `/` are refused: directory scopes are
+      what the identifier policy 2026-10-29 forbids). Any other entry is a
+      regex matched against the finding's TEXT only. The Azure subscription
+      id (tier 1) cannot be suppressed by any entry, and identifier findings
+      print with their value redacted. A missing file at the default path
+      means "no allowlist"; a missing custom path fails.
     required: false
     default: '.github/leak-guard-allowlist.txt'
   report-only:
