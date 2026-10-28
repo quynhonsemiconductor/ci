@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.0](https://github.com/quynhonsemiconductor/ci/compare/v1.25.0...v1.26.0) (2026-10-28)
+
+
+### Features
+
+* **leak-guard:** deterministic internal-name check for public repos ([#262](https://github.com/quynhonsemiconductor/ci/issues/262)) ([efc1e8c](https://github.com/quynhonsemiconductor/ci/commit/efc1e8cbbba794fcb5dce8d7ef6a9df7b0fc274e))
+
 ## [1.25.0](https://github.com/quynhonsemiconductor/ci/compare/v1.24.5...v1.25.0) (2026-10-28)
 
 
