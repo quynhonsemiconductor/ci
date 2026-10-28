@@ -7,10 +7,13 @@ description: >
   model, no network, no history walk (gitleaks owns history, for secrets); see
   leak_guard.py for the pattern list and what each one deliberately skips.
 
-  The org's own Entra tenant GUID and AWS account number are patterns too, but
-  they are never written down here: the caller feeds them at runtime from org
-  variables, and a finding reports the file and line with the value redacted
-  (this repo and its Actions logs are public).
+  The org's own Entra tenant GUID, Azure subscription id and AWS account
+  number are patterns too, but they are never written down here: the caller
+  feeds them at runtime from org variables, and a finding reports the file and
+  line with the value redacted (this repo and its Actions logs are public).
+  Per the identifier policy (2026-10-29) the AWS account pattern is not armed —
+  callers pass nothing for it — and the Azure subscription id is tier 1: a
+  finding means the value must be REMOVED, never allowlisted.
 
   The caller checks out first (fetch-depth: 1 is enough — this scans the tree,
   not the history) and the check FAILS on any unallowlisted finding unless
@@ -23,16 +26,29 @@ inputs:
       disarms that single pattern — the summary line names which patterns ran.
     required: false
     default: ''
+  azure-subscription-id:
+    description: >
+      The org's Azure subscription id (TIER 1), from vars.AZURE_SUBSCRIPTION_ID.
+      Empty (default) disarms that single pattern.
+    required: false
+    default: ''
   aws-account-id:
-    description: The org's AWS account number, from vars.AWS_ACCOUNT_ID. Empty disarms.
+    description: >
+      The org's AWS account number. NOT armed by policy since 2026-10-29 (the
+      account closes after the on-prem cutover); kept as an input for callers
+      that have not caught up. Empty (default) disarms.
     required: false
     default: ''
   allowlist:
     description: >
-      Path to the repository's allowlist: one regular expression per line,
-      matched against each finding's text OR its repository-relative path.
-      Lines starting with # and blank lines are ignored. A missing file at the
-      default path means "no allowlist"; a missing file at a custom path fails.
+      Path to the repository's allowlist, one entry per line, # comments and
+      blanks ignored. A `key:<regex>` entry suppresses an identifier finding
+      (guid, entra-tenant, azure-subscription) only when the regex matches the
+      key on the finding's own line. Any other entry is a regex matched against
+      the finding's text OR its repository-relative path — and a path entry
+      must name ONE FILE: entries ending in `/` are refused (identifier policy
+      2026-10-29 — whole-directory scopes are never allowed). A missing file at
+      the default path means "no allowlist"; a missing custom path fails.
     required: false
     default: '.github/leak-guard-allowlist.txt'
   report-only:
@@ -47,6 +63,7 @@ runs:
       shell: bash
       env:
         ENTRA_TENANT_ID: ${{ inputs.entra-tenant-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
         AWS_ACCOUNT_ID: ${{ inputs.aws-account-id }}
         ALLOWLIST: ${{ inputs.allowlist }}
         REPORT_ONLY: ${{ inputs.report-only }}
@@ -55,6 +72,7 @@ runs:
         # Runtime identifiers from the caller's variables: never echoed, never
         # defaulted in this file. An empty value disarms that one pattern.
         [ -n "$ENTRA_TENANT_ID" ] && args+=(--entra-tenant-id "$ENTRA_TENANT_ID")
+        [ -n "$AZURE_SUBSCRIPTION_ID" ] && args+=(--azure-subscription-id "$AZURE_SUBSCRIPTION_ID")
         [ -n "$AWS_ACCOUNT_ID" ] && args+=(--aws-account-id "$AWS_ACCOUNT_ID")
         if [ "$REPORT_ONLY" = 'true' ]; then
           args+=(--report-only)

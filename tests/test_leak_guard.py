@@ -28,11 +28,13 @@ spec.loader.exec_module(leak_guard)
 # this check exists to keep out of public repos, so they appear nowhere here —
 # not even in its tests. Same shapes (GUID, 12-digit account) as the real ones.
 FABRICATED_TENANT = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+FABRICATED_SUBSCRIPTION = "77777777-8888-4999-aaaa-bbbbbbbbbbbb"
 FABRICATED_AWS = "999999999999"
 
 
 def all_patterns():
-    return leak_guard.STATIC_PATTERNS + leak_guard.runtime_patterns(FABRICATED_TENANT, FABRICATED_AWS)
+    return leak_guard.STATIC_PATTERNS + leak_guard.runtime_patterns(
+        FABRICATED_TENANT, FABRICATED_SUBSCRIPTION, FABRICATED_AWS)
 
 
 @pytest.mark.parametrize("text,pattern_id", [
@@ -41,6 +43,7 @@ def all_patterns():
     ("contact ops@qnsc.vn", "qnsc-email"),
     ("from: noreply-rova-dev@qnsc.vn", "qnsc-email"),
     (f"tenant {FABRICATED_TENANT}", "entra-tenant"),
+    (f"subscription: {FABRICATED_SUBSCRIPTION}", "azure-subscription"),
     ("id 3f2504e0-4f89-11d3-9a0c-0305e82c3301", "guid"),
     (f"account {FABRICATED_AWS}", "aws-account"),
     ("node 10.1.2.3", "private-ipv4"),
@@ -71,6 +74,60 @@ def test_not_a_leak(tmp_path, text):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "conf.txt").write_text(text + "\n")
     assert leak_guard.scan(tmp_path, all_patterns(), []) == ([], 0)
+
+
+def test_azure_subscription_disarmed_when_not_fed(tmp_path):
+    t = tmp_path / "src"
+    t.mkdir()
+    (t / "conf.txt").write_text(f"subscription = '{FABRICATED_SUBSCRIPTION}'\n")
+    patterns = leak_guard.STATIC_PATTERNS + leak_guard.runtime_patterns("", "", "")
+    # Unarmed runtime patterns still leave the generic GUID pattern (outside
+    # tests): the line IS reported, but as a guid — never unredacted as the
+    # subscription itself.
+    findings, _ = leak_guard.scan(tmp_path, patterns, [], [])
+    assert findings == ["src/conf.txt:1: [guid] " + FABRICATED_SUBSCRIPTION]
+
+
+def test_azure_subscription_is_tier_1_redacted_everywhere(tmp_path):
+    # Even in a test-ish path, where the generic GUID pattern is exempt: the
+    # subscription id is tier 1 and fires everywhere, redacted.
+    t = tmp_path / "tests"
+    t.mkdir()
+    (t / "fixtures.py").write_text(f"SUB = '{FABRICATED_SUBSCRIPTION}'\n")
+    findings, _ = leak_guard.scan(tmp_path, all_patterns(), [], [])
+    assert findings == ["tests/fixtures.py:1: [azure-subscription] (redacted)"]
+
+
+def load_allowlist_from_lines(lines):
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
+        fh.write("\n".join(lines) + "\n")
+        name = fh.name
+    try:
+        return leak_guard.load_allowlist(pathlib.Path(name))
+    finally:
+        import os
+        os.unlink(name)
+
+
+def test_key_entry_scopes_identifier_to_its_line(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "conf.yaml").write_text(
+        f"tenantId: {FABRICATED_TENANT}\n"
+        f"appClientId: {FABRICATED_SUBSCRIPTION}\n"
+        "someOtherGuid: 3f2504e0-4f89-11d3-9a0c-0305e82c3301\n"
+        f"host: admin.qnsc.vn tenantId: {FABRICATED_TENANT}\n")
+    regexes, keys = load_allowlist_from_lines(
+        ["key:tenantId", "key:[A-Z_]*ClientId"])
+    findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), regexes, keys)
+    # Line 1 and 2: the key is on the line -> suppressed. Line 3: no key ->
+    # reported. Line 4: a hostname is NOT identifier-shaped -> still reported,
+    # even though a key sits on the same line.
+    assert findings == [
+        "src/conf.yaml:3: [guid] 3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+        "src/conf.yaml:4: [qnsc-hostname] admin.qnsc.vn",
+    ]
 
 
 def test_runtime_ids_disarmed_when_not_fed(tmp_path):
@@ -112,28 +169,38 @@ def test_binary_files_skipped(tmp_path):
     assert leak_guard.scan(tmp_path, all_patterns(), []) == ([], 0)
 
 
-def test_allowlist_suppresses_by_text_and_path(tmp_path):
+def test_allowlist_suppresses_by_text_and_single_file_path(tmp_path):
     (tmp_path / "live").mkdir()
     (tmp_path / "live" / "vpc.tf").write_text("cidr = \"10.0.0.0/16\"\nendpoint = \"admin.qnsc.vn\"\n")
-    allowlist = [
-        r"10\.0\.0\.0/16",        # this CIDR is intentionally public
-        r"^live/",                # the whole directory's paths are exempt
-    ]
-    compiled = [leak_guard.re.compile(p) for p in allowlist]
-    findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), compiled)
-    assert findings == [] and suppressed == 2
+    compiled, keys = load_allowlist_from_lines(
+        [r"10\.0\.0\.0/16",          # this CIDR is intentionally public
+         r"^live/vpc\.tf$"])           # ONE file, not a directory
+    findings, suppressed = leak_guard.scan(tmp_path, all_patterns(), compiled, keys)
+    assert findings == [] and suppressed == 2  # the cidr by text, the hostname by file path
+
+
+def test_directory_entries_are_refused(tmp_path):
+    for bad in ["^rendered/", "values/", "key:foo/"]:
+        allow = tmp_path / "allow.txt"
+        allow.write_text(bad + "\n")
+        with pytest.raises(SystemExit) as exc:
+            leak_guard.load_allowlist(allow)
+        assert exc.value.code == 2
 
 
 def test_cli_exit_codes_and_redaction(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.txt").write_text(
-        f"host admin.qnsc.vn tenant {FABRICATED_TENANT} account {FABRICATED_AWS}\n")
+        f"host admin.qnsc.vn tenant {FABRICATED_TENANT} "
+        f"subscription {FABRICATED_SUBSCRIPTION} account {FABRICATED_AWS}\n")
     (tmp_path / ".github").mkdir()
 
     def run(*extra):
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--root", str(tmp_path),
-             "--entra-tenant-id", FABRICATED_TENANT, "--aws-account-id", FABRICATED_AWS,
+             "--entra-tenant-id", FABRICATED_TENANT,
+             "--azure-subscription-id", FABRICATED_SUBSCRIPTION,
+             "--aws-account-id", FABRICATED_AWS,
              *extra],
             capture_output=True, text=True)
 
@@ -141,15 +208,17 @@ def test_cli_exit_codes_and_redaction(tmp_path):
     assert r.returncode == 1 and "[qnsc-hostname]" in r.stdout
     # The runtime identifiers are the point of the check: they must not be
     # echoed back, not even in the report that says they were found.
-    assert FABRICATED_TENANT not in r.stdout and FABRICATED_AWS not in r.stdout
-    assert "[entra-tenant] (redacted)" in r.stdout and "[aws-account] (redacted)" in r.stdout
+    for lit in (FABRICATED_TENANT, FABRICATED_SUBSCRIPTION, FABRICATED_AWS):
+        assert lit not in r.stdout
+    assert "[entra-tenant] (redacted)" in r.stdout
+    assert "[azure-subscription] (redacted)" in r.stdout
     r = run("--report-only")
     assert r.returncode == 0 and "patterns armed:" in r.stdout
     allow = tmp_path / "allow.txt"
     # The allowlist matches the FINDING'S TEXT even when the report redacts it —
     # exempting a runtime identifier is done by its value, not by "(redacted)".
     allow.write_text(
-        f"admin\\.qnsc\\.vn\n{FABRICATED_TENANT}\n{FABRICATED_AWS}\n")
+        f"admin\\.qnsc\\.vn\n{FABRICATED_TENANT}\n{FABRICATED_SUBSCRIPTION}\n{FABRICATED_AWS}\n")
     r = run("--allowlist", str(allow))
     # (The allowlist file itself sits inside the scanned root, so its own lines
     # add suppressed hits — assert the outcome, not the count.)
@@ -178,9 +247,11 @@ def test_action_metadata_parses():
     broke this file once (on pr-size) and nothing else would have noticed before a caller ran it."""
     import yaml
     action = yaml.safe_load((SCRIPT.parent / "action.yml").read_text())
-    assert set(action["inputs"]) == {"entra-tenant-id", "aws-account-id", "allowlist", "report-only"}
+    assert set(action["inputs"]) == {"entra-tenant-id", "azure-subscription-id",
+                                     "aws-account-id", "allowlist", "report-only"}
     # The org identifiers must not be defaulted into the public action metadata.
     assert action["inputs"]["entra-tenant-id"]["default"] == ""
+    assert action["inputs"]["azure-subscription-id"]["default"] == ""
     assert action["inputs"]["aws-account-id"]["default"] == ""
     assert action["inputs"]["allowlist"]["default"] == ".github/leak-guard-allowlist.txt"
     assert action["runs"]["using"] == "composite"
