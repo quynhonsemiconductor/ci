@@ -11,16 +11,50 @@ over the tracked tree, one allowlist file per repository for names that are
 intentionally public. Every pattern below is a proposal the SA reviews — the list
 lives in this file and in the PR that adds it, not in a config far from the code.
 
-The two identifiers that would themselves be leaks if written here — the Entra
-tenant GUID and the AWS account number — are NOT in this file and NOT in the
-action's defaults. Callers feed them at runtime from org variables
-(`vars.ENTRA_TENANT_ID`, `vars.AWS_ACCOUNT_ID`); an empty input disarms that one
-pattern (the summary names which patterns ran), and a finding prints the file and
-line with the VALUE REDACTED, because a public repo's Actions log is public too.
+The identifiers that would themselves be leaks if written here — the Entra
+tenant GUID, the Azure subscription id and the AWS account number — are NOT in
+this file and NOT in the action's defaults. Callers feed them at runtime from
+org variables (`vars.ENTRA_TENANT_ID`, `vars.AZURE_SUBSCRIPTION_ID`,
+`vars.AWS_ACCOUNT_ID`); an empty input disarms that one pattern (the summary
+names which patterns ran), and a finding prints the file and line with the VALUE
+REDACTED, because a public repo's Actions log is public too.
 
 What it deliberately does NOT do: scan git history (gitleaks already does, for
 secrets — this check is about the CURRENT tree), and guess at "suspicious" text
 (anything not matched is fine, which is why the pattern list is short and exact).
+
+The allowlist (policy 2026-10-29) has three entry kinds, one per line:
+  `key:<regex>`   suppresses an IDENTIFIER finding (guid, entra-tenant) only
+                  when the finding is the VALUE OF that key on its own line —
+                  the text immediately before the match must end with
+                  `<key regex>` + \\s*[:=]\\s*\"?\". E.g. `key:tenantId` suppresses
+                  the guid in `tenantId: 0123...` but not the same guid in
+                  prose. Tier-2 ids are public-by-design only where a config
+                  line names them, so the scope is the key/value pair, never
+                  the line at large, the file or the directory. Empty and
+                  wildcard-only key regexes are refused.
+  `/`-containing  a LITERAL single-file path, matched exactly. Regex
+                  metacharacters are refused — a path entry is a filename, not
+                  a pattern — as is any trailing `/` (directory scopes are
+                  what the policy forbids). An entry containing BOTH a slash
+                  and metacharacters (a CIDR such as 10 dot 0 dot 0 dot 0 slash 16) is
+                  rejected as a disguised path pattern: allowlist the address
+                  without the mask.
+  any other regex suppresses NON-identifier findings (hostnames, emails,
+                  addresses) when it matches the finding's text — and nothing
+                  else: identifier findings are key-scoped only, and a text
+                  regex that can match a GUID at all is refused at load, so
+                  `.*` or `[0-9a-f-]+` can never stand in for a key scope.
+
+The Azure subscription id is TIER 1 and cannot be suppressed by ANY entry:
+a finding means the value is removed from the tree, never allowlisted. Its
+findings — and every other identifier-shaped finding (guid, entra-tenant) —
+print the id name and file:line with the value REDACTED, so a disarmed
+runtime input cannot leak through the static guid pattern's report.
+
+Runtime identifier inputs are stripped and validated: the tenant GUID and the
+subscription id must be GUIDs, the account number all digits — a malformed
+value exits 2 rather than arming a pattern that can never fire.
 
 Exit codes: 0 clean (or every finding allowlisted), 1 findings, 2 bad invocation.
 """
@@ -85,7 +119,7 @@ STATIC_PATTERNS: list[tuple[str, re.Pattern[str], bool, bool]] = [
 ]
 
 
-def runtime_patterns(entra_tenant_id: str, aws_account_id: str):
+def runtime_patterns(entra_tenant_id: str, azure_subscription_id: str, aws_account_id: str):
     """The org's own identifiers, escaped into exact-match patterns.
 
     Redacted in every line of output: the report runs in a public repo's Actions
@@ -96,6 +130,10 @@ def runtime_patterns(entra_tenant_id: str, aws_account_id: str):
     if entra_tenant_id:
         out.append(('entra-tenant', re.compile(rf'\b{re.escape(entra_tenant_id)}\b',
                                                re.IGNORECASE), False, True))
+    if azure_subscription_id:
+        out.append(('azure-subscription',
+                    re.compile(rf'\b{re.escape(azure_subscription_id)}\b',
+                               re.IGNORECASE), False, True))
     if aws_account_id:
         out.append(('aws-account', re.compile(rf'\b{re.escape(aws_account_id)}\b'), False, True))
     return out
@@ -117,34 +155,125 @@ def iter_files(root: Path):
             yield path
 
 
-def load_allowlist(path: Path | None) -> list[re.Pattern[str]]:
+# Identifier findings (guid, entra-tenant, azure-subscription) are key-scoped
+# ONLY: no text or file entry suppresses them. Named for the check, not for a
+# behavior — azure-subscription is additionally unsuppressible outright.
+IDENTIFIER_PIDS = frozenset({'guid', 'entra-tenant', 'azure-subscription'})
+# A stand-in GUID for the load-time refusal of text entries broad enough to
+# match identifiers. Fabricated, not a real id.
+SAMPLE_GUID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+
+
+def load_allowlist(path: Path | None):
+    """Returns (values, paths, keys): text regexes, literal file paths, `key:` regexes.
+
+    Policy (2026-10-29) closes two scopes: directories (an entry ending in `/`,
+    or a path that is really a pattern) and whole-line key matches (a key entry
+    must sit immediately before the finding as `key: value`).
+    """
     if path is None:
-        return []
-    compiled: list[re.Pattern[str]] = []
+        return [], [], []
+    values: list[re.Pattern[str]] = []
+    paths: list[str] = []
+    keys: list[re.Pattern[str]] = []
     for lineno, raw in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
+        if line.startswith('key:'):
+            body = line[4:].strip()
+            if not body:
+                print(f'::error::{path}:{lineno}: empty key: entry — a key scope must '
+                      f'name the key it matches')
+                sys.exit(2)
+            try:
+                pat = re.compile(body)
+            except re.error as exc:
+                print(f'::error::{path}:{lineno}: not a valid regular expression: {line} ({exc})')
+                sys.exit(2)
+            if pat.search('') is not None or pat.fullmatch('x') is not None:
+                # A wildcard that matches everything (`.`, `.*`) exempts every
+                # identifier on every key-shaped line; that is no scope.
+                print(f'::error::{path}:{lineno}: key pattern matches empty or any single '
+                      f'character — too broad to be a key scope: {line}')
+                sys.exit(2)
+            keys.append(pat)
+            continue
+        if '/' in line:
+            # A LITERAL single file: no metacharacters, no trailing slash. Dots
+            # are allowed (file names have them) and matched as themselves.
+            bad = sorted(set(line) & PATH_FORBIDDEN)
+            if line.endswith('/') or bad:
+                why = 'whole directory' if line.endswith('/') else f'regex metacharacter(s) {"".join(bad)}'
+                print(f'::error::{path}:{lineno}: path entries are LITERAL single files '
+                      f'({why}); identifier policy 2026-10-29 — {line}')
+                sys.exit(2)
+            paths.append(line)
+            continue
         try:
-            compiled.append(re.compile(line))
+            pat = re.compile(line)
         except re.error as exc:
             print(f'::error::{path}:{lineno}: not a valid regular expression: {line} ({exc})')
             sys.exit(2)
-    return compiled
+        # A text entry that can match a GUID would suppress identifier findings
+        # everywhere if text still applied to them — and identifier findings are
+        # key-scoped only now. Refuse it at load so the intent cannot hide in a
+        # broad regex: name the key, or leave the finding alone.
+        if pat.search(SAMPLE_GUID):
+            print(f'::error::{path}:{lineno}: text entry matches a GUID — identifier '
+                  f'findings are key-scoped only; use key:<name> — {line}')
+            sys.exit(2)
+        values.append(pat)
+    return values, paths, keys
+def suppresses(pid, values, paths, relpath: str, text: str) -> bool:
+    # Text entries match NON-identifier findings by value; path entries are
+    # literal file names compared whole. Identifier findings (guid,
+    # entra-tenant, azure-subscription) are key-scoped only — no text or file
+    # entry touches them.
+    if pid in IDENTIFIER_PIDS:
+        return False
+    return (any(p.search(text) for p in values)
+            or relpath in paths)
 
 
-def suppresses(allowlist: list[re.Pattern[str]], relpath: str, text: str) -> bool:
-    # A line matches either the finding's text or the file's path, so an
-    # allowlist can exempt one bad-looking constant or one whole directory.
-    return any(p.search(text) or p.search(relpath) for p in allowlist)
+def key_matches(keys, prefix: str) -> bool:
+    # The finding must be the VALUE of the key: the text immediately before it
+    # ends with the key, a joiner and an optional quote. The key regex is
+    # wrapped in (?:...) so an alternation binds as the KEY and not as
+    # key|joiner, and left-anchored with (?<![\w-]) so `key:Id` cannot match
+    # the tail of `clientId:` — a key entry names a key, not a key's suffix.
+    return any(re.search(r'(?<![\w-])(?:' + k.pattern + r')\s*[:=]\s*"?$', prefix)
+               for k in keys)
 
 
-def scan(root: Path, patterns, allowlist: list[re.Pattern[str]]):
+# Identifier-shaped patterns whose findings a `key:` allowlist entry may
+# suppress: the tier-2 ids that are public-by-design only where a config line
+# names them as a key's value. The Azure subscription id is TIER 1 and is not
+# key-scopable — or suppressible at all. Hostnames and emails are never
+# key-scoped; their entries are exact text values.
+KEY_SCOPABLE = frozenset({'guid', 'entra-tenant'})
+# Findings whose VALUE is never printed: identifier-shaped, because a public
+# repo's Actions log is public, and a disarmed runtime input must not leak via
+# the static guid pattern's report.
+REDACT_OUTPUT = frozenset({'guid', 'entra-tenant', 'azure-subscription'})
+# The tier-1 id: no allowlist entry — text, path or key — may suppress it.
+UNSUPPRESSIBLE = frozenset({'azure-subscription'})
+# Path entries are LITERAL file names: every one of these would make the
+# "path" a pattern, and a pattern that matches paths is a directory loophole
+# in disguise.
+PATH_FORBIDDEN = set('\\^$*+?()[]{}|')
+
+
+def scan(root: Path, patterns, allowlist=None, keys=None):
     findings, suppressed = [], 0
+    values, paths = allowlist if allowlist is not None else ([], [])
+    keys = keys if keys is not None else []
     # Redacted (runtime-identifier) patterns win over any static pattern that
     # would match the same text — otherwise the generic GUID pattern would echo
     # the tenant GUID in the very report that exists to keep it out of the log.
-    redacted_res = [p for _, p, _, red in patterns if red]
+    # The runtime (exact-literal) patterns are more specific than the generic
+    # guid pattern: when both match the same text, only the runtime one reports.
+    runtime_res = [p for _, p, _, red in patterns if red]
     for path in iter_files(root):
         if is_binary(path):
             continue
@@ -157,12 +286,17 @@ def scan(root: Path, patterns, allowlist: list[re.Pattern[str]]):
                     continue
                 for m in pattern.finditer(line):
                     hit = m.group(0)
-                    if suppresses(allowlist, relpath, hit):
+                    if pid in UNSUPPRESSIBLE:
+                        pass  # tier 1: no allowlist can suppress it, by policy
+                    elif suppresses(pid, values, paths, relpath, hit):
                         suppressed += 1
                         continue
-                    if not redact and any(p.search(hit) for p in redacted_res):
-                        continue  # reported once, redacted, by its own pattern
-                    shown = '(redacted)' if redact else hit
+                    elif pid in KEY_SCOPABLE and key_matches(keys, line[:m.start()]):
+                        suppressed += 1
+                        continue
+                    if pid == 'guid' and any(p.search(hit) for p in runtime_res):
+                        continue  # the exact runtime pattern reports this value instead
+                    shown = '(redacted)' if (redact or pid in REDACT_OUTPUT) else hit
                     findings.append(f'{relpath}:{lineno}: [{pid}] {shown}')
     return findings, suppressed
 
@@ -174,32 +308,55 @@ def main(argv: list[str] | None = None) -> int:
                         help='per-repo allowlist of regular expressions (text or path)')
     parser.add_argument('--entra-tenant-id', default='',
                         help='org Entra tenant GUID, from vars.ENTRA_TENANT_ID. Empty disarms the pattern.')
+    parser.add_argument('--azure-subscription-id', default='',
+                        help='org Azure subscription id (TIER 1), from vars.AZURE_SUBSCRIPTION_ID. '
+                             'Empty disarms the pattern.')
     parser.add_argument('--aws-account-id', default='',
-                        help='org AWS account number, from vars.AWS_ACCOUNT_ID. Empty disarms the pattern.')
+                        help='org AWS account number, from vars.AWS_ACCOUNT_ID. NOT armed by policy '
+                             'since 2026-10-29; callers pass nothing.')
     parser.add_argument('--report-only', action='store_true',
                         help='log findings without failing (exit 0)')
     args = parser.parse_args(argv)
 
+    def guid_input(name: str, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                      r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', value):
+            print(f'::error::{name} is not a GUID (tier-1/2 identifiers are GUIDs); '
+                  f'refusing to arm a pattern that can never fire')
+            raise SystemExit(2)
+        return value
+
+    entra_tenant_id = guid_input('--entra-tenant-id', args.entra_tenant_id)
+    azure_subscription_id = guid_input('--azure-subscription-id', args.azure_subscription_id)
+    aws_account_id = args.aws_account_id.strip()
+    if aws_account_id and not aws_account_id.isdigit():
+        print('::error::--aws-account-id is not a number; refusing to arm it')
+        raise SystemExit(2)
+
     root = Path(args.root).resolve()
     allowlist_path = Path(args.allowlist)
     if allowlist_path.is_file():
-        patterns_list = load_allowlist(allowlist_path)
+        allowlists = load_allowlist(allowlist_path)
     elif args.allowlist != parser.get_default('allowlist'):
         # A MISSING default allowlist is fine (a clean repo needs none); a named
         # one that is not there is a mistake worth stopping for.
         print(f'::error::allowlist not found: {args.allowlist}')
         return 2
     else:
-        patterns_list = []
+        allowlists = ([], [], [])
 
-    patterns = STATIC_PATTERNS + runtime_patterns(args.entra_tenant_id, args.aws_account_id)
-    findings, suppressed = scan(root, patterns, patterns_list)
+    patterns = STATIC_PATTERNS + runtime_patterns(entra_tenant_id,
+                                                  azure_subscription_id,
+                                                  aws_account_id)
+    findings, suppressed = scan(root, patterns, (allowlists[0], allowlists[1]), allowlists[2])
     for finding in findings:
         print(f'::error file={finding.split(":")[0]}::{finding}')
     # Names which patterns ran, never their values.
     armed = ', '.join(pid for pid, _, _, _ in patterns) or 'none'
+    entries = len(allowlists[0]) + len(allowlists[1]) + len(allowlists[2])
     print(f'leak-guard: {len(findings)} finding(s), {suppressed} suppressed by allowlist, '
-          f'{len(patterns_list)} allowlist pattern(s), patterns armed: {armed}, root={root}')
+          f'{entries} allowlist pattern(s), patterns armed: {armed}, root={root}')
     if findings and not args.report_only:
         return 1
     return 0
