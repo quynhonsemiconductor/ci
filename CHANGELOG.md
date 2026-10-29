@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.0](https://github.com/quynhonsemiconductor/ci/compare/v1.26.0...v1.27.0) (2026-10-29)
+
+
+### Features
+
+* **leak-guard:** azure-subscription pattern, key-scoped allowlist entries ([#264](https://github.com/quynhonsemiconductor/ci/issues/264)) ([79a723e](https://github.com/quynhonsemiconductor/ci/commit/79a723e0e0687a2bbca10c0969bcb124811ef379))
+
 ## [1.26.0](https://github.com/quynhonsemiconductor/ci/compare/v1.25.0...v1.26.0) (2026-10-28)
 
 
