@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Decide whether the AI code review should run, and say honestly what it did.
 
-Used by `.github/workflows/code-review.yml`. Three subcommands, one per question:
+Used by `.github/workflows/code-review.yml`. Five subcommands, one per question:
 
   scope     Is this pull request dependency-only? Then the reviewer has nothing to
             say, and reading a 13,000-line lockfile is how a 3-file bump spent
             509,506 tokens against a 400,000 budget (rova#652).
   size      Is it too large to re-review on every push? Measured with OCR's own
             `--preview` (no model call), so excludes count exactly as OCR applies them.
+  tier      Will the budget NOT cover everything? Then keep the high-risk files
+            and exclude the rest, so what runs out of budget is the low-risk
+            tail, not whatever sorts first alphabetically.
   probe     Can the model be reached right now? One tiny request, read for the
             provider's own error code, BEFORE the review fans out.
   verdict   What actually happened? Turns the OCR result file into one sentence
@@ -48,6 +51,7 @@ import fnmatch
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -180,6 +184,198 @@ def cmd_size(args) -> int:
                         os.environ.get("EVENT_ACTION", ""))
     print(" ".join(f"{k}={v}" for k, v in out.items()))
     write_outputs(out)
+    return 0
+
+
+# ── tier ──────────────────────────────────────────────────────────────────────
+
+# OCR dispatches file groups in the order its grouping produces and stops at the
+# token budget; what that leaves unread is arbitrary (rova#821: 20 of 30 files
+# reviewed, the merge stopping in the middle of `apps/web/src/pages/guide/...`
+# while `functions/_lib/guide-gate.ts` — where the run's only security finding
+# sat — never got a turn). This pass is deterministic and free: rank the
+# reviewable files by path, and when the budget cannot cover everything, shrink
+# the review to the higher-risk end so whatever goes unread is the low-risk tail.
+#
+# Three tiers, because "high-risk" and "everything else" is too coarse: ordinary
+# source code is worth more model attention than data and config, but less than
+# the paths where a defect is a security incident.
+HIGH_RISK = [
+    "functions/**",          # edge/pages functions run at the trust boundary
+    "**/functions/**",
+    "**/auth/**",
+    "**/session/**",
+    ".github/workflows/**",  # CI/CD is the org's supply chain
+    "**/migrations/**",      # schema changes are one-way doors
+    "**/*.sql",
+    "**/Dockerfile*",
+    "Dockerfile*",
+    "**/*.Dockerfile",
+    "**/*.tf",               # IaC
+    "**/*.tfvars",
+    "**/*.tofu",
+]
+
+CODE_EXTS = {
+    ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue",
+    ".svelte", ".astro", ".py", ".pyi", ".go", ".rs", ".java", ".kt", ".kts",
+    ".swift", ".dart", ".php", ".rb", ".cs", ".cpp", ".cc", ".c", ".h", ".hpp",
+    ".sh", ".bash", ".ps1",
+}
+
+# Mirror of OCR's own pre-run estimate (internal/agent/estimate.go), which is a
+# FLOOR: per changed-diff token count T (chars/4, conservative for GLM's
+# tokenizer), 8 passes over the diff+overhead plus fixed per-file output.
+PER_FILE_FIXED_TOKENS = 8 * 2000 + 400 + 7 * 700
+DIFF_PASSES = 8  # 1 (plan) + avgMainRoundsPerFile (7) input re-sends
+CHARS_PER_TOKEN = 4
+
+GLOB_SPECIAL = set("*?[]!\\")
+
+
+def glob_match(path: str, pattern: str) -> bool:
+    """gitignore-style `**` semantics via fnmatch: a `**/` segment also matches
+    zero directories, matching the doublestar engine OCR uses."""
+    candidates = {pattern}
+    if pattern.startswith("**/"):
+        candidates.add(pattern[3:])
+    candidates.add(pattern.replace("/**/", "/"))
+    return any(fnmatch.fnmatch(path, c) for c in candidates)
+
+
+def file_tier(path: str) -> str:
+    if any(glob_match(path, p) for p in HIGH_RISK):
+        return "high"
+    if PurePosixPath(path).suffix.lower() in CODE_EXTS:
+        return "code"
+    return "low"
+
+
+def estimate_file_tokens(diff_chars: int) -> int:
+    diff_tokens = diff_chars // CHARS_PER_TOKEN
+    return diff_tokens * DIFF_PASSES + PER_FILE_FIXED_TOKENS
+
+
+def diff_char_counts(from_ref: str, to_ref: str, paths: list[str]) -> dict[str, int]:
+    """Characters of unified diff per path, measured from git itself so the
+    estimate tracks what the model will actually be shown."""
+    counts: dict[str, int] = {}
+    for path in paths:
+        try:
+            proc = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff",
+                                   from_ref, to_ref, "--", path],
+                                  capture_output=True, text=True)
+        except OSError:
+            break  # no git at all: no estimate, so no tiering (fail open)
+        if proc.returncode == 0:
+            counts[path] = len(proc.stdout)
+    return counts
+
+
+def tier_decision(preview: dict | None, budget: int, counts: dict[str, int]) -> dict:
+    """Pick which tiers to keep. Fail-open everywhere: no preview, no usable
+    estimate or an empty keep-set means no tiering, and the review runs exactly
+    as it would without this pass."""
+    out = {"tiered": "none", "excludes": [], "skipped": [], "estimate_all": 0,
+           "estimate_keep": 0}
+    if preview is None or budget <= 0:
+        return out
+    files = [f.get("path", "") for f in preview.get("files") or [] if f.get("will_review")]
+    files = [f for f in files if f]
+    if not files:
+        return out
+    # A path whose estimate cannot be measured must not be excluded on a guess.
+    measurable = [f for f in files if f in counts]
+    if not measurable:
+        return out
+    est = {f: estimate_file_tokens(counts[f]) for f in measurable}
+    est_all = sum(est[f] for f in measurable)
+    out["estimate_all"] = est_all
+    if est_all <= budget:
+        return out  # everything fits: no tiering, full coverage
+
+    by_tier: dict[str, list[str]] = {"high": [], "code": [], "low": []}
+    for f in measurable:
+        by_tier[file_tier(f)].append(f)
+
+    def safe_pattern(path: str) -> str | None:
+        # An exact path only works as a gitignore pattern if it carries no glob
+        # metacharacters; anything else stays reviewed rather than mis-excluded.
+        return None if GLOB_SPECIAL & set(path) else path
+
+    def keep(tiers: list[str]) -> tuple[list[str], list[str], int]:
+        kept = [f for t in tiers for f in by_tier[t]]
+        skipped = [f for f in measurable if f not in set(kept)]
+        return kept, skipped, sum(est[f] for f in kept)
+
+    # Deepest exclusion worth attempting: drop the low tier, then the code tier
+    # too. The last level with a non-empty keep-set wins even if its estimate
+    # still overflows — a soft budget spent on code beats one spent on data.
+    best: tuple[str, list[str], int] | None = None
+    for level, tiers in (("low", ["high", "code"]), ("code", ["high"])):
+        kept, skipped, est_keep = keep(tiers)
+        if not kept:
+            break  # no higher tier to protect: fail open, review as before
+        best = (level, skipped, est_keep)
+        if est_keep <= budget:
+            break
+    if best is None:
+        return out
+    out["tiered"], out["skipped"], out["estimate_keep"] = best
+    patterns = [p for p in (safe_pattern(f) for f in out["skipped"]) if p]
+    if len(patterns) != len(out["skipped"]):
+        # A path we cannot safely exclude stays in the review; keep coverage
+        # honest by also keeping it out of the "skipped" list.
+        excluded = set(patterns)
+        out["skipped"] = [f for f in out["skipped"] if f in excluded]
+    if not patterns:
+        out["tiered"] = "none"  # nothing could be safely excluded: fail open
+        out["skipped"] = []
+    out["excludes"] = patterns
+    return out
+
+
+def cmd_tier(args) -> int:
+    try:
+        with open(args.preview, encoding="utf-8") as fh:
+            preview = json.load(fh)
+        if not isinstance(preview, dict):
+            raise ValueError("not an object")
+    except (OSError, ValueError) as exc:
+        print(f"::warning::could not read the review preview ({exc}); no risk tiering")
+        preview = None
+    budget = _int(os.environ.get("MAX_TOKENS_BUDGET"))
+    decision = tier_decision(preview, budget,
+                             diff_char_counts(args.from_ref, args.to_ref,
+                                              [f.get("path", "") for f in (preview or {}).get("files") or []
+                                               if f.get("will_review")]) if preview else {})
+    level = decision["tiered"]
+    print(f"tiered={level} est_all={decision['estimate_all']:,} "
+          f"est_keep={decision['estimate_keep']:,} budget={budget:,} "
+          f"skipped={len(decision['skipped'])}")
+
+    skipped_file = args.skipped_out
+    with open(skipped_file, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(decision["skipped"]))
+
+    if level != "none" and decision["excludes"]:
+        rule_file = os.environ.get("QNSC_RULE_FILE", "")
+        try:
+            with open(rule_file, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["exclude"] = list(dict.fromkeys(doc.get("exclude", []) + decision["excludes"]))
+            tier_file = rule_file.replace(".json", ".tier.json")
+            with open(tier_file, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, indent=2, ensure_ascii=False)
+            if env_file := os.environ.get("GITHUB_ENV"):
+                with open(env_file, "a", encoding="utf-8") as fh:
+                    fh.write(f"QNSC_RULE_FILE={tier_file}\n")
+            print(f"rule file for this run: {tier_file} "
+                  f"(+{len(decision['excludes'])} low-risk exclude(s))")
+        except (OSError, ValueError) as exc:
+            print(f"::warning::could not write the tiered rule file ({exc}); reviewing un-tiered")
+    write_outputs({"tiered": level,
+                   "tier_skipped_count": str(len(decision["skipped"]))})
     return 0
 
 
@@ -456,6 +652,20 @@ def cmd_verdict(args) -> int:
     env = dict(os.environ)
     cov = read_coverage(args.result) if env.get("REVIEW_RAN") == "true" else None
     v = decide(env, cov)
+    # Files the tier pass deliberately left out so the budget reached the
+    # higher-risk paths. Named in the verdict because "complete" would otherwise
+    # read as "everything was read".
+    if v.body and args.tier_skipped and os.path.exists(args.tier_skipped):
+        with open(args.tier_skipped, encoding="utf-8") as fh:
+            paths = [line for line in fh.read().splitlines() if line]
+        if paths:
+            listed = "\n".join(f"- `{p}`" for p in paths[:25])
+            if len(paths) > 25:
+                listed += f"\n- …and {len(paths) - 25} more"
+            v.body += ("\n\n<details><summary>Deliberately not reviewed — low-risk tier, "
+                       "budget held for higher-risk paths</summary>\n\n"
+                       "Prose, data and config paths, ranked below the code this run "
+                       f"did read:\n\n{listed}\n\n</details>")
     body = "" if not v.body else (
         f"{MARKER}\n{v.body}" + (f"\n\n<sub>{v.stats}</sub>" if v.stats else ""))
     with open(args.body_out, "w", encoding="utf-8") as fh:
@@ -492,10 +702,18 @@ def main(argv: list[str] | None = None) -> int:
     z = sub.add_parser("size", help="is this pull request too large to re-review per push?")
     z.add_argument("--preview", required=True, help="output of `ocr review --preview --format json`")
     z.set_defaults(func=cmd_size)
+    t = sub.add_parser("tier", help="will the budget not cover everything? keep the high-risk files")
+    t.add_argument("--preview", required=True, help="output of `ocr review --preview --format json`")
+    t.add_argument("--from", dest="from_ref", required=True, help="merge-base ref to diff from")
+    t.add_argument("--to", dest="to_ref", required=True, help="head ref to diff to")
+    t.add_argument("--skipped-out", required=True, help="where to write the not-reviewed list")
+    t.set_defaults(func=cmd_tier)
     sub.add_parser("probe", help="can the model be reached?").set_defaults(func=cmd_probe)
     v = sub.add_parser("verdict", help="what did the review actually cover?")
     v.add_argument("--result", default="/tmp/ocr-result.json")
     v.add_argument("--body-out", required=True)
+    v.add_argument("--tier-skipped", default="",
+                   help="file listing paths the tier pass excluded (optional)")
     v.set_defaults(func=cmd_verdict)
     args = parser.parse_args(argv)
     return args.func(args)

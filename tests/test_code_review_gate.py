@@ -356,3 +356,136 @@ def test_rerun_on_the_same_head_leaves_the_verdict_alone(tmp_path):
                    check=True, env={"REVIEW_RAN": "true", "RANGE_REASON": "same_head_noop",
                                     "GITHUB_OUTPUT": str(out), "PATH": ""})
     assert body.read_text() == "" and "state=unchanged" in out.read_text()
+
+
+# ── tier ──────────────────────────────────────────────────────────────────────
+
+def counts_for(preview_doc, chars):
+    return {f["path"]: chars for f in preview_doc["files"] if f["will_review"]}
+
+
+def test_tier_nothing_when_the_budget_fits():
+    doc = preview(("a.ts", 10, 0, True), ("docs/data.json", 10, 0, True))
+    assert gate.tier_decision(doc, 1_500_000, counts_for(doc, 500))["tiered"] == "none"
+
+
+def test_tier_excludes_the_low_risk_tail_first():
+    doc = preview(("functions/_lib/gate.ts", 100, 0, True),
+                  ("src/app/page.tsx", 100, 0, True),
+                  ("src/theme.css", 100, 0, True))
+    # 3 files x (20_000 chars/4 x 8 + 21,300 fixed) = 183,900: over 150,000,
+    # and high+code (122,600) still fits it.
+    out = gate.tier_decision(doc, 150_000, counts_for(doc, 20_000))
+    assert out["tiered"] == "low"
+    assert out["excludes"] == ["src/theme.css"]
+    assert out["skipped"] == ["src/theme.css"]
+    assert out["estimate_all"] > out["estimate_keep"]
+
+
+def test_tier_drops_to_high_risk_only_when_code_also_overflows():
+    doc = preview(("functions/_lib/gate.ts", 100, 0, True),
+                  ("src/app/page.tsx", 100, 0, True),
+                  ("src/theme.css", 100, 0, True))
+    out = gate.tier_decision(doc, 90_000, counts_for(doc, 20_000))
+    assert out["tiered"] == "code"
+    assert sorted(out["skipped"]) == ["src/app/page.tsx", "src/theme.css"]
+    assert "functions/_lib/gate.ts" not in out["excludes"]
+
+
+def test_tier_fails_open_when_there_is_no_higher_tier_to_protect():
+    doc = preview(("src/theme.css", 100, 0, True), ("data.json", 100, 0, True))
+    assert gate.tier_decision(doc, 10_000, counts_for(doc, 20_000))["tiered"] == "none"
+
+
+def test_tier_fails_open_without_a_preview_or_estimate():
+    assert gate.tier_decision(None, 1_000, {})["tiered"] == "none"
+    doc = preview(("a.ts", 100, 0, True))
+    assert gate.tier_decision(doc, 1_000, {})["tiered"] == "none"
+
+
+def test_tier_keeps_a_path_it_cannot_safely_exclude():
+    doc = preview(("src/[weird].ts", 100, 0, True), ("src/theme.css", 100, 0, True))
+    out = gate.tier_decision(doc, 10_000, counts_for(doc, 20_000))
+    # The unsafely-named CODE file stays reviewed; the low-risk css is excludable.
+    assert out["tiered"] == "low" and out["excludes"] == ["src/theme.css"]
+    assert "src/[weird].ts" not in out["skipped"]
+    doc2 = preview(("src/[weird].css", 100, 0, True), ("src/theme.css", 100, 0, True))
+    out2 = gate.tier_decision(doc2, 10_000, counts_for(doc2, 20_000))
+    assert out2["tiered"] == "none" and out2["excludes"] == []  # nothing safely excludable
+
+
+def test_tier_cli_fails_open_without_git_and_writes_the_skipped_file(tmp_path):
+    preview_path = tmp_path / "preview.json"
+    preview_path.write_text(json.dumps(preview(("a.ts", 100, 0, True))))
+    out, skipped = tmp_path / "out", tmp_path / "skipped.txt"
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "tier", "--preview", str(preview_path),
+         "--from", "HEAD", "--to", "HEAD", "--skipped-out", str(skipped)],
+        check=True, capture_output=True, text=True,
+        env={"GITHUB_OUTPUT": str(out), "MAX_TOKENS_BUDGET": "10", "PATH": ""})
+    assert "tiered=none" in proc.stdout
+    assert skipped.read_text() == ""
+    assert "tiered=none" in out.read_text()
+
+
+def test_tier_cli_writes_the_tiered_rule_file(tmp_path, monkeypatch):
+    rule = tmp_path / "merged.json"
+    rule.write_text(json.dumps({"rules": [], "exclude": ["**/*.snap"]}))
+    monkeypatch.chdir(tmp_path)
+    # A real git repo so diff_char_counts measures something.
+    subprocess.run(["git", "init", "-q", "."], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], check=True, capture_output=True)
+    (tmp_path / "page.ts").write_text("a\n" * 10)
+    subprocess.run(["git", "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "base"], check=True, capture_output=True)
+    (tmp_path / "page.ts").write_text("b\n" * 10)
+    (tmp_path / "theme.css").write_text("body { margin: 0 }\n")
+    subprocess.run(["git", "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "head"], check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    preview_path = tmp_path / "preview.json"
+    preview_path.write_text(json.dumps(preview(("page.ts", 10, 10, True),
+                                               ("theme.css", 1, 0, True))))
+    env_file = tmp_path / "env"
+    out, skipped = tmp_path / "out", tmp_path / "skipped.txt"
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "tier", "--preview", str(preview_path),
+         "--from", head + "~1", "--to", head, "--skipped-out", str(skipped)],
+        check=True, capture_output=True, text=True,
+        env={"GITHUB_OUTPUT": str(out), "GITHUB_ENV": str(env_file),
+             "QNSC_RULE_FILE": str(rule), "MAX_TOKENS_BUDGET": "1",
+             "PATH": "/usr/bin:/bin:/usr/local/bin"})
+    assert "tiered=low" in proc.stdout
+    tier_rule = tmp_path / "merged.tier.json"
+    doc = json.loads(tier_rule.read_text())
+    assert "theme.css" in doc["exclude"] and "**/*.snap" in doc["exclude"]
+    assert env_file.read_text().strip() == f"QNSC_RULE_FILE={tier_rule}"
+    assert skipped.read_text() == "theme.css"
+
+
+def test_verdict_cli_names_the_files_the_tier_left_out(tmp_path):
+    body, out = tmp_path / "body.md", tmp_path / "out"
+    skipped = tmp_path / "skipped.txt"
+    skipped.write_text("src/theme.css\nsrc/data.json\n")
+    path = result_file(tmp_path, completed=["a.ts"])
+    subprocess.run([sys.executable, str(SCRIPT), "verdict", "--result", path,
+                    "--body-out", str(body), "--tier-skipped", str(skipped)],
+                   check=True, env={"REVIEW_RAN": "true", "INLINE": "0", "TOTAL": "1",
+                                    "GITHUB_OUTPUT": str(out), "PATH": ""})
+    text = body.read_text()
+    assert "Deliberately not reviewed" in text and "`src/theme.css`" in text
+    # "complete" must still be honest: the tier list keeps it from reading as
+    # "everything was read".
+    assert "found nothing blocking" in text
+
+
+def test_verdict_cli_without_a_tier_list_is_unchanged(tmp_path):
+    body, out = tmp_path / "body.md", tmp_path / "out"
+    path = result_file(tmp_path, completed=["a.ts"])
+    subprocess.run([sys.executable, str(SCRIPT), "verdict", "--result", path,
+                    "--body-out", str(body), "--tier-skipped", str(tmp_path / "nope")],
+                   check=True, env={"REVIEW_RAN": "true", "INLINE": "0", "TOTAL": "1",
+                                    "GITHUB_OUTPUT": str(out), "PATH": ""})
+    assert "Deliberately not reviewed" not in body.read_text()

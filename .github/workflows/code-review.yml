@@ -471,6 +471,39 @@ jobs:
           fi
           python3 "$QNSC_GATE" size --preview "$preview"
 
+      - name: Spend the budget on risk, not the alphabet
+        # A deterministic, model-free ranking pass. OCR dispatches groups in
+        # grouping order and stops at `max_tokens_budget`; on its own that made
+        # rova#821 run out of budget inside `apps/web/src/pages/guide/...` while
+        # `functions/_lib/guide-gate.ts` — where the only security finding sat —
+        # was never dispatched. When the estimate says everything will NOT fit,
+        # this excludes the low-risk tail from the rule file so the budget is
+        # spent high-risk first, and the verdict names what was left unread.
+        # Everything here fails open: no preview, no estimate or nothing
+        # excludable means the review runs exactly as before this step existed.
+        if: >-
+          steps.scope.outputs.dependency_only != 'true'
+          && steps.size.outputs.defer != 'true'
+          && steps.size.outputs.reviewable != '0'
+        id: tier
+        env:
+          MAX_TOKENS_BUDGET: ${{ inputs.max_tokens_budget }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mb="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA" 2>/dev/null || true)"
+          if [ -n "$mb" ]; then
+            python3 "$QNSC_GATE" tier \
+              --preview "$RUNNER_TEMP/ocr-preview.json" \
+              --from "$mb" --to "$HEAD_SHA" \
+              --skipped-out "$RUNNER_TEMP/tier-skipped.txt"
+          else
+            echo "::warning::no merge base for the tier estimate; reviewing un-tiered"
+            : > "$RUNNER_TEMP/tier-skipped.txt"
+          fi
+          echo "QNSC_TIER_SKIPPED=$RUNNER_TEMP/tier-skipped.txt" >> "$GITHUB_ENV"
+
       - name: Can the model be reached?
         # One request of a few tokens, read for the provider's own error code. Without it, a spent
         # quota surfaced as 630 failed attempts and "check your LLM configuration and API key".
@@ -573,7 +606,11 @@ jobs:
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/verdict.md"
-          python3 "$QNSC_GATE" verdict --result /tmp/ocr-result.json --body-out "$body"
+          tier_args=()
+          if [ -s "${QNSC_TIER_SKIPPED:-}" ]; then
+            tier_args=(--tier-skipped "$QNSC_TIER_SKIPPED")
+          fi
+          python3 "$QNSC_GATE" verdict --result /tmp/ocr-result.json --body-out "$body" "${tier_args[@]}"
           [ -s "$body" ] || { echo "same head as the last complete review; verdict unchanged"; exit 0; }
 
           marker='<!-- qnsc-review-verdict -->'

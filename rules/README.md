@@ -129,6 +129,32 @@ spent 930,000–985,000 on rova#653. What actually bounds cost is listed below.
 
 ## What a review costs, and what bounds it
 
+### Risk tiers: what runs out of budget is the low-risk tail
+
+OCR dispatches file groups in grouping order and stops when `max_tokens_budget` is projected to be
+exceeded — which file goes unread is otherwise arbitrary. On rova#821 the run stopped inside
+`apps/web/src/pages/guide/...` (prose) while `functions/_lib/guide-gate.ts`, where the run's only
+security finding sat, was never dispatched.
+
+So a deterministic, model-free pass in the workflow (`code_review_gate.py tier`) ranks every
+reviewable file into three tiers and mirrors OCR's own pre-run estimate (a floor: diff chars/4
+tokens, 8 passes over the diff plus fixed output) from the real `git diff`:
+
+1. **high** — `functions/**`, `**/auth/**`, `**/session/**`, `.github/workflows/**`,
+   `**/migrations/**`, `**/*.sql`, Dockerfiles, IaC (`*.tf`, `*.tfvars`, `*.tofu`);
+2. **code** — ordinary source files by extension;
+3. **low** — everything else that is still selected (data, config, styles).
+
+If the estimate says everything fits the budget, nothing changes. If not, the low tier is excluded
+from the rule file for that run — and if high+code still does not fit, the code tier goes too and
+only the high tier is reviewed. The verdict comment lists every deliberately unread file, so
+"complete" never reads as "everything was read". Everything fails open: no preview, no merge base,
+no measurable diff or nothing safely excludable means the review runs exactly as before.
+
+Because the tiered rule file differs from the un-tiered one, a pull request whose estimate crosses
+the budget between pushes flips its tier state and is fully re-reviewed once — the same trade the
+checkpoint already makes for any config change.
+
 The model plan's quota is the constraint, not tokens: on 2026-10-06 one pull request reviewed in full
 six times in a day exhausted it, and every review in the organisation then failed with HTTP 429. In
 the order they save quota:
@@ -142,6 +168,7 @@ the order they save quota:
 | `effort: low` | one review round per group instead of two |
 | `review_concurrency: 4` | half the burst, half the overshoot of the budget |
 | `exclude` | lockfiles, generated code, snapshots, fixtures, translation data and prose docs are never selected |
+| risk tiers | when the budget cannot cover everything, the low-risk tail is excluded so the budget reaches code first |
 | the probe | a spent quota costs one request and a clear comment, not 630 refused attempts |
 
 Excludes and includes live in the profile files as top-level `exclude` / `include` arrays and are
