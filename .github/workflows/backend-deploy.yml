@@ -66,6 +66,10 @@ on:
       # The default was `registry` until 2026-10-18. It is `gha` now: the repositories are IMMUTABLE, which rejects the `:buildcache`
       # overwrite registry mode needs, and it is the one backend that pulls from ECR to a runner on every build.
       cache_backend:   { type: string, default: "gha" }
+      # When false, a push to main still builds and pushes the images (and, with multi_arch, merges the manifest) but the develop `wake` and
+      # `deploy` jobs are skipped. For a product whose develop environment is gone while the images must still land in ECR (prod promotes the
+      # sha-<commit> image the develop run pushed). A tag (production) run is unaffected. Default true: every existing caller is unchanged.
+      deploy_develop:  { type: boolean, default: true }
 
 permissions:
   contents: read
@@ -461,7 +465,7 @@ jobs:
   # step as the thing that needed it. Failing twice for one cause reads as two problems.
   wake:
     name: Wake ${{ needs.context.outputs.environment }}
-    if: needs.context.outputs.environment == 'develop'
+    if: needs.context.outputs.environment == 'develop' && inputs.deploy_develop
     needs: context
     runs-on: ubuntu-latest
     environment: ${{ needs.context.outputs.environment }}
@@ -497,6 +501,7 @@ jobs:
     needs: [context, build, merge, promote]
     if: >-
       always() && !cancelled() &&
+      (inputs.deploy_develop || needs.context.outputs.environment != 'develop') &&
       ((needs.build.result == 'success' && (!inputs.multi_arch || needs.merge.result == 'success')) || needs.promote.result == 'success')
     environment: ${{ needs.context.outputs.environment }}
     timeout-minutes: 30
