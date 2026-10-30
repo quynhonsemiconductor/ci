@@ -25,6 +25,17 @@
     "**/__generated__/**",
     "**/*.min.js",
     "**/*.min.css",
-    "**/*.map"
+    "**/*.map",
+    "**/locales/**/*.json",
+    "**/i18n/**/*.json",
+    "**/*.md",
+    "**/*.mdx",
+    "**/__snapshots__/**",
+    "**/*.snap",
+    "**/*.gen.ts",
+    "**/*.gen.tsx",
+    "**/*.gen.js",
+    "**/fixtures/**",
+    "**/__fixtures__/**"
   ]
 }

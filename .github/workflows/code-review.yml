@@ -13,6 +13,12 @@
 # outright — a green pull request that refuses to merge, reporting only that the base branch policy
 # prohibits it. An agent that finds ten things per pull request would turn that into a merge tax, so
 # findings go to a single summary comment unless a caller asks otherwise.
+#
+# WHAT IS NEVER SELECTED: the rule profiles exclude file KINDS only — lockfiles, generated code,
+# snapshots, fixtures, translation JSON and `*.md`/`*.mdx` prose (see rules/README.md). Whether a
+# repository's own path holds prose or data is a per-repo fact, so a repository excludes its own
+# prose/data paths with the `exclude:` input below. The size gate counts lines AFTER excludes, so
+# excluding prose also keeps a documentation-heavy pull request under `large_pr_lines`.
 # =============================================================================
 
 name: Code review
@@ -96,7 +102,7 @@ on:
         description: 'Ref of this repository to read `rules/` from. Keep in step with the workflow ref.'
         required: false
         type: string
-        default: 'v1.22.0'
+        default: 'v1.28.0'
       resolve_outdated:
         description: >
           Resolve the bot's own inline threads once their lines no longer exist. `false`, `report`
@@ -185,7 +191,10 @@ on:
       exclude:
         description: >
           Extra comma-separated gitignore-style patterns this repository never wants reviewed, on top
-          of the ones the profiles declare (lockfiles, generated code, migration metadata).
+          of the org-wide kind excludes the profiles declare (lockfiles, generated code, snapshots,
+          fixtures, translation JSON, *.md/*.mdx prose). This is where a repository names its OWN
+          prose or data paths, e.g. rova's `apps/web/src/pages/guide/content/**` — a pattern that
+          names a content layout is a per-repo choice and does not belong in the profiles.
         required: false
         type: string
         default: ''
