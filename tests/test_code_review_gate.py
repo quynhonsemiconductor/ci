@@ -194,10 +194,11 @@ def test_probe_unreachable_is_unknown_so_the_review_still_runs():
 
 # ── verdict ───────────────────────────────────────────────────────────────────
 
-def result_file(tmp_path, completed=(), failed=(), tokens=1000, attempts429=0):
+def result_file(tmp_path, completed=(), failed=(), tokens=1000, attempts429=0, cached=0):
     doc = {
         "status": "partial" if failed else "success",
-        "summary": {"total_tokens": tokens, "elapsed": "1m2s"},
+        "summary": {"total_tokens": tokens, "elapsed": "1m2s",
+                    **({"cache_read_tokens": cached} if cached else {})},
         "manifest": {"coverage": {
             "selected": [{"path": p} for p in list(completed) + [p for p, _ in failed]],
             "completed": [{"path": p} for p in completed],
@@ -356,3 +357,12 @@ def test_rerun_on_the_same_head_leaves_the_verdict_alone(tmp_path):
                    check=True, env={"REVIEW_RAN": "true", "RANGE_REASON": "same_head_noop",
                                     "GITHUB_OUTPUT": str(out), "PATH": ""})
     assert body.read_text() == "" and "state=unchanged" in out.read_text()
+
+
+def test_verdict_stats_report_the_cached_share_when_the_provider_does(tmp_path):
+    path = result_file(tmp_path, completed=["a.ts"], tokens=1000, cached=400)
+    v = decide(path=path, inline="0", total="1")
+    assert "40% cache-read" in v.stats
+    path2 = result_file(tmp_path, completed=["a.ts"], tokens=1000)
+    assert "cache-read" not in decide(path=path2, inline="0", total="1").stats
+

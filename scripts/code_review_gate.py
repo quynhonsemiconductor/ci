@@ -301,12 +301,23 @@ class Coverage:
     reviewed: int = 0
     failed: dict[str, list[str]] = field(default_factory=dict)  # classification -> paths
     tokens: int = 0
+    cached: int = 0
     elapsed: str = ""
     rate_limited: int = 0
 
     @property
     def failed_count(self) -> int:
         return sum(len(v) for v in self.failed.values())
+
+    @property
+    def cached_share(self) -> str:
+        """Share of prompt tokens the provider served from cache, when it
+        reports one (OpenAI-compatible `usage.prompt_tokens_details.cached_tokens`,
+        which OCR forwards as summary.cache_read_tokens). Empty when it does
+        not: an empty field must not read as '0% cached'."""
+        if self.tokens <= 0 or self.cached <= 0:
+            return ""
+        return f"{min(100, round(100 * self.cached / self.tokens))}% cache-read "
 
 
 def read_coverage(path: str) -> Coverage | None:
@@ -329,6 +340,7 @@ def read_coverage(path: str) -> Coverage | None:
         reviewed=len(cov.get("completed") or []) + len(cov.get("reused") or []),
         failed=failed,
         tokens=int(summary.get("total_tokens") or 0),
+        cached=int(summary.get("cache_read_tokens") or 0),
         elapsed=str(summary.get("elapsed") or ""),
         rate_limited=sum(1 for a in attempts if a.get("status_code") == 429),
     )
@@ -404,8 +416,8 @@ def decide(env: dict[str, str], cov: Coverage | None) -> Verdict:
                        "Nothing here should be read as approval — the absence of findings is the "
                        "absence of a review, not a clean result.")
 
-    stats = (f"{cov.reviewed}/{cov.selected} file(s) reviewed · {cov.tokens:,} tokens · "
-             f"{cov.elapsed or '?'}")
+    stats = (f"{cov.reviewed}/{cov.selected} file(s) reviewed · {cov.cached_share}"
+             f"{cov.tokens:,} tokens · {cov.elapsed or '?'}")
     if cov.selected and cov.reviewed == 0:
         classes = set(cov.failed)
         if classes <= {"provider"}:
