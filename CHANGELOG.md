@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.0](https://github.com/quynhonsemiconductor/ci/compare/v1.28.0...v1.29.0) (2026-10-30)
+
+
+### Features
+
+* **backend-deploy:** add deploy_develop input to skip the develop wake and deploy ([#270](https://github.com/quynhonsemiconductor/ci/issues/270)) ([6d11cdb](https://github.com/quynhonsemiconductor/ci/commit/6d11cdb62cfdc6c6494d75a3c8567290ea15cbd2))
+
 ## [1.28.0](https://github.com/quynhonsemiconductor/ci/compare/v1.27.0...v1.28.0) (2026-10-30)
 
 
