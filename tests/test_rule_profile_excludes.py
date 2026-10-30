@@ -1,13 +1,15 @@
 """Org-wide exclude patterns must name file KINDS, never a repository's code.
 
-rova#821 (2026-10-30) spent its whole token budget on user-guide prose: 63% of
-the lines, 11 of 21 findings documentation nits, and the code files partly
-unread. The org-wide excludes in `rules/base.json` exist to make that
-impossible — which only holds if every pattern matches a KIND of file (a
-lockfile, a snapshot, generated code, translation data, prose) and never a
-path a repository's source could live on. A pattern like `**/content/**`
-names a layout, not a kind, and stays a per-repo `exclude:` input; this test
-is the tripwire that keeps such patterns out of the profiles.
+The org-wide excludes in `rules/base.json` cover file kinds that are never worth
+model tokens (lockfiles, snapshots, generated code, translation JSON, Markdown).
+Most are belt-and-braces — OCR's extension allowlist already leaves Markdown and
+the like unselected — and the one that changes real behaviour today is the
+translation JSON. That only holds if every pattern matches a KIND of file and
+never a path a repository's source could live on: the prose that ate rova#821's
+budget was `.tsx`/`.ts` chapters, code files no kind pattern can name, handled
+by the rova caller's `exclude:` input instead. A pattern like `**/content/**`
+names a layout, not a kind, and stays per-repo; this test is the tripwire that
+keeps such patterns out of the profiles.
 """
 
 from __future__ import annotations

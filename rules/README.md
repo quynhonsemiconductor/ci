@@ -160,7 +160,11 @@ lockfiles, minified bundles and source maps (machine-written), generated code (`
 Prose is excluded because of what a model finds in it: on rova#821 (2026-10-30) 63% of the changed
 lines were user-guide prose in mirrored EN/VI copies, 11 of 21 findings were documentation nits
 (skipped step numbers and the like), and the run spent its whole 1.5M-token budget on 20 of 30
-files — leaving real code, where the run's only security finding sat, partly unread.
+files — leaving real code, where the run's only security finding sat, partly unread. Honest about
+what THIS list buys, though: `*.md`/`*.mdx` are belt-and-braces, already outside OCR's extension
+allowlist — the exclusion here that changes something today is the translation JSON (rova's EN/VI
+locale files). #821's prose itself was `.tsx`/`.ts` chapters — code files no org-wide kind pattern
+can tell from real code — and that is fixed where the fact lives, by the rova caller's `exclude:`.
 
 What deliberately stays OUT of the org-wide list: any pattern naming a repository's own content
 layout (`**/content/**`, `**/pages/**`, …). Whether a path holds prose or data is a per-repo fact,
