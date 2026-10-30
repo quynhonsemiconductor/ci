@@ -141,13 +141,37 @@ the order they save quota:
 | drafts skipped | review when marked ready, not while the branch is still moving |
 | `effort: low` | one review round per group instead of two |
 | `review_concurrency: 4` | half the burst, half the overshoot of the budget |
-| `exclude` | lockfiles, generated code and migration metadata are never selected |
+| `exclude` | lockfiles, generated code, snapshots, fixtures, translation data and prose docs are never selected |
 | the probe | a spent quota costs one request and a clear comment, not 630 refused attempts |
 
 Excludes and includes live in the profile files as top-level `exclude` / `include` arrays and are
 UNIONED across profiles (excludes also take the caller's `exclude:` input). OCR reads include/exclude
 from one layer only — the highest that sets any — so they replace a repository's own
 `.opencodereview/rule.json` ones; put those in `exclude:`.
+
+### What is excluded org-wide, and why
+
+`base.json` excludes only file KINDS that are never worth model tokens in any repository:
+lockfiles, minified bundles and source maps (machine-written), generated code (`**/generated/**`,
+`**/*.gen.{ts,tsx,js}`), snapshots (`**/*.snap`, `**/__snapshots__/**`), test fixtures
+(`**/fixtures/**`, `**/__fixtures__/**`), translation data (`**/locales/**/*.json`,
+`**/i18n/**/*.json`) and prose documentation (`**/*.md`, `**/*.mdx`).
+
+Prose is excluded because of what a model finds in it: on rova#821 (2026-10-30) 63% of the changed
+lines were user-guide prose in mirrored EN/VI copies, 11 of 21 findings were documentation nits
+(skipped step numbers and the like), and the run spent its whole 1.5M-token budget on 20 of 30
+files — leaving real code, where the run's only security finding sat, partly unread. Honest about
+what THIS list buys, though: `*.md`/`*.mdx` are belt-and-braces, already outside OCR's extension
+allowlist — the exclusion here that changes something today is the translation JSON (rova's EN/VI
+locale files). #821's prose itself was `.tsx`/`.ts` chapters — code files no org-wide kind pattern
+can tell from real code — and that is fixed where the fact lives, by the rova caller's `exclude:`.
+
+What deliberately stays OUT of the org-wide list: any pattern naming a repository's own content
+layout (`**/content/**`, `**/pages/**`, …). Whether a path holds prose or data is a per-repo fact,
+so a repository excludes its own prose/data paths with the workflow's `exclude:` input (rova
+excludes `apps/web/src/pages/guide/content/**` and the guide ToC models this way). The size gate
+(`large_pr_lines`) counts lines AFTER excludes, so excluding prose also stops a documentation-heavy
+pull request from being classified "large".
 
 Two settings are part of the checkpoint fingerprint and invalidate every open pull request's
 checkpoint when they change: `max_tokens_budget`, `effort` (as are the model, the rules and the OCR
