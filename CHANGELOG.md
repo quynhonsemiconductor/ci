@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.28.0](https://github.com/quynhonsemiconductor/ci/compare/v1.27.0...v1.28.0) (2026-10-30)
+
+
+### Features
+
+* **code-review:** org-wide kind excludes so prose never eats the budget ([#266](https://github.com/quynhonsemiconductor/ci/issues/266)) ([5dce169](https://github.com/quynhonsemiconductor/ci/commit/5dce16966c25145ca1efbbe4f52458c6c11e8211))
+* **code-review:** show the provider's cached-token share in the verdict stats ([#268](https://github.com/quynhonsemiconductor/ci/issues/268)) ([51d8ed7](https://github.com/quynhonsemiconductor/ci/commit/51d8ed70d81d34072f59c23cf47a5bc8a8f1e4e9))
+
 ## [1.27.0](https://github.com/quynhonsemiconductor/ci/compare/v1.26.0...v1.27.0) (2026-10-29)
 
 
