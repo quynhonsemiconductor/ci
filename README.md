@@ -730,6 +730,27 @@ A product that already builds its image sets `scan_container: ${{ github.event_n
 
 The `combine` input on both workflows is deprecated and ignored (it is still accepted so callers that pass it do not fail at startup).
 
+## Switching the review model
+
+`code-review.yml` reviews with GLM (Z.ai coding endpoint) or Claude (Anthropic API). One organisation variable flips every repository, with no edit to any caller.
+
+1. Set the organisation variable `CODE_REVIEW_PROVIDER` to `glm` (default when unset) or `claude`. Optionally set `CODE_REVIEW_CLAUDE_MODEL` (default `claude-sonnet-5-5`). An unknown provider value fails the run rather than falling back. The caller's `vars` are what the reusable workflow sees, so a repository-level variable of the same name overrides the organisation one for that repository.
+2. Each caller picks the matching key with ONE expression, so a repository never holds both keys in a long-lived input:
+
+   ```yaml
+   secrets:
+     llm_token: ${{ vars.CODE_REVIEW_PROVIDER == 'claude' && secrets.ANTHROPIC_CODE_REVIEW_API_KEY || secrets.Z_AI_CODING_API_KEY }}
+   ```
+
+   The organisation secret `ANTHROPIC_CODE_REVIEW_API_KEY` must be visible to the same repositories as `Z_AI_CODING_API_KEY`. If it is missing while the provider is `claude`, the expression falls back to the Z.ai key and the probe reports the rejected key (a failed check that names the cause), never a silent GLM review under a Claude label.
+3. The verdict comment on each pull request ends with `reviewer: <provider> / <model>`. Explicit `provider`, `model`, `llm_url` and `use_anthropic_protocol` inputs still override the variable.
+
+Cost: Claude is billed per token on the Anthropic account; GLM is a flat plan. The guard is the monthly spend limit on the CI key in the Anthropic Console, not anything here. A spent limit shows as a probe `config` error.
+
+`llm_reasoning_effort` is sent only on the OpenAI protocol (GLM); under Claude it is dropped, because the review action fails fast on it with the Anthropic protocol.
+
+Re-review after a switch: the review action's checkpoint fingerprint hashes the endpoint, model, protocol, extra body and reasoning effort, so changing provider or model reviews the full range on the next push. To force one anyway, convert the pull request to draft and mark it ready, or re-open it.
+
 ## Versioning
 
 Pin to a release tag for production stability:

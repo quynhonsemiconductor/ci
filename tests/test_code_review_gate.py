@@ -113,6 +113,17 @@ def test_scope_cli_unreadable_list_reviews(tmp_path):
     (529, {"error": {"type": "overloaded_error"}}, "retry"),
     (429, {"error": {"code": "insufficient_quota"}}, "unavailable"),
     (400, {"error": {"code": "1214", "message": "max_tokens invalid"}}, "unknown"),
+    # Anthropic error bodies: {"type": "error", "error": {"type": ..., "message": ...}}
+    (401, {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}, "config"),
+    (403, {"type": "error", "error": {"type": "permission_error", "message": "no access to model"}}, "config"),
+    (400, {"type": "error", "error": {"type": "authentication_error", "message": "x"}}, "config"),
+    (402, {"type": "error", "error": {"type": "billing_error", "message": "billing issue"}}, "config"),
+    (400, {"type": "error", "error": {"type": "invalid_request_error",
+                                      "message": "Your credit balance is too low to access the Anthropic API."}}, "config"),
+    (429, {"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}}, "retry"),
+    (529, {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}, "retry"),
+    (500, {"type": "error", "error": {"type": "api_error", "message": "internal"}}, "retry"),
+    (400, {"type": "error", "error": {"type": "invalid_request_error", "message": "bad field"}}, "unknown"),
 ])
 def test_classify_http(status, body, expected):
     assert gate.classify_http(status, json.dumps(body).encode())[0] == expected
@@ -185,6 +196,32 @@ def test_probe_anthropic_shape(provider):
     assert result.status == "config"
     assert handler.seen[0]["path"] == "/v1/messages"
     assert handler.seen[0]["key"] == "tok" and handler.seen[0]["auth"] is None
+
+
+def test_probe_anthropic_invalid_key_is_config_without_retrying(provider):
+    server, handler = provider
+    handler.responses = [(401, {"type": "error", "error": {"type": "authentication_error",
+                                                           "message": "invalid x-api-key"}})]
+    result = gate.probe(_url(server, "/v1/messages"), "wrong", "claude-sonnet-5-5", True, "{}",
+                        delays=[0, 0])
+    assert (result.status, result.code) == ("config", "authentication_error")
+    assert len(handler.seen) == 1
+    assert handler.seen[0]["body"]["model"] == "claude-sonnet-5-5"
+    assert "stream" not in handler.seen[0]["body"]
+
+
+def test_probe_anthropic_overloaded_is_retried_then_unavailable(provider):
+    server, handler = provider
+    handler.responses = [(529, {"type": "error", "error": {"type": "overloaded_error"}})] * 3
+    result = gate.probe(_url(server, "/v1/messages"), "tok", "m", True, "{}", delays=[0, 0])
+    assert result.status == "unavailable" and len(handler.seen) == 3
+
+
+def test_probe_anthropic_rate_limit_then_ok(provider):
+    server, handler = provider
+    handler.responses = [(429, {"type": "error", "error": {"type": "rate_limit_error"}}),
+                         (200, {"type": "message", "content": []})]
+    assert gate.probe(_url(server, "/v1/messages"), "tok", "m", True, "{}", delays=[0]).status == "ok"
 
 
 def test_probe_unreachable_is_unknown_so_the_review_still_runs():
@@ -384,3 +421,68 @@ def test_verdict_stats_survive_a_result_file_full_of_rubbish(tmp_path):
     assert (cov.tokens, cov.input_tokens, cov.cached) == (0, 0, 0)
     assert cov.cached_share == ""
 
+
+
+# ── resolve (glm | claude) ────────────────────────────────────────────────────
+
+def resolve(**env):
+    return gate.resolve_provider({"REASONING_EFFORT_INPUT": "medium", **env})
+
+
+def test_default_is_glm_with_todays_values():
+    out = resolve()
+    assert (out["provider"], out["model"], out["llm_url"], out["use_anthropic"]) == (
+        "glm", "glm-5.3", "https://api.z.ai/api/coding/paas/v4", "false")
+    assert out["reasoning_effort"] == "medium"
+    assert out["label"] == "glm / glm-5.3"
+
+
+def test_claude_values_and_no_reasoning_effort():
+    out = resolve(PROVIDER_VAR="claude")
+    assert (out["provider"], out["model"], out["llm_url"], out["use_anthropic"]) == (
+        "claude", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages", "true")
+    assert out["reasoning_effort"] == ""  # the action fails fast on it under Anthropic
+
+
+def test_input_beats_variable_beats_default():
+    assert resolve(PROVIDER_INPUT="glm", PROVIDER_VAR="claude")["provider"] == "glm"
+    assert resolve(PROVIDER_INPUT="claude", PROVIDER_VAR="glm")["provider"] == "claude"
+    assert resolve(PROVIDER_VAR=" Claude ")["provider"] == "claude"
+
+
+def test_claude_model_variable_applies_to_claude_only():
+    assert resolve(PROVIDER_VAR="claude", CLAUDE_MODEL_VAR="claude-opus-4-7")["model"] == "claude-opus-4-7"
+    assert resolve(CLAUDE_MODEL_VAR="claude-opus-4-7")["model"] == "glm-5.3"
+
+
+def test_explicit_inputs_override_everything():
+    out = resolve(PROVIDER_VAR="claude", MODEL_INPUT="glm-5.2",
+                  LLM_URL_INPUT="https://api.z.ai/api/paas/v4", USE_ANTHROPIC_INPUT="false")
+    assert (out["model"], out["llm_url"], out["use_anthropic"]) == (
+        "glm-5.2", "https://api.z.ai/api/paas/v4", "false")
+    assert out["reasoning_effort"] == "medium"  # protocol follows the explicit input
+
+
+def test_unknown_provider_is_refused():
+    with pytest.raises(ValueError):
+        resolve(PROVIDER_VAR="gpt")
+
+
+def test_resolve_cli_outputs_and_refusal(tmp_path):
+    out = tmp_path / "out"
+    env = {"GITHUB_OUTPUT": str(out), "PATH": "", "PROVIDER_VAR": "claude"}
+    subprocess.run([sys.executable, str(SCRIPT), "resolve"], check=True, env=env)
+    text = out.read_text()
+    assert "provider=claude" in text and "use_anthropic=true" in text
+    assert "label=claude / claude-sonnet-5-5" in text and "reasoning_effort=\n" in text
+    bad = subprocess.run([sys.executable, str(SCRIPT), "resolve"], env={**env, "PROVIDER_VAR": "x"})
+    assert bad.returncode == 1
+
+
+def test_verdict_names_the_reviewer(tmp_path):
+    body, out = tmp_path / "body.md", tmp_path / "out"
+    path = result_file(tmp_path, completed=["a.ts"])
+    subprocess.run([sys.executable, str(SCRIPT), "verdict", "--result", path, "--body-out", str(body)],
+                   check=True, env={"REVIEW_RAN": "true", "REVIEWER": "claude / claude-sonnet-5-5",
+                                    "GITHUB_OUTPUT": str(out), "PATH": ""})
+    assert "reviewer: claude / claude-sonnet-5-5" in body.read_text()

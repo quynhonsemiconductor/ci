@@ -8,6 +8,8 @@ Used by `.github/workflows/code-review.yml`. Three subcommands, one per question
             509,506 tokens against a 400,000 budget (rova#652).
   size      Is it too large to re-review on every push? Measured with OCR's own
             `--preview` (no model call), so excludes count exactly as OCR applies them.
+  resolve   Which provider, model and endpoint does this run use? `glm` or `claude`,
+            from the `provider` input, else the CODE_REVIEW_PROVIDER variable.
   probe     Can the model be reached right now? One tiny request, read for the
             provider's own error code, BEFORE the review fans out.
   verdict   What actually happened? Turns the OCR result file into one sentence
@@ -183,6 +185,54 @@ def cmd_size(args) -> int:
     return 0
 
 
+# ── resolve ───────────────────────────────────────────────────────────────────
+
+GLM = {"model": "glm-5.3", "llm_url": "https://api.z.ai/api/coding/paas/v4",
+       "use_anthropic": "false"}
+CLAUDE = {"model": "claude-sonnet-5-5", "llm_url": "https://api.anthropic.com/v1/messages",
+          "use_anthropic": "true"}
+PROVIDERS = {"glm": GLM, "claude": CLAUDE}
+
+
+def resolve_provider(env: dict[str, str]) -> dict[str, str]:
+    """Effective provider, model, endpoint and protocol for this run.
+
+    Provider: the `provider` input, else the CODE_REVIEW_PROVIDER variable, else glm. Explicit
+    model / llm_url / use_anthropic_protocol inputs override the provider's own values, so a
+    caller that pins them behaves exactly as before. Raises ValueError for an unknown provider:
+    a typo must stop the run, not quietly review with the other vendor.
+    """
+    provider = (env.get("PROVIDER_INPUT", "").strip() or env.get("PROVIDER_VAR", "").strip()
+                or "glm").lower()
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown code review provider {provider!r}: use glm or claude")
+    base = dict(PROVIDERS[provider])
+    if provider == "claude" and env.get("CLAUDE_MODEL_VAR", "").strip():
+        base["model"] = env["CLAUDE_MODEL_VAR"].strip()
+    model = env.get("MODEL_INPUT", "").strip() or base["model"]
+    url = env.get("LLM_URL_INPUT", "").strip() or base["llm_url"]
+    proto = env.get("USE_ANTHROPIC_INPUT", "").strip().lower() or base["use_anthropic"]
+    anthropic = proto in ("true", "1", "yes")
+    # The action fails fast on reasoning_effort over the Anthropic protocol, and the Anthropic
+    # API rejects the field: send nothing there.
+    effort = "" if anthropic else env.get("REASONING_EFFORT_INPUT", "").strip()
+    return {"provider": provider, "model": model, "llm_url": url,
+            "use_anthropic": "true" if anthropic else "false", "reasoning_effort": effort,
+            "label": f"{provider} / {model}"}
+
+
+def cmd_resolve(_args) -> int:
+    try:
+        out = resolve_provider(dict(os.environ))
+    except ValueError as exc:
+        print(f"::error::{exc}")
+        return 1
+    print(f"provider={out['provider']} model={out['model']} url={out['llm_url']} "
+          f"anthropic={out['use_anthropic']} reasoning_effort={out['reasoning_effort'] or '-'}")
+    write_outputs(out)
+    return 0
+
+
 # ── probe ─────────────────────────────────────────────────────────────────────
 
 # Z.AI business codes (https://docs.z.ai/api-reference/api-code), as strings.
@@ -190,6 +240,14 @@ ZAI_QUOTA = {"1308", "1310", "1316", "1317", "1318", "1319", "1320", "1321"}
 ZAI_TRANSIENT = {"1302", "1305"}
 ZAI_ACCOUNT = {"1000", "1001", "1002", "1003", "1004", "1005", "1113", "1211",
                "1220", "1309", "1311", "1313", "1314", "1315"}
+
+
+# Anthropic error types (https://docs.anthropic.com/en/api/errors). The body is
+# {"type":"error","error":{"type":"authentication_error","message":"..."}}.
+ANTHROPIC_CONFIG = {"authentication_error", "permission_error", "billing_error"}
+ANTHROPIC_TRANSIENT = {"rate_limit_error", "overloaded_error", "api_error", "timeout_error"}
+# An empty balance is a 400 invalid_request_error, not a 402: only the message says so.
+ANTHROPIC_NO_CREDIT = "credit balance is too low"
 
 
 @dataclass
@@ -221,9 +279,10 @@ def classify_http(status: int, body: bytes) -> tuple[str, str, str]:
     shown = code or str(status)
     if code in ZAI_QUOTA or code == "insufficient_quota":
         return "unavailable", shown, message
-    if code in ZAI_ACCOUNT or status in (401, 403):
+    if (code in ZAI_ACCOUNT or code in ANTHROPIC_CONFIG or status in (401, 402, 403)
+            or ANTHROPIC_NO_CREDIT in message.lower()):
         return "config", shown, message
-    if code in ZAI_TRANSIENT or status in (429, 500, 502, 503, 504, 529):
+    if code in ZAI_TRANSIENT or code in ANTHROPIC_TRANSIENT or status in (429, 500, 502, 503, 504, 529):
         return "retry", shown, message
     # A 400 on this tiny request says nothing reliable about the real one.
     return "unknown", shown, message
@@ -482,8 +541,9 @@ def cmd_verdict(args) -> int:
     env = dict(os.environ)
     cov = read_coverage(args.result) if env.get("REVIEW_RAN") == "true" else None
     v = decide(env, cov)
-    body = "" if not v.body else (
-        f"{MARKER}\n{v.body}" + (f"\n\n<sub>{v.stats}</sub>" if v.stats else ""))
+    reviewer = one_line(env.get("REVIEWER", ""), 120)
+    sub = " · ".join(x for x in (f"reviewer: {reviewer}" if reviewer else "", v.stats) if x)
+    body = "" if not v.body else (f"{MARKER}\n{v.body}" + (f"\n\n<sub>{sub}</sub>" if sub else ""))
     with open(args.body_out, "w", encoding="utf-8") as fh:
         fh.write(body)
     level = {"config": "error", "error": "error",
@@ -518,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
     z = sub.add_parser("size", help="is this pull request too large to re-review per push?")
     z.add_argument("--preview", required=True, help="output of `ocr review --preview --format json`")
     z.set_defaults(func=cmd_size)
+    sub.add_parser("resolve", help="which provider and model does this run use?").set_defaults(
+        func=cmd_resolve)
     sub.add_parser("probe", help="can the model be reached?").set_defaults(func=cmd_probe)
     v = sub.add_parser("verdict", help="what did the review actually cover?")
     v.add_argument("--result", default="/tmp/ocr-result.json")
