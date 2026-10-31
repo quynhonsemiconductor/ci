@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.30.0](https://github.com/quynhonsemiconductor/ci/compare/v1.29.0...v1.30.0) (2026-10-31)
+
+
+### Features
+
+* **code-review:** switch glm and claude with one org variable ([#272](https://github.com/quynhonsemiconductor/ci/issues/272)) ([03afc49](https://github.com/quynhonsemiconductor/ci/commit/03afc49f50623cb4d378461378b551c6c9919526))
+
 ## [1.29.0](https://github.com/quynhonsemiconductor/ci/compare/v1.28.0...v1.29.0) (2026-10-30)
 
 
