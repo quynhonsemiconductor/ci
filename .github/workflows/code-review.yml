@@ -37,16 +37,29 @@ on:
         required: false
         type: string
         default: ''
-      model:
-        description: 'Model to review with.'
+      provider:
+        description: >
+          Which model vendor reviews: `glm` (Z.ai coding endpoint) or `claude` (Anthropic API).
+          Empty (default) reads the CODE_REVIEW_PROVIDER variable of the CALLING repository or
+          organisation, then falls back to `glm`. That variable is how the vendor is switched for every
+          repository at once. An unknown value stops the run. `model`, `llm_url` and
+          `use_anthropic_protocol` below override the provider's own values when set.
         required: false
         type: string
-        default: 'glm-5.3'
+        default: ''
+      model:
+        description: >
+          Model to review with. Empty (default) means the provider's model: `glm-5.3`, or for `claude`
+          the CODE_REVIEW_CLAUDE_MODEL variable, else `claude-sonnet-5-5`.
+        required: false
+        type: string
+        default: ''
       llm_reasoning_effort:
         description: >
           Model reasoning depth (minimal|low|medium|high|max), forwarded to the review action's
           `llm_reasoning_effort` and sent as `reasoning_effort` in the request body — OpenAI
-          protocol only, which is what GLM speaks here. NOT the review-rounds `effort` below.
+          protocol only, which is what GLM speaks here. Ignored (sent as nothing) when the resolved
+          protocol is Anthropic, where the action rejects it. NOT the review-rounds `effort` below.
           Default `medium` per owner decision 2026-10-28.
         required: false
         type: string
@@ -57,18 +70,21 @@ on:
           its base URL. For GLM on Z.ai that is `https://api.z.ai/api/paas/v4` (billed per token), or
           `https://api.z.ai/api/coding/paas/v4` on a GLM Coding Plan, which is what the organisation
           pays for. The mainland platform (`open.bigmodel.cn`) is a separate account and key.
+          Empty (default) means the provider's endpoint: the Z.ai coding URL for `glm`,
+          `https://api.anthropic.com/v1/messages` for `claude`.
         required: false
         type: string
-        default: 'https://api.z.ai/api/coding/paas/v4'
+        default: ''
       use_anthropic_protocol:
         description: >
           Whether the endpoint speaks Anthropic's protocol. Set to 'false' for an OpenAI-compatible
           provider, which includes GLM: the tool ships `z-ai` and `z-ai-coding` as OpenAI chat
           completions, so leaving this true against a GLM URL fails on the shape of the request rather
-          than on anything that names the cause.
+          than on anything that names the cause. Empty (default) means the provider's protocol:
+          `false` for `glm`, `true` for `claude`.
         required: false
         type: string
-        default: 'false'
+        default: ''
       llm_extra_body:
         description: >
           Extra JSON merged into the request body. The default disables Anthropic's thinking block and
@@ -200,7 +216,9 @@ on:
         default: ''
     secrets:
       llm_token:
-        description: 'API key for the model. Set once as an organisation secret.'
+        description: >
+          API key for the model. Set once as an organisation secret. The caller picks the key that
+          matches the provider, one expression per repository (see README, "Switching the review model").
         required: true
       app_private_key:
         description: 'Private key for `app_id`. Required when `app_id` is set.'
@@ -392,6 +410,23 @@ jobs:
           echo "QNSC_ROUTE_BELOW=$below" >> "$GITHUB_ENV"
           echo "severity routing: inline_from_severity='${INLINE_FROM:-none}' -> route_severity_below='$below'"
 
+      - name: Resolve the model provider
+        # One place decides vendor, model, endpoint and protocol, so the probe, the review and the
+        # verdict cannot disagree. `vars` is read from the CALLER's repository/organisation, as for
+        # CODE_REVIEW_APP_ID below. The fingerprint the review action stores in its checkpoint already
+        # hashes llm_url, llm_model, llm_use_anthropic, extra body and reasoning effort, so a switch of
+        # provider reviews the full range again instead of reusing the other vendor's checkpoint.
+        id: llm
+        env:
+          PROVIDER_INPUT: ${{ inputs.provider }}
+          PROVIDER_VAR: ${{ vars.CODE_REVIEW_PROVIDER }}
+          CLAUDE_MODEL_VAR: ${{ vars.CODE_REVIEW_CLAUDE_MODEL }}
+          MODEL_INPUT: ${{ inputs.model }}
+          LLM_URL_INPUT: ${{ inputs.llm_url }}
+          USE_ANTHROPIC_INPUT: ${{ inputs.use_anthropic_protocol }}
+          REASONING_EFFORT_INPUT: ${{ inputs.llm_reasoning_effort }}
+        run: python3 "$QNSC_GATE" resolve
+
       - name: Mint a token for our own App
         # Only when the organisation variable is set. Read from the CALLER's context — a reusable
         # workflow sees the caller's `vars`, which is how infra-plan.yml already resolves
@@ -481,10 +516,10 @@ jobs:
           && steps.size.outputs.reviewable != '0'
         id: probe
         env:
-          LLM_URL: ${{ inputs.llm_url }}
+          LLM_URL: ${{ steps.llm.outputs.llm_url }}
           LLM_TOKEN: ${{ secrets.llm_token }}
-          LLM_MODEL: ${{ inputs.model }}
-          USE_ANTHROPIC: ${{ inputs.use_anthropic_protocol }}
+          LLM_MODEL: ${{ steps.llm.outputs.model }}
+          USE_ANTHROPIC: ${{ steps.llm.outputs.use_anthropic }}
           EXTRA_BODY: ${{ inputs.llm_extra_body }}
         run: python3 "$QNSC_GATE" probe
 
@@ -510,11 +545,11 @@ jobs:
           # default Actions token. The checkpoint is read back only from a summary THIS token wrote.
           github_token: ${{ steps.app-token.outputs.token || github.token }}
           ocr_version: ${{ inputs.ocr_version }}
-          llm_url: ${{ inputs.llm_url }}
+          llm_url: ${{ steps.llm.outputs.llm_url }}
           llm_auth_token: ${{ secrets.llm_token }}
-          llm_model: ${{ inputs.model }}
-          llm_reasoning_effort: ${{ inputs.llm_reasoning_effort }}
-          llm_use_anthropic: ${{ inputs.use_anthropic_protocol }}
+          llm_model: ${{ steps.llm.outputs.model }}
+          llm_reasoning_effort: ${{ steps.llm.outputs.reasoning_effort }}
+          llm_use_anthropic: ${{ steps.llm.outputs.use_anthropic }}
           llm_extra_body: ${{ inputs.llm_extra_body }}
           language: ${{ inputs.language }}
           rule: ${{ env.QNSC_RULE_FILE }}
@@ -556,6 +591,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR: ${{ github.event.pull_request.number }}
           DEPENDENCY_ONLY: ${{ steps.scope.outputs.dependency_only }}
+          REVIEWER: ${{ steps.llm.outputs.label }}
           DEFER: ${{ steps.size.outputs.defer }}
           REVIEWABLE: ${{ steps.size.outputs.reviewable }}
           REVIEW_LINES: ${{ steps.size.outputs.review_lines }}
