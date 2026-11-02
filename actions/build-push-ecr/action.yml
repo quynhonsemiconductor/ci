@@ -171,7 +171,7 @@ outputs:
     description: Full URI of the pushed image (`registry/name:tag`)
     value: ${{ steps.expose.outputs.image-uri }}
   image-digest:
-    description: Image digest (`sha256:...`) — use with attest-image for tamper-proof SLSA provenance
+    description: Image digest (`sha256:...`)
     value: ${{ steps.expose.outputs.digest }}
 
 runs:

@@ -25,7 +25,7 @@ logs/
 # Node (if any tooling is added)
 node_modules/
 
-# Python. This repo now ships Python (scripts/, actions/agent-forge-test-guard/) and
+# Python. This repo now ships Python (scripts/, tests/) and
 # runs it under pytest, so it generates bytecode. Unanchored on purpose: __pycache__
 # is always a build artefact wherever it appears, unlike a directory name that could
 # also be source — an unanchored `policy/` in agent-forge silently excluded a whole

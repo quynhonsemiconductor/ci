@@ -19,7 +19,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`build-push-ecr`](actions/build-push-ecr/action.yml) | Buildx + ECR build + push (OIDC-based, no stored keys) |
-| [`attest-image`](actions/attest-image/action.yml) | GitHub-native SLSA provenance attestation (SOC 2 / supply chain) |
 
 ### ECS / Deploy
 | Action | Description |
@@ -48,7 +47,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | [`audit-workflows`](actions/audit-workflows/action.yml) | zizmor over the repo (report-only unless `blocking`) |
 | [`pr-labels`](actions/pr-labels/action.yml) | `area/*` and `size/*` labels as steps, so the PR-title job can label in the same runner |
 | [`changed-paths`](actions/changed-paths/action.yml) | Decide from a PR's changed files whether a workflow's heavy jobs need to run (`run=true|false`). Fails open: only "every file is on the ignore list" skips. Gate on its output, never on bare `allow-skipped` |
-| [`agent-forge-test-guard`](actions/agent-forge-test-guard/action.yml) | Fail a PR that deletes assertions, drops test files or adds dependencies without declaring it |
 | [`pr-title-conventional-commits`](actions/pr-title-conventional-commits/action.yml) | Validate a PR title against Conventional Commits — Release Please derives the CHANGELOG from it |
 | [`pr-size`](actions/pr-size/action.yml) | Label a PR `size/XS…XXL` by lines of CODE (tests, docs, lockfiles and generated files reported, not counted) and comment above 1,000 — advisory unless `fail-above` is set |
 | [`assert-jobs-succeeded`](actions/assert-jobs-succeeded/action.yml) | Fail a CI gate job unless every job it depends on reported `success` — closes the skipped/cancelled-counts-as-passing hole |
@@ -133,47 +131,7 @@ Give two workflows in the same repo **distinct** gate names. rova's `backend-ci.
 `web-ci.yml` both publish a job called `Lint & typecheck`, and a required check matched by
 name against two producers is ambiguous.
 
-The action form keeps the job local, so the check keeps the name `test-guard` and an
-existing ruleset needs no change:
-
-```yaml
-name: agent-forge test-guard
-on:
-  pull_request:
-    # `edited` is required: approvals are declared in the PR body, so editing the
-    # body to add one has to re-run the check.
-    types: [opened, synchronize, reopened, edited]
-permissions:
-  contents: read
-jobs:
-  test-guard:            # this job id IS the check name — do not rename it
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0          # the guard diffs against the merge base
-          persist-credentials: false
-      - name: capture the pull request body
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.txt"
-      - uses: quynhonsemiconductor/ci/actions/agent-forge-test-guard@v1.21.0
-        with:
-          base-ref: ${{ github.event.pull_request.base.ref }}
-          body-file: ${{ runner.temp }}/pr-body.txt
-```
-
-The former reusable workflow (`.github/workflows/agent-forge-guard.yml`) was removed —
-it had no org-wide consumers. Repos without an existing `test-guard` requirement should
-call the action directly as shown above.
-
-### Notifications
-| Action | Description |
-|---|---|
-| [`notify-deploy`](actions/notify-deploy/action.yml) | Send deploy lifecycle events to Slack or Discord webhook |
-
----
+The action form keeps the job local, so the check keeps the name of its job and an existing ruleset needs no change.
 
 ## Prerequisites
 
@@ -194,17 +152,6 @@ CLOUDFRONT_DISTRIBUTION_ID  # rova-web only
 PRIVATE_SUBNET_IDS          # comma-separated private subnet IDs
 MIGRATOR_SG_ID              # security group ID for migrator tasks
 ```
-
-### Job permissions for attestation
-Jobs calling `attest-image` need:
-```yaml
-permissions:
-  id-token: write
-  attestations: write
-  contents: read
-```
-
----
 
 ## Canonical Pipelines
 
@@ -340,26 +287,6 @@ Log in to the target registry first (`docker/login-action`; GHCR with `GITHUB_TO
 | Output | Description |
 |---|---|
 | `image-uri` | Full `registry/name:tag` URI |
-
----
-
-### `attest-image`
-Job needs `permissions: attestations: write, id-token: write`.
-
-| Input | Default | Description |
-|---|---|---|
-| `image-ref` | **required** | Full image ref with digest (`registry/name@sha256:…`) |
-| `push-to-registry` | `true` | Store attestation as OCI artefact |
-| `github-token` | `${{ github.token }}` | Token with `attestations: write` |
-
-Verify later with (attestations are signed by this reusable workflow — the
-trusted builder — so pin the signer identity, not just the source repo):
-
-```bash
-gh attestation verify oci://registry/name@sha256:… \
-  --repo <owner>/<consumer-repo> \
-  --signer-workflow <owner>/ci/.github/workflows/ghcr-publish.yml
-```
 
 ---
 
@@ -504,20 +431,6 @@ Proven by `.github/workflows/fetch-openapi-base-spec-test.yml`.
 | `config-path` | `` | Path to `.gitleaks.toml` (optional, uses defaults if empty) |
 | `fail-on-leak` | `true` | Fail workflow if secrets detected |
 | `scan-depth` | `0` | Commits to scan (0 = full history) |
-
----
-
-### `notify-deploy`
-Auto-detects Slack vs Discord by webhook URL pattern.
-
-| Input | Default | Description |
-|---|---|---|
-| `webhook-url` | **required** | Slack or Discord incoming webhook |
-| `status` | **required** | `started` \| `success` \| `failure` \| `rollback` |
-| `service` | **required** | Service name (e.g. `rova-api`) |
-| `environment` | **required** | Target environment |
-| `version` | `` | Image tag or semver |
-| `run-url` | auto | Link to the GitHub Actions run |
 
 ---
 

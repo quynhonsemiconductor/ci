@@ -179,8 +179,8 @@ version). Change them org-wide and deliberately.
 
 OCR's built-in excludes skip `*.test.*` and `*.spec.*`. That stays the default: across fourteen recent
 rova pull requests test lines were 1.1× source lines, so reviewing every test would roughly double
-what a review costs, and an LLM is a weak judge of whether a test can fail — `agent-forge-test-guard`
-and coverage floors guard that better.
+what a review costs, and an LLM is a weak judge of whether a test can fail — coverage floors
+guard that better.
 
 The exception is ratchets, `**/*.ratchet.{spec,test}.{ts,tsx}` (`typescript.json` → `include`; the
 backend names them `.spec.ts`, the web app `.test.ts`). Ratchets hold the boundaries rova and opshub
@@ -198,4 +198,3 @@ spending tokens on every future review of every matching file.
 Two questions before adding anything: does a built-in rule, a linter or a required check already
 cover it, and would a competent reviewer who had never seen this codebase know it? If the answer to
 either is yes, leave it out. Prefer naming the failure that
-prompted the rule — a reviewer given the reason reports the problem rather than the pattern.
