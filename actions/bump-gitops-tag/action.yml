@@ -132,6 +132,10 @@ runs:
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
               || { echo "::error::bad digest for $svc"; exit 1; }
             digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
+          else
+            # A tag-only bump must not leave an older digest behind: the chart pins
+            # the digest and ignores the tag, so a stale one keeps the old image.
+            svc="$svc" yq -i 'del(.services[strenv(svc)].image.digest)' "$file"
           fi
         done
         after=$(sha256sum "$file" | cut -d' ' -f1)
