@@ -39,6 +39,11 @@ inputs:
   mode:
     description: 'commit (dev) | pull-request (prod). Production is always a reviewed diff.'
     default: commit
+  auto-merge:
+    description: >
+      pull-request mode only: enable auto-merge (squash) on the PR it opens. The PR still has to
+      satisfy gitops's branch rules; auto-merge only removes the manual click. Use it for dev only.
+    default: 'false'
   gitops-repo:
     default: quynhonsemiconductor/gitops
   gitops-token:
@@ -169,7 +174,7 @@ runs:
         done
         echo "::error::could not push after 3 attempts"; exit 1
 
-    - name: Open a pull request (prod)
+    - name: Open a pull request
       id: pr
       if: inputs.mode == 'pull-request' && steps.bump.outputs.changed == 'true'
       shell: bash
@@ -177,18 +182,27 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.gitops-token }}
         PRODUCT: ${{ inputs.product }}
+        ENV: ${{ inputs.env }}
         TAG: ${{ inputs.tag }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
       run: |
         set -euo pipefail
-        branch="promote/${PRODUCT}-${TAG}"
+        if [ "$ENV" = "prod" ]; then
+          branch="promote/${PRODUCT}-${TAG}"
+          title="promote(${PRODUCT}): prod -> ${TAG}"
+        else
+          # dev: a plain bump, named per image so a re-run of the same build cannot clash with
+          # a different one. A conventional-commit title (chore), not a promotion.
+          branch="bump/${PRODUCT}-${ENV}-${TAG}"
+          title="chore(${PRODUCT}): ${ENV} -> ${TAG}"
+        fi
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
         git checkout -b "$branch"
-        git commit -am "promote(${PRODUCT}): prod -> ${TAG}"
+        git commit -am "$title"
         git push -u origin "$branch"
-        url=$(gh pr create \
-          --title "promote(${PRODUCT}): prod -> ${TAG}" \
-          --body "$(cat <<'BODY'
+        if [ "$ENV" = "prod" ]; then
+          body="$(cat <<'BODY'
         §11 — promotion is a reviewable diff.
 
         Before this existed, a version tag applied whatever `main` contained, which
@@ -201,6 +215,13 @@ runs:
 
         Rollback: revert this commit.
         BODY
-        )")
+        )"
+        else
+          body="Automated dev bump of the machine-owned tags file. It builds nothing; the image was published by the product's publish workflow. Rollback: revert this commit."
+        fi
+        url=$(gh pr create --title "$title" --body "$body")
         echo "url=$url" >> "$GITHUB_OUTPUT"
         echo "::notice::$url"
+        if [ "$AUTO_MERGE" = "true" ]; then
+          gh pr merge "$url" --auto --squash
+        fi
