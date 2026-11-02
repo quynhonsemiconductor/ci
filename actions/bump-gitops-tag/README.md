@@ -32,6 +32,12 @@ promotion or rollback can never keep running an older pinned image.
     digests: ${{ needs.publish.outputs.digests }}
 ```
 
+## Dev as a PR with auto-merge
+
+`mode: pull-request` also works for `env: dev`: it opens `bump/<product>-dev-<tag>` with a
+`chore(<product>): dev -> <tag>` title (prod keeps `promote/...`). Add `auto-merge: 'true'` to
+enable squash auto-merge; gitops's branch rules still apply, auto-merge only removes the click.
+
 ## Two modes, and the difference is the whole of §11
 
 ```
