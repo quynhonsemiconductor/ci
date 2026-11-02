@@ -123,8 +123,6 @@ def test_imagetools_only_does_manifest_level_work():
 def test_registry_build_cache_is_never_the_default():
     action = yaml.safe_load((ROOT / "actions/build-push-ecr/action.yml").read_text())
     assert action["inputs"]["cache-backend"]["default"] != "registry"
-    reusable = yaml.safe_load((ROOT / ".github/workflows/backend-deploy.yml").read_text())
-    assert reusable[True]["workflow_call"]["inputs"]["cache_backend"]["default"] != "registry"
 
 
 def test_no_workflow_or_action_asks_for_registry_cache_by_default():
@@ -314,30 +312,3 @@ def test_same_layers_refuses_an_index_with_two_platform_configs(tmp_path):
 
 def test_same_layers_refuses_a_pushed_image_with_no_config(tmp_path):
     assert same_layers(tmp_path, [A], None).returncode == 1
-
-
-# ── backend-deploy: where the scan lives now ──────────────────────────────────────────────────────────────────────────────────
-
-def backend_jobs():
-    return yaml.safe_load((ROOT / ".github/workflows/backend-deploy.yml").read_text())["jobs"]
-
-
-def test_the_build_job_scans_through_build_push_ecr():
-    build = backend_jobs()["build"]
-    step = next(s for s in build["steps"] if str(s.get("uses", "")).startswith("quynhonsemiconductor/ci/actions/build-push-ecr"))
-    assert step["with"]["scan"] == "true"
-    assert not any(str(s.get("uses", "")).startswith("aquasecurity/trivy-action") for s in build["steps"])
-
-
-def test_the_merge_job_pulls_nothing_to_scan():
-    merge = backend_jobs()["merge"]
-    assert not any(str(s.get("uses", "")).startswith("aquasecurity/trivy-action") for s in merge["steps"])
-    assert any("imagetools create" in (s.get("run") or "") for s in merge["steps"])  # still builds the index from digests
-    # both-arch-or-nothing is unchanged
-    run = next(s["run"] for s in merge["steps"] if s.get("id") == "merge")
-    assert "refusing to tag a partial image" in run and "has no $p manifest" in run
-
-
-def test_every_leg_must_succeed_before_the_merge_so_a_failed_scan_blocks_the_tag():
-    merge = backend_jobs()["merge"]
-    assert "build" in merge["needs"]  # `needs` means every matrix leg succeeded

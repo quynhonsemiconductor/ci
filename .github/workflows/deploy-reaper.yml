@@ -26,7 +26,7 @@ on:
       workflows:
         description: Deploy workflow filenames to reap, comma- or space-separated.
         type: string
-        default: backend-deploy.yml web-deploy.yml
+        default: web-deploy.yml
 
 permissions:
   contents: read
