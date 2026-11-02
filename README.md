@@ -8,10 +8,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 
 ## Actions
 
-### AWS Auth
-| Action | Description |
-|---|---|
-| [`setup-aws-oidc`](actions/setup-aws-oidc/action.yml) | Configure AWS via GitHub OIDC (no stored keys) + optional ECR login |
+> **AWS exit, 2026-11-02.** The AWS-only actions (`setup-aws-oidc`, `ecs-run-task`, `update-task-definition`, `run-db-migration`, `ensure-environment-awake`, `promote-ecr-images`) and the `backend-deploy.yml` reusable were removed; no repository in the organisation referenced them. `build-push-ecr` keeps its name but is what `ghcr-publish.yml` uses to build, scan and push to GHCR.
 
 ### Node / Build
 | Action | Description |
@@ -27,8 +24,6 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 ### ECS / Deploy
 | Action | Description |
 |---|---|
-| [`ecs-run-task`](actions/ecs-run-task/action.yml) | Run a one-off Fargate task and wait for its exit code |
-| [`run-db-migration`](actions/run-db-migration/action.yml) | Run Drizzle migrations as a gated ECS task (third motion — before traffic flip) |
 | [`post-deploy-health-check`](actions/post-deploy-health-check/action.yml) | Poll `/health/ready` until HTTP 200 (optionally assert version) |
 
 ### CDN / Frontend
@@ -200,13 +195,6 @@ PRIVATE_SUBNET_IDS          # comma-separated private subnet IDs
 MIGRATOR_SG_ID              # security group ID for migrator tasks
 ```
 
-### IAM roles (provisioned by rova infra)
-| Role convention | Used for |
-|---|---|
-| `rova-<env>-github-deploy` | ECR push, ECS update-service, S3 sync, CloudFront invalidation |
-| `rova-<env>-github-readonly` | CI read-only checks |
-| `rova-<env>-github-infra` | rova infra only (tofu apply — never from app repos) |
-
 ### Job permissions for attestation
 Jobs calling `attest-image` need:
 ```yaml
@@ -269,136 +257,6 @@ jobs:
           # An intentional break: add the PR label `allow-breaking-api-change` and push (see the action's docs).
 ```
 
-### Deploy — rova-api (ECS Fargate)
-
-```yaml
-permissions:
-  id-token: write
-  attestations: write
-  contents: read
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    env:
-      IMAGE_TAG: sha-${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # 1. AWS auth + ECR login
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
-        id: aws
-        with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rova-${{ inputs.environment }}-github-deploy
-          region: ${{ vars.AWS_REGION }}
-          ecr-login: 'true'
-
-      # 2. Build & push image
-      - uses: quynhonsemiconductor/ci/actions/build-push-ecr@main
-        id: build
-        with:
-          ecr-registry: ${{ steps.aws.outputs.ecr-registry }}
-          image-name: rova-api
-          image-tag: ${{ env.IMAGE_TAG }}
-          # No `extra-tags: latest` — a moving tag defeats immutable pins (§11, task 0.8).
-          # The immutable `sha-<commit>` / `v<version>` `image-tag` is the only tag pushed.
-          build-target: api
-          cache-scope: api
-
-      # 3. Attest (SOC 2 / supply-chain evidence)
-      - uses: quynhonsemiconductor/ci/actions/attest-image@main
-        with:
-          image-ref: ${{ steps.build.outputs.image-uri }}
-
-      # 4. Migrate DB (MUST run before new app version goes live)
-      - uses: quynhonsemiconductor/ci/actions/run-db-migration@main
-        with:
-          cluster: ${{ vars.ECS_CLUSTER }}
-          task-definition: rova-${{ inputs.environment }}-migrator
-          subnet-ids: ${{ vars.PRIVATE_SUBNET_IDS }}
-          security-group-ids: ${{ vars.MIGRATOR_SG_ID }}
-          region: ${{ vars.AWS_REGION }}
-          environment: ${{ inputs.environment }}
-
-      # 5. Flip traffic
-      - run: |
-          aws ecs update-service \
-            --cluster ${{ vars.ECS_CLUSTER }} \
-            --service ${{ vars.ECS_API_SERVICE }} \
-            --force-new-deployment \
-            --region ${{ vars.AWS_REGION }}
-
-      # 6. Verify ECS stabilized — inline, see backend-deploy.yml's "Verify API
-      #    deployment" step. `services-stable` plus an image comparison, which also
-      #    catches a circuit-breaker rollback.
-      - run: |
-          AWS_MAX_ATTEMPTS=120 aws ecs wait services-stable \
-            --cluster "$ECS_CLUSTER" --services "$ECS_API_SERVICE" --region "$AWS_REGION"
-
-      # 7. Health-check live endpoint
-      - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
-        with:
-          url: https://api.rova.io/v1/health/ready
-          expected-version: ${{ env.IMAGE_TAG }}
-
-      # 8. Notify result
-      - uses: quynhonsemiconductor/ci/actions/notify-deploy@main
-        if: always()
-        with:
-          webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
-          status: ${{ job.status == 'success' && 'success' || 'failure' }}
-          service: rova-api
-          environment: ${{ inputs.environment }}
-          version: ${{ env.IMAGE_TAG }}
-          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-```
-
-### Deploy — rova-web (S3 + CloudFront)
-
-```yaml
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
-        with:
-          node-version: '22'
-          pnpm-version: '10.10.0'
-
-      - uses: quynhonsemiconductor/ci/actions/setup-aws-oidc@main
-        with:
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/rova-${{ inputs.environment }}-github-deploy
-          region: ${{ vars.AWS_REGION }}
-
-      - run: pnpm build
-
-      - run: |
-          aws s3 sync dist/ s3://rova-${{ inputs.environment }}-web \
-            --delete --region ${{ vars.AWS_REGION }}
-
-      - uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@main
-        with:
-          url: https://app.rova.io
-
-      - uses: quynhonsemiconductor/ci/actions/notify-deploy@main
-        if: always()
-        with:
-          webhook-url: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
-          status: ${{ job.status == 'success' && 'success' || 'failure' }}
-          service: rova-web
-          environment: ${{ inputs.environment }}
-          version: ${{ github.sha }}
-          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-```
-
 ### Security scan (weekly + on push to main)
 
 ```yaml
@@ -426,22 +284,6 @@ jobs:
 ---
 
 ## Action Reference
-
-### `setup-aws-oidc`
-| Input | Default | Description |
-|---|---|---|
-| `role-arn` | **required** | IAM role ARN to assume via OIDC |
-| `region` | **required** | AWS region |
-| `ecr-login` | `false` | Also authenticate to ECR |
-| `session-duration` | `3600` | Role session duration in seconds |
-| `mask-aws-account-id` | `true` | Mask account ID in logs |
-
-| Output | Description |
-|---|---|
-| `ecr-registry` | ECR registry URL (only when `ecr-login: true`) |
-| `aws-account-id` | The assumed-role AWS account ID |
-
----
 
 ### `setup-node-pnpm`
 | Input | Default | Description |
@@ -479,7 +321,7 @@ and includes a control showing that **without** the action pnpm 11 fails and pnp
 ---
 
 ### `build-push-ecr`
-Call `setup-aws-oidc` with `ecr-login: true` first.
+Log in to the target registry first (`docker/login-action`; GHCR with `GITHUB_TOKEN`).
 
 | Input | Default | Description |
 |---|---|---|
@@ -516,45 +358,8 @@ trusted builder — so pin the signer identity, not just the source repo):
 ```bash
 gh attestation verify oci://registry/name@sha256:… \
   --repo <owner>/<consumer-repo> \
-  --signer-workflow <owner>/ci/.github/workflows/backend-deploy.yml
+  --signer-workflow <owner>/ci/.github/workflows/ghcr-publish.yml
 ```
-
----
-
-### `ecs-run-task`
-| Input | Default | Description |
-|---|---|---|
-| `cluster` | **required** | ECS cluster name |
-| `task-definition` | **required** | Task definition name or ARN |
-| `container-name` | **required** | Container whose exit code is checked |
-| `subnet-ids` | **required** | Comma-separated private subnet IDs |
-| `security-group-ids` | **required** | Comma-separated security group IDs |
-| `region` | **required** | AWS region |
-| `command-override` | `` | JSON array override (e.g. `["pnpm","seed"]`) |
-| `timeout-seconds` | `900` | Max wait seconds |
-| `poll-interval-seconds` | `15` | Poll interval seconds |
-| `launch-type` | `FARGATE` | ECS launch type |
-
-| Output | Description |
-|---|---|
-| `task-arn` | ARN of the task |
-| `exit-code` | Container exit code (0 = success) |
-
----
-
-### `run-db-migration`
-Wrapper around `ecs-run-task` for the Drizzle migration "third motion". Fails fast if migrations fail, blocking the deploy.
-
-| Input | Default | Description |
-|---|---|---|
-| `cluster` | **required** | ECS cluster |
-| `task-definition` | **required** | Migrator task definition name |
-| `container-name` | `migrator` | Container name inside the task def |
-| `subnet-ids` | **required** | Private subnets that can reach RDS:5432 |
-| `security-group-ids` | **required** | SGs allowing outbound to RDS |
-| `region` | **required** | AWS region |
-| `environment` | `unknown` | Label for log messages |
-| `timeout-seconds` | `600` | Max wait seconds |
 
 ---
 

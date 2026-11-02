@@ -4,11 +4,9 @@
 #
 # The on-prem delivery path (ONPREM-PLAN §11.1, "Build" row): every product
 # image is published to ghcr.io/quynhonsemiconductor/<product>-<service> with
-# the immutable identity tag sha-<commit>, so the gitops manifests can move off
-# ECR before the AWS cutover. This runs ALONGSIDE backend-deploy.yml /
-# k8s-deploy.yml, which keep pushing to ECR until the cutover. The two pipelines
-# build the same commit but are INDEPENDENT builds — do not assume byte-equality
-# across registries; each digest stands on its own.
+# the immutable identity tag sha-<commit>, which the gitops manifests pin. This
+# is the only image build since the AWS exit (2026-11-02): the ECR deploy
+# pipelines (backend-deploy.yml, k8s-deploy.yml) are gone.
 #
 # Differences from the ECR path, and why:
 #   - linux/amd64 only. The k3s host is amd64; ECS keeps pulling the arm64 entry
