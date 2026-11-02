@@ -38,6 +38,13 @@ promotion or rollback can never keep running an older pinned image.
 `chore(<product>): dev -> <tag>` title (prod keeps `promote/...`). Add `auto-merge: 'true'` to
 enable squash auto-merge; gitops's branch rules still apply, auto-merge only removes the click.
 
+## Re-render in the same commit
+
+If the target repo has `scripts/render.sh`, the action installs the pinned helm (`helm-version`, default 4.3.0,
+equal to gitops `chart-ci`'s `HELM_VERSION`), runs it, and the commit/PR carries the changed `rendered/` files
+together with the tags file. gitops CI fails a PR whose `rendered/` is stale, so without this no bot PR could pass.
+`render: 'false'` turns it off. Dev and prod (promote) alike.
+
 ## Two modes, and the difference is the whole of §11
 
 ```

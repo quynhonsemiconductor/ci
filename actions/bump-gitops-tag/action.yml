@@ -44,6 +44,15 @@ inputs:
       pull-request mode only: enable auto-merge (squash) on the PR it opens. The PR still has to
       satisfy gitops's branch rules; auto-merge only removes the manual click. Use it for dev only.
     default: 'false'
+  render:
+    description: >
+      'true' (default) | 'false'. After the tags are written, run the target repo's scripts/render.sh when
+      it exists and commit its rendered/ output in the SAME commit. gitops CI fails a PR whose rendered/
+      is stale, and this action only edits a tags file, so without it no bot PR could ever pass.
+    default: 'true'
+  helm-version:
+    description: 'helm version for scripts/render.sh. Keep equal to HELM_VERSION in the target repo chart-ci workflow (the render must match what its CI renders).'
+    default: '4.3.0'
   gitops-repo:
     default: quynhonsemiconductor/gitops
   gitops-token:
@@ -153,6 +162,28 @@ runs:
           git diff --stat
         fi
 
+    # ── RENDER, IN THE SAME COMMIT ────────────────────────────────────────────
+    # gitops requires rendered/ to equal `scripts/render.sh` output (golden render). A tags bump changes
+    # the manifests, so the commit must carry the re-render or its own CI fails. Pinned helm: a different
+    # helm version can reflow the output and fail the same check.
+    - name: Install helm (pinned)
+      if: inputs.render == 'true' && steps.bump.outputs.changed == 'true' && hashFiles('.gitops/scripts/render.sh') != ''
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      with:
+        version: ${{ inputs.helm-version }}
+
+    - name: Render
+      id: render
+      if: inputs.render == 'true' && steps.bump.outputs.changed == 'true' && hashFiles('.gitops/scripts/render.sh') != ''
+      shell: bash
+      working-directory: .gitops
+      run: |
+        set -euo pipefail
+        ./scripts/render.sh
+        # New files (a product/env rendered for the first time) must travel too; the commit steps use
+        # `git add -A`. Show what the render changed.
+        git status --short rendered/ || true
+
     - name: Commit (dev)
       if: inputs.mode == 'commit' && steps.bump.outputs.changed == 'true'
       shell: bash
@@ -165,7 +196,8 @@ runs:
         set -euo pipefail
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
-        git commit -am "chore(${PRODUCT}): ${ENV} -> ${TAG}"
+        git add -A
+        git commit -m "chore(${PRODUCT}): ${ENV} -> ${TAG}"
         # Rebase rather than merge: two products bumping concurrently is normal,
         # and a merge commit per deploy makes the promotion diff unreadable.
         for i in 1 2 3; do
@@ -199,7 +231,8 @@ runs:
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
         git checkout -b "$branch"
-        git commit -am "$title"
+        git add -A
+        git commit -m "$title"
         git push -u origin "$branch"
         if [ "$ENV" = "prod" ]; then
           body="$(cat <<'BODY'
