@@ -1,14 +1,9 @@
 # =============================================================================
 # Tests · shipped scripts — unit tests for the Python this repo ships to others.
 #
-# actionlint and zizmor check the SHAPE of a workflow. Neither can tell whether
-# `agent_forge_test_guard.py` correctly identifies a deleted assertion, and that
-# script is a REQUIRED check on rova's main branch: a bug in it either blocks
-# every merge or waves through the weakening it exists to catch.
-#
-# It arrived here with its tests rather than without them. The alternative was
-# moving a security control out of a repository that tested it into one that did
-# not, which trades one drift problem for a worse one.
+# actionlint and zizmor check the SHAPE of a workflow. Neither can tell whether the Python this repo ships
+# to other repos (code_review_gate, plan_guard, pin_drift, the conformance scripts) behaves, so it is
+# unit-tested here.
 # =============================================================================
 name: Scripts · Tests
 
@@ -47,18 +42,16 @@ jobs:
         with:
           python-version: '3.14'
 
-      # The GUARD is standard-library only, by design — it runs in repositories that
-      # have never heard of agent-forge and cannot assume a dependency tree, and one
-      # of its own tests asserts that by reading its source.
+      # The shipped scripts are standard-library only, by design: they run in repositories that cannot
+      # assume a dependency tree.
       #
-      # `platform_conformance.py` is the exception and always was: it parses Helm
-      # values, so it needs pyyaml. Installing it here is deliberate — without it
+      # `platform_conformance.py` is the exception: it parses Helm values, so it needs pyyaml. Installing it here is deliberate — without it
       # the module-refs tests SKIP rather than fail, and a contract that silently
       # stops running is the failure this whole file exists to prevent.
       - name: Install pytest and pyyaml
         run: pip install --disable-pip-version-check pytest==9.1.1 pyyaml==6.0.3
 
-      # The guard builds real git repositories to diff against, so it needs an
+      # Some tests build real git repositories to diff against, so they need an
       # identity. Set here rather than left to the runner: a bare `git commit` with
       # no identity anywhere aborts with "Author identity unknown", which reads as a
       # test failure rather than a missing configuration.
