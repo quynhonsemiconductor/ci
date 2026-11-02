@@ -28,6 +28,14 @@ inputs:
       NEVER `latest` — that is how a develop build reached a production task
       definition (qnsc-kb-backend/infra/live/prod/main.tf:104).
     required: true
+  digests:
+    description: >
+      Optional JSON object mapping service to image digest, e.g.
+      {"api":"sha256:..","worker":"sha256:.."}. When set, each listed service also
+      gets `image.digest` written next to `image.tag`; the chart pins the digest
+      (it wins over the tag) and the tag stays for people to read. Every service in
+      `services` must have an entry. Each digest must match ^sha256:[0-9a-f]{64}$.
+    default: ''
   mode:
     description: 'commit (dev) | pull-request (prod). Production is always a reviewed diff.'
     default: commit
@@ -94,6 +102,7 @@ runs:
         ENV: ${{ inputs.env }}
         SERVICES: ${{ inputs.services }}
         TAG: ${{ inputs.tag }}
+        DIGESTS: ${{ inputs.digests }}
       run: |
         set -euo pipefail
         # ── THE MACHINE-OWNED FILE ────────────────────────────────────────
@@ -117,6 +126,17 @@ runs:
           # yq has its own expression language, and interpolating into it is the
           # same bug one layer down.
           TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+          if [ -n "$DIGESTS" ]; then
+            digest=$(jq -er --arg s "$svc" '.[$s]' <<< "$DIGESTS") \
+              || { echo "::error::digests has no entry for $svc"; exit 1; }
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+              || { echo "::error::bad digest for $svc"; exit 1; }
+            digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
+          else
+            # A tag-only bump must not leave an older digest behind: the chart pins
+            # the digest and ignores the tag, so a stale one keeps the old image.
+            svc="$svc" yq -i 'del(.services[strenv(svc)].image.digest)' "$file"
+          fi
         done
         after=$(sha256sum "$file" | cut -d' ' -f1)
 

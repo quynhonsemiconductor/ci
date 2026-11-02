@@ -18,6 +18,20 @@ there.
     gitops-token: ${{ secrets.GITOPS_TOKEN }}
 ```
 
+## Pin by digest
+
+Pass `digests` (the `digests` output of `ghcr-publish.yml`, a JSON map of service to
+`sha256:<64 hex>`) and each service also gets `image.digest`. The chart pins the
+digest and ignores the tag, so a rewritten tag cannot change what runs; the tag stays
+in the file for people to read. Every service in `services` needs an entry, else the
+action fails before writing anything wrong. A bump **without** `digests` removes any `image.digest` it finds, so a tag-only
+promotion or rollback can never keep running an older pinned image.
+
+```yaml
+    tag: sha-a3f9c2e01b2c
+    digests: ${{ needs.publish.outputs.digests }}
+```
+
 ## Two modes, and the difference is the whole of §11
 
 ```
