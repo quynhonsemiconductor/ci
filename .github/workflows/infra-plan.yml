@@ -110,7 +110,7 @@ jobs:
           echo "::error ::vars.AWS_ACCOUNT_ID is empty. Set the AWS_ACCOUNT_ID org variable (Actions > Variables)." >&2
           exit 1
 
-      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@5295d2dc6c0be1c6d9175b626e96705a0893bc0d # v1.28.0
         with:
           # fmt needs no cloud access; assume the read-only plan role for parity.
           role-arn:     arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
@@ -146,7 +146,7 @@ jobs:
           repositories: tf-modules
           permission-contents: read
 
-      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
+      - uses: quynhonsemiconductor/ci/actions/setup-tofu-aws@5295d2dc6c0be1c6d9175b626e96705a0893bc0d # v1.28.0
         with:
           role-arn:     arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ inputs.product }}-github-infra-plan
           aws-region:   ${{ inputs.aws_region }}

@@ -143,7 +143,7 @@ jobs:
       # ── Install (pnpm — org default) ────────────────────────────────────────
       - name: Install dependencies (pnpm)
         if: inputs.package_manager == 'pnpm'
-        uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
+        uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@5295d2dc6c0be1c6d9175b626e96705a0893bc0d # v1.28.0
         with:
           node-version: ${{ inputs.node_version }}
           pnpm-version: ${{ inputs.pnpm_version }}
@@ -371,7 +371,7 @@ jobs:
 
       - name: Post-deploy health check
         if: vars.APP_URL != ''
-        uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@208f7081f59fdbe5a454d7e836d1b04ac4b04d97 # v1.24.1
+        uses: quynhonsemiconductor/ci/actions/post-deploy-health-check@5295d2dc6c0be1c6d9175b626e96705a0893bc0d # v1.28.0
         with:
           url: ${{ vars.APP_URL }}
           expected-status: '200'
