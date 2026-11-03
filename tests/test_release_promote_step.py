@@ -28,6 +28,8 @@ if args[:1] == ["ls-remote"]:
     sys.exit(int(os.environ.get("STUB_LS_REMOTE_EXIT", "1")))
 if args[:2] == ["diff", "--cached"]:
     sys.exit(int(os.environ.get("STUB_NO_CHANGES", "0")))
+if args[:2] == ["ls-files", "--error-unmatch"]:
+    sys.exit(int(os.environ.get("STUB_LS_FILES_EXIT", "1")))
 sys.exit(0)
 """
 
@@ -51,7 +53,7 @@ def step_script() -> str:
 
 
 def run(tmp_path, *, product="rova", tag="v1.2.3", changelog="### Fixes\\n* retag", dev_health="rova-dev: Synced / Healthy",
-        pr_url="", ls_remote_exit=1, no_changes=1, digests=DIGESTS):
+        pr_url="", ls_remote_exit=1, no_changes=1, ls_files_exit=1, digests=DIGESTS):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for name, body in (("git", GIT_STUB), ("gh", GH_STUB)):
@@ -70,6 +72,7 @@ def run(tmp_path, *, product="rova", tag="v1.2.3", changelog="### Fixes\\n* reta
         "STUB_PR_URL": pr_url,
         "STUB_LS_REMOTE_EXIT": str(ls_remote_exit),
         "STUB_NO_CHANGES": str(no_changes),
+        "STUB_LS_FILES_EXIT": str(ls_files_exit),
         "GH_TOKEN": "app-token",
         "PRODUCT": product,
         "TAG": tag,
@@ -158,3 +161,17 @@ def test_inputs_are_validated_before_paths_and_branches_are_built():
     validate = next(s for s in _promote_steps() if s.get("name") == "Validate the promote inputs")
     assert "^[a-z0-9-]+$" in validate["run"]
     assert "v[0-9]+" in validate["run"]
+
+
+def test_without_a_render_stages_only_the_tags_file(tmp_path):
+    result, _, calls = run(tmp_path)
+    assert result.returncode == 0, result.stderr
+    adds = [c for c in calls if c.startswith("git add ")]
+    assert adds == ["git add -A -- values/rova/tags.prod.yaml"]
+
+
+def test_nothing_staged_fails_before_the_commit(tmp_path):
+    result, _, calls = run(tmp_path, no_changes=0)
+    assert result.returncode != 0
+    assert "nothing to promote" in result.stdout + result.stderr
+    assert not any(c.startswith("git commit") for c in calls)

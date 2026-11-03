@@ -81,28 +81,6 @@ on:
       dockerfile:
         type: string
         default: Dockerfile
-      bump-dev:
-        description: >
-          'true' opens (or refreshes) the gitops dev PR for this build, so the product
-          caller has no copied bump job. Needs the QNSC_AUTOMATION_PRIVATE_KEY secret
-          (pass `secrets: inherit`), and one caller per product must own the bump when a
-          product makes several publish calls (the second call would re-bump the same file).
-        type: string
-        default: 'false'
-      gitops-product:
-        description: >
-          The gitops values key (rova, opshub, kb). Defaults to `product`; set it when the
-          GHCR slug and the gitops directory differ (kb vs qnsc-kb).
-        type: string
-        default: ''
-      gitops-services:
-        description: 'Services to write in the tags file. Defaults to every service published by this call.'
-        type: string
-        default: ''
-    secrets:
-      QNSC_AUTOMATION_PRIVATE_KEY:
-        description: 'GitHub App key for the gitops PR. Required when bump-dev is true.'
-        required: false
     outputs:
       tag:
         description: 'The identity tag pushed to every image (sha-<commit>).'
@@ -269,45 +247,3 @@ jobs:
             echo "| $svc | \`$NAMESPACE/$PRODUCT-$svc@$d\` |" >> "$GITHUB_STEP_SUMMARY"
           done
           echo "digests=$json" >> "$GITHUB_OUTPUT"
-
-  # The dev deploy, shared instead of copied per product (DELIVERY-DESIGN §2/§3):
-  # after a successful build+scan, the bot opens a PR that sets tag + digest in
-  # values/<gitops-product>/tags.dev.yaml and enables auto-merge. gitops's
-  # bot-scope allows that auto-merge only when the PR touches nothing but
-  # values/*/tags.dev.yaml. Prod never goes through here — release-promote.yml
-  # opens a reviewed PR and the owner's merge is the gate.
-  bump-dev:
-    name: Bump dev (gitops PR)
-    needs: [build, digests]
-    if: ${{ inputs.bump-dev == 'true' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    concurrency:
-      # One bump per product/env: two publish calls touching the same tags file
-      # serialise instead of racing (the action rebases on push).
-      group: gitops-bump-${{ inputs.gitops-product || inputs.product }}-dev
-      cancel-in-progress: false
-    steps:
-      # App token scoped to gitops only: branch push, PR open, auto-merge enable.
-      - id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
-        with:
-          app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
-          owner: quynhonsemiconductor
-          repositories: gitops
-          permission-contents: write
-          permission-pull-requests: write
-
-      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@7e8f6136a017c7b1f57a2e9a288dae3cd008950f  # v1.31.1
-        with:
-          product: ${{ inputs.gitops-product || inputs.product }}
-          env: dev
-          services: ${{ inputs.gitops-services || join(fromJSON(inputs.services-json), ' ') }}
-          tag: ${{ needs.build.outputs.tag }}
-          digests: ${{ needs.digests.outputs.digests }}
-          mode: pull-request
-          auto-merge: 'true'
-          gitops-token: ${{ steps.app.outputs.token }}

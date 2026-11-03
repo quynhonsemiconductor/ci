@@ -42,7 +42,8 @@ inputs:
   auto-merge:
     description: >
       pull-request mode only: enable auto-merge (squash) on the PR it opens. The PR still has to
-      satisfy gitops's branch rules; auto-merge only removes the manual click. Use it for dev only.
+      satisfy gitops's branch rules; auto-merge only removes the manual click. Dev only — prod with
+      auto-merge is refused, because the owner's merge is the production gate (§10b).
     default: 'false'
   render:
     description: >
@@ -249,6 +250,12 @@ runs:
           # a different one. A conventional-commit title (chore), not a promotion.
           branch="bump/${PRODUCT}-${ENV}-${TAG}"
           title="chore(${PRODUCT}): ${ENV} -> ${TAG}"
+        fi
+        # Production's merge IS the gate (§10b). Auto-merge would remove the only
+        # review a prod change gets; refuse it rather than let a caller do it by accident.
+        if [ "$ENV" = "prod" ] && [ "$AUTO_MERGE" = "true" ]; then
+          echo "::error::auto-merge is refused for prod: the owner's merge is the production gate (§10b)."
+          exit 1
         fi
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"

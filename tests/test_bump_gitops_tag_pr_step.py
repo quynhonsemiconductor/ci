@@ -25,11 +25,14 @@ def step_script() -> str:
     return next(s for s in doc["runs"]["steps"] if s.get("id") == "pr")["run"]
 
 
-def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
+def run_step(tmp_path, *, env_name, tag, auto_merge="false", ls_files_exit=1, no_changes=None):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
-    git_stub = 'if [ "$1 $2" = "diff --cached" ]; then exit 1; fi'
+    git_stub = (
+        'if [ "$1 $2" = "diff --cached" ]; then exit "${STUB_NO_CHANGES:-1}"; fi\n'
+        'if [ "$1 $2" = "ls-files --error-unmatch" ]; then exit "${STUB_LS_FILES_EXIT:-1}"; fi'
+    )
     for tool, out in (("git", git_stub), ("gh", 'case "$1 $2" in "pr create") echo https://example/pr/1;; esac')):
         p = bindir / tool
         p.write_text(f'#!/usr/bin/env bash\necho "{tool} $*" >> "{log}"\n{out}\n', encoding="utf-8")
@@ -39,6 +42,8 @@ def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
     env = {
         "PATH": f"{bindir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out), "GH_TOKEN": "x", "PRODUCT": "rova",
         "ENV": env_name, "TAG": tag, "AUTO_MERGE": auto_merge,
+        "STUB_LS_FILES_EXIT": str(ls_files_exit),
+        "STUB_NO_CHANGES": "1" if no_changes is None else str(no_changes),
     }
     result = subprocess.run(["bash", "-c", step_script()], cwd=tmp_path, capture_output=True, text=True, env=env, timeout=30)
     return result, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -161,3 +166,25 @@ def test_gitops_checkout_persists_no_credentials_and_both_pushes_authenticate_en
         assert 'GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"' in run
         assert 'GIT_CONFIG_VALUE_0="AUTHORIZATION: basic' in run
         assert "git config --local" not in run
+
+
+def test_dev_without_a_render_stages_only_the_tags_file(tmp_path):
+    result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", ls_files_exit=1)
+    assert result.returncode == 0, result.stderr
+    adds = [c for c in calls if c.startswith("git add ")]
+    assert adds == ["git add -A -- values/rova/tags.dev.yaml"]
+
+
+def test_nothing_staged_fails(tmp_path):
+    result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", no_changes=0)
+    assert result.returncode != 0
+    assert "nothing staged" in result.stdout + result.stderr
+    assert not any(c.startswith("git commit") for c in calls)
+
+
+def test_prod_with_auto_merge_is_refused(tmp_path):
+    result, calls = run_step(tmp_path, env_name="prod", tag="v1.2.3", auto_merge="true")
+    assert result.returncode != 0
+    assert "auto-merge is refused for prod" in result.stdout + result.stderr
+    assert not any(c.startswith("git checkout") for c in calls)
+    assert not any(c.startswith("gh pr merge") for c in calls)
