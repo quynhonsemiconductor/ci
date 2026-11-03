@@ -304,7 +304,7 @@ A reusable workflow's permissions are capped by its caller's, so a product that 
 ---
 
 ### `release-retag`
-Cut a version without rebuilding. For each candidate service it reads the image's identity tag `sha-<commit>`, gets its digest, verifies that digest's build attestation (`gh attestation verify`, signer `ghcr-publish.yml`), and only after every found image passes does it run `crane tag <image>@<digest> vX.Y.Z` — the tag moves onto the SAME digest. A service with no `sha-<commit>` tag is skipped (the product may not ship it); zero images or one failed attestation fails the step, so the release never points at an unverified image. Log in to the registry first.
+Cut a version without rebuilding. For each candidate service it reads the image's identity tag `sha-<commit>`, gets its digest, verifies that digest's build attestation (`gh attestation verify`, signer `ghcr-publish.yml`), and only after every found image passes does it run `crane tag <image>@<digest> vX.Y.Z` — the tag moves onto the SAME digest. Every service listed must have a `sha-<commit>` tag: a missing one fails the step before any tag is written (no partial release), as does a failed attestation — the release never points at an unverified or missing image. Log in to the registry first.
 
 A failed `crane tag` mid-loop leaves the earlier services tagged with this release; re-running is safe, because an existing tag at the same digest is a no-op and a tag at a different digest is refused.
 
@@ -329,7 +329,7 @@ jobs:
 | `product` | **required** | Short slug (`rova`, `opshub`, `kb`) |
 | `release-tag` | **required** | `vX.Y.Z`; `latest` and `sha-*` are refused |
 | `commit` | **required** | Full 40-character sha the release was cut from |
-| `services` | `api worker migrator web` | Candidates; missing ones are skipped |
+| `services` | `api worker migrator web` | Exactly the services the product ships; a missing one fails the run |
 
 | Output | Description |
 |---|---|
@@ -526,6 +526,8 @@ uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@4ab9d053b565b4fef50da119b0
 ```
 
 This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Renovate (org preset, `pinDigests`) moves the SHA and the comment together in a reviewed pull request, so a bump is a reviewed diff rather than a ref that moves under the caller. The `# vX.Y.Z` comment is not decoration: `scripts/pin_drift.py` reads the version from it, so a SHA pin without one is invisible to the pin-drift report.
+
+A reusable workflow in this repo pins the actions it calls to the release that LAST CHANGED that action, not to the current release (`ghcr-publish` calls `build-push-image@v1.31.1` and `bump-gitops-tag@v1.32.0` while the repo is on v1.33.0). One rule: a release bumps a self-pin only when it changes that action; a release that does not touch it leaves the pin alone. Reasons: the blast radius of a release stays what changed, and a job cannot pin a SHA that does not exist at the commit introducing it.
 
 **`v1` is FROZEN** (2026-10-21, at v1.22). It does not move on release and will not be moved again; a caller on it runs code from before the on-prem migration, 40+ commits behind `main`. Do not use `v1`, or any other floating tag (`v1.<minor>`), in a workflow or an action — pin a SHA plus its `# vX.Y.Z` comment.
 

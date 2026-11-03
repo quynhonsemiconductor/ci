@@ -122,7 +122,12 @@ permissions:
   attestations: write
 
 concurrency:
-  group: ghcr-publish-${{ inputs.product }}
+  # ONE group per product PER COMMIT. A product-wide group would let a newer
+  # main push REPLACE the queued run for the previous commit: GitHub keeps only
+  # one pending run per group even with cancel-in-progress false, so that commit
+  # would never be published. A tag or dispatch for the same sha still serialises
+  # with the main push (same group).
+  group: ghcr-publish-${{ inputs.product }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
