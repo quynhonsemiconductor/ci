@@ -27,14 +27,18 @@ D2 = "sha256:" + "2" * 64
 CRANE_STUB = f"""#!{sys.executable}
 import json, os, sys
 tagged = json.loads(os.environ.get("STUB_CRANE_TAGS", "{{}}"))
+errors = json.loads(os.environ.get("STUB_CRANE_ERRORS", "{{}}"))
 args = sys.argv[1:]
 with open(os.environ["STUB_CALLS"], "a") as f:
     f.write("crane " + " ".join(args) + "\\n")
 if args[0] == "digest":
     ref = args[1]
+    if ref in errors:
+        print(errors[ref], file=sys.stderr)
+        sys.exit(1)
     digest = tagged.get(ref)
     if not digest:
-        print("MANIFEST_UNKNOWN", file=sys.stderr)
+        print("MANIFEST_UNKNOWN: manifest unknown; GET https://ghcr.io/v2/x/manifests/y: 404", file=sys.stderr)
         sys.exit(1)
     print(digest)
 elif args[0] == "tag":
@@ -52,14 +56,19 @@ if args[0] != "attestation":
     sys.exit("unexpected gh command: " + args[0])
 bad = json.loads(os.environ.get("STUB_GH_FAIL", "[]"))
 ref = next(a for a in args if a.startswith("oci://"))
+# The real verify only accepts an attestation whose source ref is the caller's
+# main branch; the stub enforces the flag so a dropped --source-ref fails here.
+if "--source-ref" not in args or args[args.index("--source-ref") + 1] != "refs/heads/main":
+    print("attestation source ref is not refs/heads/main", file=sys.stderr)
+    sys.exit(1)
 if any(formatted in ref for formatted in bad):
     print("no attestations found", file=sys.stderr)
     sys.exit(1)
 """
 
 
-def run(tmp_path, *, tags, gh_fail=(), tag="v1.2.3", commit=SHA, services="api worker migrator web",
-        product="rova", source="quynhonsemiconductor/rova"):
+def run(tmp_path, *, tags, gh_fail=(), crane_errors=None, tag="v1.2.3", commit=SHA,
+        services="api worker migrator web", product="rova", source="quynhonsemiconductor/rova"):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for name, body in (("crane", CRANE_STUB), ("gh", GH_STUB)):
@@ -77,6 +86,7 @@ def run(tmp_path, *, tags, gh_fail=(), tag="v1.2.3", commit=SHA, services="api w
         "STUB_CALLS": str(calls),
         "STUB_CRANE_TAGS": json.dumps(tags),
         "STUB_GH_FAIL": json.dumps(list(gh_fail)),
+        "STUB_CRANE_ERRORS": json.dumps(crane_errors or {}),
         "PRODUCT": product,
         "RELEASE_TAG": tag,
         "COMMIT": commit,
@@ -156,3 +166,47 @@ def test_workflow_inlines_the_testable_script_verbatim():
     doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     step = next(s for s in doc["jobs"]["retag"]["steps"] if s.get("id") == "retag")
     assert step["run"].strip() == SCRIPT.read_text(encoding="utf-8").strip()
+
+
+def test_an_auth_error_does_not_look_like_a_missing_image(tmp_path):
+    ref = f"ghcr.io/quynhonsemiconductor/rova-api:sha-{SHA[:12]}"
+    result, _, calls = run(
+        tmp_path, tags=tags_map(api=D1), crane_errors={ref: "GET https://ghcr.io/v2/: denied: denied"},
+    )
+    assert result.returncode != 0
+    assert "not a missing manifest" in result.stdout + result.stderr
+    assert not any(call.startswith("gh attestation") for call in calls)
+    assert not any(call.startswith("crane tag") for call in calls)
+
+
+def test_a_5xx_or_rate_limit_does_not_look_like_a_missing_image(tmp_path):
+    ref = f"ghcr.io/quynhonsemiconductor/rova-api:sha-{SHA[:12]}"
+    result, _, _ = run(tmp_path, tags=tags_map(api=D1), crane_errors={ref: "unexpected status code 503"})
+    assert result.returncode != 0
+    assert "could not read" in result.stdout + result.stderr
+
+
+def test_an_existing_release_tag_at_the_same_digest_is_a_noop(tmp_path):
+    tags = tags_map(api=D1)
+    tags[f"ghcr.io/quynhonsemiconductor/rova-api:v1.2.3"] = D1
+    result, outputs, calls = run(tmp_path, tags=tags)
+    assert result.returncode == 0, result.stderr
+    assert "already at" in result.stdout
+    assert not any(call.startswith("crane tag") for call in calls)
+    assert json.loads(outputs["digests"]) == {"api": D1}
+
+
+def test_an_existing_release_tag_at_another_digest_is_refused(tmp_path):
+    tags = tags_map(api=D1)
+    tags["ghcr.io/quynhonsemiconductor/rova-api:v1.2.3"] = D2
+    result, _, calls = run(tmp_path, tags=tags)
+    assert result.returncode != 0
+    assert "Refusing to move a published release tag" in result.stdout + result.stderr
+    assert not any(call.startswith("crane tag") for call in calls)
+
+
+def test_attestation_is_verified_against_main(tmp_path):
+    result, _, calls = run(tmp_path, tags=tags_map(api=D1))
+    assert result.returncode == 0, result.stderr
+    gh_calls = [call for call in calls if call.startswith("gh attestation")]
+    assert gh_calls and "--source-ref refs/heads/main" in gh_calls[0]
