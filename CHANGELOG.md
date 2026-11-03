@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.31.1](https://github.com/quynhonsemiconductor/ci/compare/v1.31.0...v1.31.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **build-push:** push the scanned image instead of rebuilding it ([#282](https://github.com/quynhonsemiconductor/ci/issues/282)) ([edb7bcd](https://github.com/quynhonsemiconductor/ci/commit/edb7bcd147cd0905b381b521923a9f5b737faad6))
+* **drift-report:** the AI-controls sync state is provider-computed, not drift ([#283](https://github.com/quynhonsemiconductor/ci/issues/283)) ([7b779b5](https://github.com/quynhonsemiconductor/ci/commit/7b779b56a46c034b0c7da66efc73f307e90eeeec))
+* **pin-drift:** read SHA pins with a # vX.Y.Z comment; document the frozen v1 ([#284](https://github.com/quynhonsemiconductor/ci/issues/284)) ([54c8ccb](https://github.com/quynhonsemiconductor/ci/commit/54c8ccb0292a560605f2ee837fee478545917178))
+
 ## [1.31.0](https://github.com/quynhonsemiconductor/ci/compare/v1.30.0...v1.31.0) (2026-11-03)
 
 
