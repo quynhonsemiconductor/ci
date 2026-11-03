@@ -148,8 +148,10 @@ def test_the_gitops_checkout_persists_no_credentials_and_the_push_authenticates_
     checkout = next(s for s in _promote_steps() if s.get("uses", "").startswith("actions/checkout"))
     assert checkout["with"].get("persist-credentials") is False
     pr = next(s for s in _promote_steps() if s.get("id") == "pr")
-    assert "http.https://github.com/.extraheader" in pr["run"]
-    assert "AUTHORIZATION: basic" in pr["run"]
+    assert "GIT_CONFIG_COUNT=1" in pr["run"]
+    assert 'GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"' in pr["run"]
+    assert "GIT_CONFIG_VALUE_0=\"AUTHORIZATION: basic" in pr["run"]
+    assert "git config --local" not in pr["run"]
 
 
 def test_inputs_are_validated_before_paths_and_branches_are_built():

@@ -149,7 +149,7 @@ jobs:
 
       # persist-credentials stays false (zizmor artipacked): the token would
       # otherwise be written into .git/config and travel with any artifact. The
-      # PR step sets the same extraheader for exactly the one push it makes.
+      # PR step supplies the same extraheader env-only for its one push.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: quynhonsemiconductor/gitops
@@ -237,12 +237,13 @@ jobs:
             exit 1
           fi
           git commit -m "chore(${PRODUCT}): promote prod to ${TAG}"
-          # Auth for this one push without persisting the token: the same
-          # AUTHORIZATION header actions/checkout would have written into
-          # .git/config, scoped to this process' git config only.
-          git config --local "http.https://github.com/.extraheader" \
-            "AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')"
-          git push -u origin "$branch"
+          # Auth for this one push, env-only: GIT_CONFIG_* applies to this git
+          # process (and its children) and writes nothing to .git/config, so the
+          # App token is never left at rest in the checkout.
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')" \
+            git push -u origin "$branch"
           body=$(printf '%s\n' \
             "Promotion is a reviewable diff. The images below already ran in dev; this changes which digest prod points at and builds nothing. Merging this PR is the approval; rollback is a revert." \
             "" "## Release ${TAG}" "" "$changelog" \

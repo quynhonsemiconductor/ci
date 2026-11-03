@@ -198,10 +198,15 @@ runs:
         git config user.email "ci@qnsc.vn"
         # Stage ONLY the machine-owned values file and its render. `git add -A`
         # would put unrelated work in a bot commit — and on dev that breaks the
-        # gitops bot-scope rule the auto-merge depends on.
-        files=("values/${PRODUCT}/tags.${ENV}.yaml")
-        [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] && files+=("rendered/${PRODUCT}/${ENV}.yaml")
-        git add -- "${files[@]}"
+        # gitops bot-scope rule the auto-merge depends on. -A (with the explicit
+        # paths) also stages a render that is new or deleted, which the gitops
+        # stale-render gate needs.
+        if [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] || git ls-files --error-unmatch "rendered/${PRODUCT}/${ENV}.yaml" >/dev/null 2>&1; then
+          git add -A -- "values/${PRODUCT}/tags.${ENV}.yaml" "rendered/${PRODUCT}/${ENV}.yaml"
+        else
+          git add -A -- "values/${PRODUCT}/tags.${ENV}.yaml"
+        fi
+        git diff --cached --quiet && { echo "::error::nothing staged for ${PRODUCT} ${ENV}"; exit 1; }
         git commit -m "chore(${PRODUCT}): ${ENV} -> ${TAG}"
         # Rebase rather than merge: two products bumping concurrently is normal,
         # and a merge commit per deploy makes the promotion diff unreadable.
@@ -238,10 +243,14 @@ runs:
         git config user.email "ci@qnsc.vn"
         git checkout -b "$branch"
         # Stage ONLY the machine-owned values file and its render (see the commit
-        # step): a promotion PR must stay a three-line diff.
-        files=("values/${PRODUCT}/tags.${ENV}.yaml")
-        [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] && files+=("rendered/${PRODUCT}/${ENV}.yaml")
-        git add -- "${files[@]}"
+        # step): a promotion PR must stay a three-line diff. -A stages a render
+        # that is new or deleted too.
+        if [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] || git ls-files --error-unmatch "rendered/${PRODUCT}/${ENV}.yaml" >/dev/null 2>&1; then
+          git add -A -- "values/${PRODUCT}/tags.${ENV}.yaml" "rendered/${PRODUCT}/${ENV}.yaml"
+        else
+          git add -A -- "values/${PRODUCT}/tags.${ENV}.yaml"
+        fi
+        git diff --cached --quiet && { echo "::error::nothing staged for ${PRODUCT} ${ENV}"; exit 1; }
         git commit -m "$title"
         git push -u origin "$branch"
         if [ "$ENV" = "prod" ]; then

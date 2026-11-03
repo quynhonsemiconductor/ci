@@ -29,7 +29,8 @@ def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
-    for tool, out in (("git", ""), ("gh", 'case "$1 $2" in "pr create") echo https://example/pr/1;; esac')):
+    git_stub = 'if [ "$1 $2" = "diff --cached" ]; then exit 1; fi'
+    for tool, out in (("git", git_stub), ("gh", 'case "$1 $2" in "pr create") echo https://example/pr/1;; esac')):
         p = bindir / tool
         p.write_text(f'#!/usr/bin/env bash\necho "{tool} $*" >> "{log}"\n{out}\n', encoding="utf-8")
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
@@ -47,7 +48,7 @@ def test_dev_opens_a_bump_branch_with_a_chore_title_and_auto_merges(tmp_path):
     result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", auto_merge="true")
     assert result.returncode == 0, result.stderr
     assert "git checkout -b bump/rova-dev-sha-0123456789ab" in calls
-    assert any(c.startswith("git add -- values/rova/tags.dev.yaml") for c in calls)
+    assert any(c.startswith("git add -A -- values/rova/tags.dev.yaml") for c in calls)
     assert "git commit -m chore(rova): dev -> sha-0123456789ab" in calls
     assert "git push -u origin bump/rova-dev-sha-0123456789ab" in calls
     assert any(c.startswith("gh pr create --title chore(rova): dev -> sha-0123456789ab") for c in calls)
@@ -86,7 +87,6 @@ def real_repo(tmp_path):
     (work / "rendered/rova").mkdir(parents=True)
     (work / "scripts").mkdir()
     (work / "values/rova/tags.dev.yaml").write_text("services: {api: {image: {tag: old}}}\n")
-    (work / "rendered/rova/dev.yaml").write_text("tag: old\n")
     (work / "scripts/render.sh").write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/..\"\n"
         "grep -o 'tag: .*[a-z0-9]' values/rova/tags.dev.yaml | head -1 > /dev/null\n"
