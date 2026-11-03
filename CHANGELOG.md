@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.32.0](https://github.com/quynhonsemiconductor/ci/compare/v1.31.2...v1.32.0) (2026-11-03)
+
+
+### Features
+
+* **release-retag:** tag a release onto the digests already published ([#289](https://github.com/quynhonsemiconductor/ci/issues/289)) ([9ae70d1](https://github.com/quynhonsemiconductor/ci/commit/9ae70d13b29c4a5a7bfca7bc1ef33cab6ee475de))
+* **reusable:** share the dev bump and the prod promote ([#291](https://github.com/quynhonsemiconductor/ci/issues/291)) ([6fcbe82](https://github.com/quynhonsemiconductor/ci/commit/6fcbe822f4f08575f0e103461599951ab870f7f1))
+
 ## [1.31.2](https://github.com/quynhonsemiconductor/ci/compare/v1.31.1...v1.31.2) (2026-11-03)
 
 
