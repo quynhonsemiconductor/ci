@@ -115,26 +115,37 @@ inputs:
       Push the image by DIGEST ONLY, with no tag: `outputs: type=image,push-by-digest=true`. For the per-architecture legs of a multi-arch
       build, each on a runner of its own architecture; a later job creates the tag ONCE with `docker buildx imagetools create`, over
       the digests of every leg. It has to be like this because the repositories are IMMUTABLE (task 0.8): two legs cannot both push
-      `sha-<commit>`, and a leg cannot re-tag after the merge. `image-tag` is ignored when this is true. Default false: unchanged behaviour.
+      `sha-<commit>`, and a leg cannot re-tag after the merge. `image-tag` is ignored when this is true. Refused together with
+      `scan: true`: the scanned image is pushed with `docker push`, which needs a tag and cannot publish by digest. Default false:
+      unchanged behaviour.
     required: false
     default: 'false'
   scan:
     description: >
       `true` scans the image for CRITICAL CVEs BEFORE it is pushed, and fails the step (nothing is pushed) if one is found.
-      After the push, the pushed image's layers must equal the scanned ones (compared by diff_id); any difference fails the step,
-      so nothing downstream (attest, merge, deploy) runs on an image the scan did not see. Default `false`: unchanged behaviour.
+      The PUSHED IMAGE IS THE SCANNED ONE: the image is built once, loaded into the Docker daemon, scanned there, and then
+      pushed from that local copy with `docker push`. There is no rebuild between the scan and the push, so the pushed layers
+      cannot differ from the scanned ones. Default `false`: unchanged behaviour (build once, push with buildx).
 
-      WHY HERE AND NOT AFTER THE PUSH. A scan of the pushed image by its ECR reference makes the runner DOWNLOAD the whole image
-      from ECR. A GitHub-hosted runner is outside AWS, so that is internet egress at $0.12/GB: qnsc-kb's api and worker images are
-      3-4 GB each, three images per push, 34 pushes in 17 days, which was 206 GB and $24.78 of `DataTransfer-Out` against $2.11 of
-      storage. The image is already on the runner when it is built, so the scan reads it there.
+      WHY HERE AND NOT AFTER THE PUSH. A scan of the pushed image by its registry reference makes the runner DOWNLOAD the whole
+      image. A GitHub-hosted runner is outside AWS, so that is internet egress: qnsc-kb's api and worker images are 3-4 GB each,
+      three images per push, 34 pushes in 17 days, which was 206 GB and $24.78 of `DataTransfer-Out` against $2.11 of storage.
+      The image is already on the runner when it is built, so the scan reads it there.
 
-      HOW. A first build of the same Dockerfile, target and platform runs with `load: true` and `push: false`, without
-      attestations (the Docker exporter cannot carry them), the loaded image is scanned, and only then the real build runs with
-      push and with provenance and SBOM. The second build is a hit on the first one's layers in the same builder, so it re-runs
-      nothing and the pushed layers are the scanned layers (checked: identical layer digests). Needs a SINGLE platform
-      (`platforms` empty or one value): a multi-platform build cannot be loaded into the Docker daemon. The per-architecture legs
-      of a multi-arch build each scan their own native image this way, and the merge job needs no scan of its own.
+      WHY THIS PUSH, NOT A SECOND BUILD. The first version of this input rebuilt the same Dockerfile for the push and only
+      COMPARED the resulting diff_ids with the scanned ones. BuildKit answers a rebuild from its cache most of the time, but a
+      cache miss (pruned cache, a layer whose inputs moved) rebuilds a layer with a different diff_id, and qnsc-kb's worker
+      image failed exactly that way on 2026-11-03 (run 41580994349: 12 of 13 layers equal, the last one rebuilt). A check that
+      fails on a cache miss is a flaky gate, and pushing the rebuild is a gate that can be passed by the wrong image. So the
+      scan build is now the ONLY build on this path and its image is what gets pushed.
+
+      TRADE-OFF: the Docker exporter cannot carry the buildx attestations, so on this path the image has no provenance/SBOM
+      attestation. That is the state of the GHCR path today anyway (see ghcr-publish.yml: "No attestation for now"); supply-chain
+      attestations are attached separately in phase P4 (actions/attest-build-provenance + SBOM), which needs no rebuild.
+
+      Needs a SINGLE platform (`platforms` empty or one value): a multi-platform build cannot be loaded into the Docker daemon.
+      Incompatible with `push-by-digest` (that publishes an untagged image; `docker push` needs a tag). The per-architecture legs
+      of a multi-arch build each scan and push their own native image this way with tags, and the merge job needs no scan.
     required: false
     default: 'false'
   scan-severity:
@@ -273,12 +284,18 @@ runs:
       shell: bash
       env:
         PLATFORMS: ${{ inputs.platforms }}
+        PUSH_BY_DIGEST: ${{ inputs.push-by-digest }}
       run: |
         # `load: true` puts the image in the local Docker daemon, which holds one platform. Any separator counts: the comma of a
         # buildx list or a space in a hand-written one.
         multi='[,[:space:]]'
         if [[ "$PLATFORMS" =~ $multi ]]; then
           echo "::error title=build-push-ecr::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
+          exit 1
+        fi
+        # The scanned image is pushed with `docker push`, which needs a tag; push-by-digest publishes an untagged image.
+        if [ "$PUSH_BY_DIGEST" = "true" ]; then
+          echo "::error title=build-push-ecr::scan: true pushes the scanned image by tag and cannot be combined with push-by-digest: true"
           exit 1
         fi
 
@@ -297,9 +314,9 @@ runs:
           echo "::error title=build-push-ecr::scan: true needs the build context to be a git checkout (the context is '$CTX')"; exit 1; }
         git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$SNAPSHOT"
 
-    # Build for the scan: local only, nothing is pushed and nothing is written to the cache. Same context, Dockerfile, target,
-    # platform, secrets and cache-from as the real build, so it is the same image. No provenance/SBOM: the Docker exporter cannot
-    # export an image index; the real build below adds them.
+    # THE build on the scan path: local only, nothing is pushed. This is the image that is scanned AND then pushed, unchanged.
+    # Same context, Dockerfile, target, platform, secrets, cache and labels the pushed image must have. No provenance/SBOM: the
+    # Docker exporter cannot carry attestations (see the `scan` input for the trade-off).
     - name: Build for scan (local, nothing pushed)
       id: build-local
       if: ${{ inputs.scan == 'true' }}
@@ -313,6 +330,8 @@ runs:
         push: false
         tags: ecr-prepush-scan/${{ inputs.image-name }}:scan
         cache-from: ${{ steps.cache.outputs.from }}
+        cache-to: ${{ steps.cache.outputs.to }}
+        labels: ${{ inputs.labels }}
         provenance: false
         sbom: false
         secrets: |
@@ -349,10 +368,9 @@ runs:
         scanners: secret
         cache-dir: ${{ runner.temp }}/trivy-cache
 
-    # What was scanned, by layer diff_id. The push below rebuilds from the same Dockerfile, so it can differ: a cache miss after
-    # BuildKit pruned its cache rebuilds a layer, and an unpinned base or `apt-get upgrade` can move under it. The verify step after
-    # the push fails on any difference. The scan image is then removed: the push does not need it, and its layers take the disk.
-    - name: Record the scanned layers, then drop the scan image
+    # What was scanned, by layer diff_id. Recorded before the push and compared with the pushed manifest after it, as a check
+    # that the registry stored what the runner had. There is no rebuild between the two, so this cannot differ for build reasons.
+    - name: Record the scanned layers
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
@@ -360,7 +378,6 @@ runs:
       run: |
         set -euo pipefail
         docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}' > "$RUNNER_TEMP/scanned-layers.json"
-        docker image rm "$IMAGE"
 
     # The check the snapshot exists for: anything a step wrote into the build context since the snapshot is in the image about to
     # be pushed, and the scan did not see it. Fails before the push.
@@ -378,8 +395,56 @@ runs:
           exit 1
         fi
 
-    - name: Build & push
+    # The scanned image gets the registry tags it is about to be pushed under. A retag of a local image, so no layer moves.
+    - name: Tag the scanned image
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r tag; do
+          [ -n "$tag" ] && docker tag "$IMAGE" "$tag"
+        done <<< "$TAGS"
+
+    # Push exactly the image that was scanned: the local copy, byte for byte. No rebuild, so no layer can differ.
+    - name: Push the scanned image
       id: build
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        set -euo pipefail
+        digest=""
+        while IFS= read -r tag; do
+          [ -n "$tag" ] || continue
+          # 2>&1: the progress goes to stderr on some docker versions, and its last line carries the digest.
+          out="$(docker push "$tag" 2>&1)"
+          printf '%s\n' "$out"
+          digest="$(grep -oE 'sha256:[0-9a-f]{64}' <<< "$out" | tail -1 || true)"
+        done <<< "$TAGS"
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+    # Remove the local copies: every layer is in the registry now, and the disk is what the next step needs.
+    - name: Drop the pushed image from the runner
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        docker image rm "$IMAGE" || true
+        while IFS= read -r tag; do
+          [ -n "$tag" ] && { docker image rm "$tag" || true; }
+        done <<< "$TAGS"
+
+    # scan: false — the original single build with buildx, attestations and the cache write. scan: true pushed above.
+    - name: Build & push
+      id: push
+      if: ${{ inputs.scan != 'true' }}
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
       with:
         context: ${{ inputs.build-context }}
@@ -430,7 +495,8 @@ runs:
       shell: bash
       env:
         IMAGE_URI: ${{ steps.tags.outputs.image-uri }}
-        DIGEST: ${{ steps.build.outputs.digest }}
+        # scan: true pushes with `docker push` (step `build`); scan: false with buildx (step `push`). Only one runs.
+        DIGEST: ${{ steps.build.outputs.digest || steps.push.outputs.digest }}
       run: |
         echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
         echo "digest=${DIGEST}"      >> "$GITHUB_OUTPUT"

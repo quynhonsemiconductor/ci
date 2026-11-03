@@ -15,8 +15,9 @@
 #     must not fight this workflow for one scope).
 #   - Scan BEFORE push, and the scan covers vulns AND secrets: the packages
 #     are PUBLIC, so a failed scan must leave nothing in the registry. The
-#     composite's pre-push scan (build-push-ecr `scan: true`) builds locally,
-#     scans, then verifies the pushed layers equal the scanned ones. Gate
+#     composite's pre-push scan (build-push-ecr `scan: true`) builds once,
+#     scans the local image and pushes THAT image (`docker push`, no rebuild),
+#     then checks the registry's manifest carries the scanned layers. Gate
 #     policy = the ECR path's: CRITICAL fixable vulns block, HIGH vulns are
 #     reported only, and ANY secret blocks.
 #   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
