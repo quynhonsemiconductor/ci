@@ -20,6 +20,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 |---|---|
 | [`build-push-image`](actions/build-push-image/action.yml) | Buildx build + push, with an optional pre-push scan. Caller logs in first |
 | [`build-push-ecr`](actions/build-push-ecr/action.yml) | **Deprecated path, removed in v1.34.0**; identical to `build-push-image` |
+| [`release-retag`](actions/release-retag/action.yml) | Add a release tag to the digests already published for a commit — verifies the build attestation first, never rebuilds. The [`release-retag` reusable workflow](.github/workflows/release-retag.yml) runs it on a tag push |
 
 ### ECS / Deploy
 | Action | Description |
@@ -299,6 +300,39 @@ permissions:
   attestations: write    # writes to the repository's attestation store
 ```
 A reusable workflow's permissions are capped by its caller's, so a product that calls `ghcr-publish.yml` must grant these four on the calling job as well.
+
+---
+
+### `release-retag`
+Cut a version without rebuilding. For each candidate service it reads the image's identity tag `sha-<commit>`, gets its digest, verifies that digest's build attestation (`gh attestation verify`, signer `ghcr-publish.yml`), and only after every found image passes does it run `crane tag <image>@<digest> vX.Y.Z` — the tag moves onto the SAME digest. A service with no `sha-<commit>` tag is skipped (the product may not ship it); zero images or one failed attestation fails the step, so the release never points at an unverified image. Log in to the registry first.
+
+The reusable workflow is the supported entry point (it installs crane, logs in to GHCR and calls the action):
+
+```yaml
+on:
+  push:
+    tags: ['v*']
+jobs:
+  retag:
+    permissions: { contents: read, packages: write, attestations: read }
+    uses: quynhonsemiconductor/ci/.github/workflows/release-retag.yml@<full-sha>
+    with:
+      product: rova
+      release-tag: ${{ github.ref_name }}
+      commit: ${{ github.sha }}
+```
+
+| Input | Default | Description |
+|---|---|---|
+| `product` | **required** | Short slug (`rova`, `opshub`, `kb`) |
+| `release-tag` | **required** | `vX.Y.Z`; `latest` and `sha-*` are refused |
+| `commit` | **required** | Full 40-character sha the release was cut from |
+| `services` | `api worker migrator web` | Candidates; missing ones are skipped |
+
+| Output | Description |
+|---|---|
+| `digests` | JSON map service → digest, the release digest map |
+| `services` | Space-separated services that were tagged |
 
 ---
 

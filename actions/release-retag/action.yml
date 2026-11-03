@@ -1,0 +1,63 @@
+name: Release-retag published images
+description: >
+  Add a release tag (vX.Y.Z) to the images already published for one commit, without
+  rebuilding anything. For each service it finds the commit's identity tag
+  (sha-<commit>), verifies the digest's build attestation from the publish workflow,
+  and only then points the release tag at the same digest.
+
+  The caller must have logged in to the registry before this action runs (the
+  publish workflow already does): crane tag pushes the tag with that login.
+
+inputs:
+  product:
+    description: 'Short slug — rova · opshub · kb. NOT qnsc-kb (§7c).'
+    required: true
+  release-tag:
+    description: 'The release tag to add, e.g. v0.8.6. Must be vX.Y.Z — never latest or sha-<commit>.'
+    required: true
+  commit:
+    description: 'Full 40-character commit sha whose images are promoted (the main commit the release was cut from).'
+    required: true
+  services:
+    description: >
+      Space-separated candidate services, e.g. "api worker migrator web". A service with no
+      sha-<commit> tag in the registry is skipped (the product may not ship it); at least one
+      must exist or the action fails.
+    default: api worker migrator web
+  registry-namespace:
+    description: 'Image namespace; the image is <namespace>/<product>-<service>.'
+    default: ghcr.io/quynhonsemiconductor
+  source-repository:
+    description: 'Repository the images were built for — the attestation source. Use the caller repo.'
+    default: ${{ github.repository }}
+  signer-workflow:
+    description: 'Workflow that must have signed the attestation.'
+    default: quynhonsemiconductor/ci/.github/workflows/ghcr-publish.yml
+  github-token:
+    description: 'Token for `gh attestation verify` and the registry API. Needs packages: read and attestations: read.'
+    required: true
+
+outputs:
+  digests:
+    description: 'JSON object mapping service to digest, e.g. {"api":"sha256:.."} — the release digest map.'
+    value: ${{ steps.retag.outputs.digests }}
+  services:
+    description: 'Space-separated services that were tagged.'
+    value: ${{ steps.retag.outputs.services }}
+
+runs:
+  using: composite
+  steps:
+    - name: Find, verify and tag the published digests
+      id: retag
+      shell: bash
+      env:
+        PRODUCT: ${{ inputs.product }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        COMMIT: ${{ inputs.commit }}
+        SERVICES: ${{ inputs.services }}
+        REGISTRY_NAMESPACE: ${{ inputs.registry-namespace }}
+        SOURCE_REPOSITORY: ${{ inputs.source-repository }}
+        SIGNER_WORKFLOW: ${{ inputs.signer-workflow }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: '"${{ github.action_path }}/retag.sh"'

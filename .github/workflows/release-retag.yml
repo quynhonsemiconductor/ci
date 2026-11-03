@@ -1,0 +1,190 @@
+# =============================================================================
+# Reusable · Release retag — cut a version without rebuilding.
+#
+# On a release (the release-please PR merged, tag vX.Y.Z pushed) this finds the
+# images the publish workflow already built for the release commit, verifies the
+# build attestation of each digest, and adds the vX.Y.Z tag to the SAME digest.
+# Nothing is built, pulled or re-pushed: prod runs the bytes dev ran.
+#
+# The step below is actions/release-retag/retag.sh verbatim (a test keeps them
+# equal). It is inlined rather than checked out so this workflow needs no copy of
+# the ci repo at a ref it cannot name from within its own PR: a same-repo `uses:`
+# cannot point at a SHA that does not exist until this commit is merged.
+#
+# Consuming repositories call this thin (SHA-pinned — ci's v1 tag is frozen):
+#
+#   on:
+#     push:
+#       tags: ['v*']
+#   jobs:
+#     retag:
+#       permissions: { contents: read, packages: write, attestations: read }
+#       uses: quynhonsemiconductor/ci/.github/workflows/release-retag.yml@<full-sha>
+#       with:
+#         product: rova
+#         release-tag: ${{ github.ref_name }}
+#         commit: ${{ github.sha }}
+#
+# The caller must grant packages: write (the tag write) and attestations: read
+# (the verification). A reusable workflow's permissions are capped by its caller.
+# =============================================================================
+name: Reusable · Release retag
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Short slug — rova · opshub · kb.'
+        type: string
+        required: true
+      release-tag:
+        description: 'Release tag vX.Y.Z (e.g. github.ref_name on a tag push).'
+        type: string
+        required: true
+      commit:
+        description: 'Full sha of the main commit the release was cut from.'
+        type: string
+        required: true
+      services:
+        description: 'Candidate services; missing ones are skipped.'
+        type: string
+        default: api worker migrator web
+      source-repository:
+        description: 'Repo the images were built for. Default: the caller repo.'
+        type: string
+        default: ''
+      registry-namespace:
+        description: 'Image namespace; the image is <namespace>/<product>-<service>.'
+        type: string
+        default: ghcr.io/quynhonsemiconductor
+    outputs:
+      digests:
+        description: 'JSON digest map for the release.'
+        value: ${{ jobs.retag.outputs.digests }}
+      services:
+        description: 'Services that were tagged.'
+        value: ${{ jobs.retag.outputs.services }}
+
+permissions:
+  contents: read
+  packages: write
+  attestations: read
+
+jobs:
+  retag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      digests: ${{ steps.retag.outputs.digests }}
+      services: ${{ steps.retag.outputs.services }}
+    steps:
+      - name: Install crane (pinned)
+        shell: bash
+        env:
+          CRANE_VERSION: v0.20.6
+        run: |
+          set -euo pipefail
+          if command -v crane >/dev/null 2>&1; then
+            crane version
+            exit 0
+          fi
+          GOBIN="$RUNNER_TEMP/crane-bin" go install "github.com/google/go-containerregistry/cmd/crane@${CRANE_VERSION}"
+          echo "$RUNNER_TEMP/crane-bin" >> "$GITHUB_PATH"
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Find, verify and tag the published digests
+        id: retag
+        shell: bash
+        env:
+          PRODUCT: ${{ inputs.product }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          COMMIT: ${{ inputs.commit }}
+          SERVICES: ${{ inputs.services }}
+          REGISTRY_NAMESPACE: ${{ inputs.registry-namespace }}
+          SOURCE_REPOSITORY: ${{ inputs.source-repository || github.repository }}
+          SIGNER_WORKFLOW: quynhonsemiconductor/ci/.github/workflows/ghcr-publish.yml
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          #!/usr/bin/env bash
+          # Add release-tag to the images already published for one commit, after verifying each digest's attestation.
+          #
+          # Called by action.yml with every value in the environment. Anything that consumes an input runs it as a
+          # variable, never as text (zizmor's template-injection rule, and the same rule bump-gitops-tag documents).
+          set -euo pipefail
+
+          PRODUCT="${PRODUCT:?product is required}"
+          RELEASE_TAG="${RELEASE_TAG:?release-tag is required}"
+          COMMIT="${COMMIT:?commit is required}"
+          REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-ghcr.io/quynhonsemiconductor}"
+          SERVICES="${SERVICES:-api worker migrator web}"
+          SOURCE_REPOSITORY="${SOURCE_REPOSITORY:?source-repository is required}"
+          SIGNER_WORKFLOW="${SIGNER_WORKFLOW:?signer-workflow is required}"
+          GH_TOKEN="${GH_TOKEN:?github-token is required}"
+          export GH_TOKEN
+
+          # §11: the release tag is the only mutable-looking ref this action writes; it must be a real version tag.
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=release-retag::refusing '$RELEASE_TAG'; expected a release tag vX.Y.Z"
+            exit 1
+          fi
+          if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=release-retag::commit must be the full 40-character sha"
+            exit 1
+          fi
+          if [[ ! "$PRODUCT" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error title=release-retag::product must be a slug like rova, not '$PRODUCT'"
+            exit 1
+          fi
+
+          short="${COMMIT:0:12}"
+          identity="sha-${short}"
+
+          # ── Find, then verify, THEN tag ─────────────────────────────────────────────
+          # Nothing gets a release tag until every image that has one was found and
+          # attested. A tag written before a later image fails its check would make the
+          # release look complete while one digest is unverified.
+          found=()
+          digests='{}'
+          for svc in $SERVICES; do
+            image="${REGISTRY_NAMESPACE}/${PRODUCT}-${svc}"
+            if ! digest=$(crane digest "${image}:${identity}" 2>/dev/null); then
+              echo "release-retag: ${image}:${identity} not published for this commit — skipped"
+              continue
+            fi
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error title=release-retag::${image}:${identity} returned a bad digest '$digest'"
+              exit 1
+            fi
+            if ! gh attestation verify "oci://${image}@${digest}" \
+              --repo "$SOURCE_REPOSITORY" \
+              --signer-workflow "$SIGNER_WORKFLOW" \
+              --source-digest "$COMMIT" >/dev/null; then
+              echo "::error title=release-retag::no valid build attestation for ${image}@${digest} (signer ${SIGNER_WORKFLOW}, commit ${COMMIT}). Refusing to release an image this pipeline did not build."
+              exit 1
+            fi
+            found+=("$svc")
+            digests=$(jq -c --arg s "$svc" --arg d "$digest" '. + {($s): $d}' <<<"$digests")
+          done
+
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "::error title=release-retag::no ${PRODUCT}-<service> image carries ${identity}. Publish ran for this commit? Looked for: ${SERVICES}"
+            exit 1
+          fi
+
+          for svc in "${found[@]}"; do
+            image="${REGISTRY_NAMESPACE}/${PRODUCT}-${svc}"
+            digest=$(jq -er --arg s "$svc" '.[$s]' <<<"$digests")
+            # crane tag moves the reference onto the SAME digest: no pull, no push of layers, no rebuild.
+            crane tag "${image}@${digest}" "$RELEASE_TAG"
+            echo "release-retag: ${image}@${digest} -> ${RELEASE_TAG}"
+          done
+
+          {
+            echo "digests=${digests}"
+            echo "services=${found[*]}"
+          } >>"${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
