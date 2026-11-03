@@ -45,6 +45,10 @@ equal to gitops `chart-ci`'s `HELM_VERSION`), runs it, and the commit/PR carries
 together with the tags file. gitops CI fails a PR whose `rendered/` is stale, so without this no bot PR could pass.
 `render: 'false'` turns it off. Dev and prod (promote) alike.
 
+The commit/PR stages ONLY `values/<p>/tags.<env>.yaml` and `rendered/<p>/<env>.yaml`, never the whole
+`rendered/` tree. That is deliberate: gitops bot-scope allows only those two paths, and any other change
+under `rendered/` is another PR's drift — the gitops stale-render gate is what must catch it, not this action.
+
 ## Two modes, and the difference is the whole of §11
 
 ```

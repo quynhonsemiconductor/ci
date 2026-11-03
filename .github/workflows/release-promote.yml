@@ -1,0 +1,261 @@
+# =============================================================================
+# Reusable · Release promote — retag the release, then open the ONE prod PR.
+#
+# On a release tag (vX.Y.Z) this does two things and nothing else:
+#   1. release-retag: verify the digest attestation of every image published for
+#      the release commit, then add vX.Y.Z to the SAME digests (no rebuild).
+#   2. bump: write those digests into values/<gitops-product>/tags.prod.yaml and
+#      open a pull request. It is NOT auto-merged: the owner's merge is the one
+#      prod gate (DELIVERY-DESIGN §2). Rollback = revert that PR.
+#
+# The PR body carries the release changelog (fetched from the GitHub release
+# when the caller passes none) and the dev health string the caller supplies.
+#
+# Consuming repositories call this thin (SHA-pinned — ci's v1 tag is frozen):
+#
+#   on:
+#     push:
+#       tags: ['v*']
+#   jobs:
+#     promote:
+#       permissions: { contents: read, packages: write, attestations: read }
+#       uses: quynhonsemiconductor/ci/.github/workflows/release-promote.yml@<full-sha>
+#       with:
+#         product: rova
+#         gitops-product: rova
+#         release-tag: ${{ github.ref_name }}
+#         commit: ${{ github.sha }}
+#       secrets: inherit
+#
+# A product with no values/<gitops-product>/tags.prod.yaml STOPS here with a
+# clear message: prod launch is phase P3, not a pipeline accident.
+# =============================================================================
+name: Reusable · Release promote
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        description: 'Short slug — rova · opshub · kb (the GHCR namespace).'
+        type: string
+        required: true
+      release-tag:
+        description: 'Release tag vX.Y.Z (github.ref_name on a tag push).'
+        type: string
+        required: true
+      commit:
+        description: 'Full sha the release was cut from.'
+        type: string
+        required: true
+      services:
+        description: 'Candidate services; missing ones are skipped.'
+        type: string
+        default: api worker migrator web
+      gitops-product:
+        description: 'gitops values key. Defaults to product (set kb for qnsc-kb).'
+        type: string
+        default: ''
+      gitops-services:
+        description: 'Services to write. Defaults to every service release-retag tagged.'
+        type: string
+        default: ''
+      changelog:
+        description: 'Release changelog for the PR body. Empty: read the GitHub release body.'
+        type: string
+        default: ''
+      dev-health:
+        description: 'Current dev ArgoCD health to show the approver. Empty is reported as not supplied.'
+        type: string
+        default: ''
+    secrets:
+      QNSC_AUTOMATION_PRIVATE_KEY:
+        description: 'GitHub App key for the gitops PR.'
+        required: true
+    outputs:
+      digests:
+        description: 'JSON digest map written to the prod tags file.'
+        value: ${{ jobs.retag.outputs.digests }}
+      pr-url:
+        description: 'The prod promotion PR.'
+        value: ${{ jobs.promote.outputs.pr-url }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Same-repo reusable call: resolves to the same commit as this workflow, so the
+  # retag code is exactly the code the caller pinned — no unreleased SHA.
+  retag:
+    permissions:
+      contents: read
+      packages: write
+      attestations: read
+    uses: ./.github/workflows/release-retag.yml
+    with:
+      product: ${{ inputs.product }}
+      release-tag: ${{ inputs.release-tag }}
+      commit: ${{ inputs.commit }}
+      services: ${{ inputs.services }}
+      source-repository: ${{ github.repository }}
+
+  promote:
+    needs: retag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      pr-url: ${{ steps.pr.outputs.url }}
+    steps:
+      - name: Validate the promote inputs
+        env:
+          PRODUCT: ${{ inputs.gitops-product || inputs.product }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          # Both become a filesystem path and a git branch name below. Validate
+          # HERE, not after either is built.
+          [[ "$PRODUCT" =~ ^[a-z0-9-]+$ ]] || { echo "::error title=release-promote::invalid gitops-product '$PRODUCT' (expected a slug like rova)"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error title=release-promote::invalid release tag '$TAG' (expected vX.Y.Z)"; exit 1; }
+
+      # The release body is read with the JOB token (contents: read on the calling
+      # repo). The app token below is scoped to gitops and cannot read this repo's
+      # releases; using it here is why the changelog used to be "not supplied".
+      - name: Read the release notes
+        id: notes
+        if: ${{ inputs.changelog == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          [ -n "$body" ] || { echo "::error title=release-promote::release $TAG has an empty body"; exit 1; }
+          {
+            echo "changelog<<__QC_EOF__"
+            echo "$body"
+            echo "__QC_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with:
+          app-id: ${{ vars.QNSC_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}
+          owner: quynhonsemiconductor
+          repositories: gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      # persist-credentials stays false (zizmor artipacked): the token would
+      # otherwise be written into .git/config and travel with any artifact. The
+      # PR step supplies the same extraheader env-only for its one push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: quynhonsemiconductor/gitops
+          token: ${{ steps.app.outputs.token }}
+          path: .gitops
+          persist-credentials: false
+
+      - name: Install helm (pinned)
+        if: hashFiles('.gitops/scripts/render.sh') != ''
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: '4.3.0'
+
+      - name: Write the release digests and render
+        working-directory: .gitops
+        env:
+          PRODUCT: ${{ inputs.gitops-product || inputs.product }}
+          SERVICES: ${{ inputs.gitops-services || '' }}
+          TAG: ${{ inputs.release-tag }}
+          DIGESTS: ${{ needs.retag.outputs.digests }}
+        run: |
+          set -euo pipefail
+          file="values/${PRODUCT}/tags.prod.yaml"
+          if [ ! -f "$file" ]; then
+            echo "::error title=release-promote::$file does not exist. Prod launch is phase P3; create the prod values (and the Application) before promoting."
+            exit 1
+          fi
+          services="${SERVICES:-}"
+          if [ -z "$services" ]; then
+            services=$(jq -r 'keys | join(" ")' <<<"$DIGESTS")
+          fi
+          for svc in $services; do
+            digest=$(jq -er --arg s "$svc" '.[$s] | select(type == "string")' <<<"$DIGESTS") \
+              || { echo "::error::no digest for $svc in the release map"; exit 1; }
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $svc"; exit 1; }
+            # The digest is the deployed identity; the tag stays as the human label.
+            digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
+            TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+          done
+          if [ -x ./scripts/render.sh ]; then ./scripts/render.sh; fi
+          git status --short || true
+
+      - name: Open the promotion pull request
+        id: pr
+        working-directory: .gitops
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GIT_TOKEN: ${{ steps.app.outputs.token }}
+          PRODUCT: ${{ inputs.gitops-product || inputs.product }}
+          TAG: ${{ inputs.release-tag }}
+          CHANGELOG: ${{ inputs.changelog || steps.notes.outputs.changelog }}
+          DEV_HEALTH: ${{ inputs.dev-health }}
+          DIGESTS: ${{ needs.retag.outputs.digests }}
+        run: |
+          set -euo pipefail
+          [[ "$PRODUCT" =~ ^[a-z0-9-]+$ ]] || { echo "::error title=release-promote::invalid gitops-product '$PRODUCT'"; exit 1; }
+          branch="promote/${PRODUCT}-${TAG}"
+          existing=$(gh pr list --head "$branch" --json url --jq '.[0].url // ""')
+          if [ -n "$existing" ]; then
+            echo "url=$existing" >> "$GITHUB_OUTPUT"
+            echo "::notice::promotion PR already open: $existing"
+            exit 0
+          fi
+          # The PR check does not cover a branch left behind by a failed earlier
+          # run. Creating it again would either force-push over that state or fail
+          # with git's own message; fail clearly instead.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::error title=release-promote::branch $branch exists on gitops but no PR was found. Delete it (or re-run after cleanup) rather than repointing a promotion."
+            exit 1
+          fi
+          changelog="$CHANGELOG"
+          [ -n "$changelog" ] || { echo "::error title=release-promote::no changelog supplied or found for $TAG"; exit 1; }
+          [ -n "$DEV_HEALTH" ] || DEV_HEALTH="Not supplied by the caller."
+          git config user.name  "qnsc-ci"
+          git config user.email "ci@qnsc.vn"
+          git checkout -b "$branch"
+          # Stage ONLY the machine-owned values file and its render — the SAME
+          # form as bump-gitops-tag, so the two stay identical. -A stages a render
+          # that is new or deleted (the gitops stale-render gate needs it).
+          if [ -e "rendered/${PRODUCT}/prod.yaml" ] || git ls-files --error-unmatch "rendered/${PRODUCT}/prod.yaml" >/dev/null 2>&1; then
+            git add -A -- "values/${PRODUCT}/tags.prod.yaml" "rendered/${PRODUCT}/prod.yaml"
+          else
+            git add -A -- "values/${PRODUCT}/tags.prod.yaml"
+          fi
+          if git diff --cached --quiet; then
+            echo "::error title=release-promote::prod is already at ${TAG}; nothing to promote."
+            exit 1
+          fi
+          git commit -m "chore(${PRODUCT}): promote prod to ${TAG}"
+          # Auth for this one push, env-only: GIT_CONFIG_* applies to this git
+          # process (and its children) and writes nothing to .git/config, so the
+          # App token is never left at rest in the checkout.
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')" \
+            git push -u origin "$branch"
+          body=$(printf '%s\n' \
+            "Promotion is a reviewable diff. The images below already ran in dev; this changes which digest prod points at and builds nothing. Merging this PR is the approval; rollback is a revert." \
+            "" "## Release ${TAG}" "" "$changelog" \
+            "" "## Dev health (ArgoCD, at promote time)" "" "$DEV_HEALTH" \
+            "" "## Digests" "" '```json' "$DIGESTS" '```')
+          url=$(gh pr create --title "chore(${PRODUCT}): promote prod to ${TAG}" --body "$body")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "::notice::$url"
+
+      - name: Summarize
+        env:
+          URL: ${{ steps.pr.outputs.url }}
+        run: echo "### Promote → $URL" >> "$GITHUB_STEP_SUMMARY"

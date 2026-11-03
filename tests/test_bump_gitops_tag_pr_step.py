@@ -25,11 +25,15 @@ def step_script() -> str:
     return next(s for s in doc["runs"]["steps"] if s.get("id") == "pr")["run"]
 
 
-def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
+def run_step(tmp_path, *, env_name, tag, auto_merge="false", ls_files_exit=1, no_changes=None):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
-    for tool, out in (("git", ""), ("gh", 'case "$1 $2" in "pr create") echo https://example/pr/1;; esac')):
+    git_stub = (
+        'if [ "$1 $2" = "diff --cached" ]; then exit "${STUB_NO_CHANGES:-1}"; fi\n'
+        'if [ "$1 $2" = "ls-files --error-unmatch" ]; then exit "${STUB_LS_FILES_EXIT:-1}"; fi'
+    )
+    for tool, out in (("git", git_stub), ("gh", 'case "$1 $2" in "pr create") echo https://example/pr/1;; esac')):
         p = bindir / tool
         p.write_text(f'#!/usr/bin/env bash\necho "{tool} $*" >> "{log}"\n{out}\n', encoding="utf-8")
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
@@ -38,6 +42,8 @@ def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
     env = {
         "PATH": f"{bindir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out), "GH_TOKEN": "x", "PRODUCT": "rova",
         "ENV": env_name, "TAG": tag, "AUTO_MERGE": auto_merge,
+        "STUB_LS_FILES_EXIT": str(ls_files_exit),
+        "STUB_NO_CHANGES": "1" if no_changes is None else str(no_changes),
     }
     result = subprocess.run(["bash", "-c", step_script()], cwd=tmp_path, capture_output=True, text=True, env=env, timeout=30)
     return result, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -47,7 +53,7 @@ def test_dev_opens_a_bump_branch_with_a_chore_title_and_auto_merges(tmp_path):
     result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", auto_merge="true")
     assert result.returncode == 0, result.stderr
     assert "git checkout -b bump/rova-dev-sha-0123456789ab" in calls
-    assert "git add -A" in calls
+    assert any(c.startswith("git add -A -- values/rova/tags.dev.yaml") for c in calls)
     assert "git commit -m chore(rova): dev -> sha-0123456789ab" in calls
     assert "git push -u origin bump/rova-dev-sha-0123456789ab" in calls
     assert any(c.startswith("gh pr create --title chore(rova): dev -> sha-0123456789ab") for c in calls)
@@ -86,7 +92,6 @@ def real_repo(tmp_path):
     (work / "rendered/rova").mkdir(parents=True)
     (work / "scripts").mkdir()
     (work / "values/rova/tags.dev.yaml").write_text("services: {api: {image: {tag: old}}}\n")
-    (work / "rendered/rova/dev.yaml").write_text("tag: old\n")
     (work / "scripts/render.sh").write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/..\"\n"
         "grep -o 'tag: .*[a-z0-9]' values/rova/tags.dev.yaml | head -1 > /dev/null\n"
@@ -122,7 +127,7 @@ def test_render_step_runs_in_the_target_repo_and_the_pr_commit_carries_rendered(
     assert r.returncode == 0, r.stderr
     files = subprocess.run(["git", "--git-dir", str(origin), "show", "--name-only", "--format=", "bump/rova-dev-sha-new"],
                            capture_output=True, text=True, check=True).stdout.split()
-    assert sorted(files) == ["rendered/rova/brand-new.yaml", "rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+    assert sorted(files) == ["rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
 
 
 def test_render_step_is_conditional_and_pins_helm():
@@ -146,4 +151,40 @@ def test_commit_mode_commit_carries_rendered_too(tmp_path):
     assert r.returncode == 0, r.stderr
     files = subprocess.run(["git", "--git-dir", str(origin), "show", "--name-only", "--format=", "main"],
                            capture_output=True, text=True, check=True).stdout.split()
-    assert sorted(files) == ["rendered/rova/brand-new.yaml", "rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+    assert sorted(files) == ["rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+
+
+def test_gitops_checkout_persists_no_credentials_and_both_pushes_authenticate_env_only():
+    doc = yaml.safe_load(ACTION.read_text(encoding="utf-8"))
+    steps = doc["runs"]["steps"]
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))
+    assert checkout["with"].get("persist-credentials") is False
+    for name in ("Commit (dev)", "Open a pull request"):
+        step = next(s for s in steps if s.get("name") == name)
+        run = step["run"]
+        assert "GIT_CONFIG_COUNT=1" in run
+        assert 'GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"' in run
+        assert 'GIT_CONFIG_VALUE_0="AUTHORIZATION: basic' in run
+        assert "git config --local" not in run
+
+
+def test_dev_without_a_render_stages_only_the_tags_file(tmp_path):
+    result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", ls_files_exit=1)
+    assert result.returncode == 0, result.stderr
+    adds = [c for c in calls if c.startswith("git add ")]
+    assert adds == ["git add -A -- values/rova/tags.dev.yaml"]
+
+
+def test_nothing_staged_fails(tmp_path):
+    result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", no_changes=0)
+    assert result.returncode != 0
+    assert "nothing staged" in result.stdout + result.stderr
+    assert not any(c.startswith("git commit") for c in calls)
+
+
+def test_prod_with_auto_merge_is_refused(tmp_path):
+    result, calls = run_step(tmp_path, env_name="prod", tag="v1.2.3", auto_merge="true")
+    assert result.returncode != 0
+    assert "auto-merge is refused for prod" in result.stdout + result.stderr
+    assert not any(c.startswith("git checkout") for c in calls)
+    assert not any(c.startswith("gh pr merge") for c in calls)
