@@ -143,19 +143,40 @@ def test_the_scan_builds_locally_scans_and_only_then_pushes():
     steps, _ = build_push_steps()
     local_i, local = steps["Build for scan (local, nothing pushed)"]
     scan_i, scan = steps["Scan before push (CRITICAL blocks; nothing has been pushed yet)"]
-    push_i, push = steps["Build & push"]
+    push_i, push = steps["Push the scanned image"]
     assert local_i < scan_i < push_i
     w = local["with"]
     assert w["load"] is True and w["push"] is False
     assert w["provenance"] is False and w["sbom"] is False  # the Docker exporter cannot carry an index
-    assert "cache-to" not in w  # the local build must not write the cache
-    for key in ("context", "file", "target", "platforms", "cache-from"):
-        assert w[key] == push["with"][key], f"the scanned build must use the same {key} as the pushed one"
-    assert w["secrets"] == push["with"]["secrets"]
+    # This is now the only build on the scan path, so it also writes the cache and carries the labels the pushed image needs.
+    assert w["cache-to"] == "${{ steps.cache.outputs.to }}"
+    assert w["labels"] == "${{ inputs.labels }}"
+    for key in ("context", "file", "target", "platforms", "cache-from", "secrets"):
+        assert w[key] == steps["Build & push"][1]["with"][key], f"the scanned build must use the same {key} as the pushed one"
     assert ECR_REF.search(str(scan["with"]["image-ref"])) is None
     assert scan["with"]["exit-code"] == "1"
     for name in ("Build for scan (local, nothing pushed)", "Scan before push (CRITICAL blocks; nothing has been pushed yet)"):
         assert steps[name][1]["if"] == "${{ inputs.scan == 'true' }}"
+
+
+def test_the_scan_path_pushes_the_scanned_image_and_never_rebuilds_it():
+    """The bug this replaces: a second buildx build for the push, compared by diff_id. A cache miss rebuilt a layer and the
+    gate failed on a good image (qnsc-kb worker, 2026-11-03). The push must be `docker push` of the loaded, scanned image."""
+    steps, _ = build_push_steps()
+    tag_i, tag = steps["Tag the scanned image"]
+    push_i, push = steps["Push the scanned image"]
+    verify_i, _ = steps["Verify the pushed image has the scanned layers"]
+    build_i, _ = steps["Build & push"]
+    assert build_i > push_i, "the buildx build must not run on the scan path"
+    assert steps["Build & push"][1]["if"] == "${{ inputs.scan != 'true' }}"
+    assert tag_i < push_i < verify_i
+    assert tag["if"] == push["if"] == "${{ inputs.scan == 'true' }}"
+    assert "docker tag" in tag["run"] and tag["env"]["TAGS"] == "${{ steps.tags.outputs.tags }}"
+    assert 'docker push "$tag"' in push["run"]
+    assert "sha256:" in push["run"] and "digest=" in push["run"]
+    # No buildx, no rebuild: a second build-push-action on this path is exactly the regression.
+    for name in ("Tag the scanned image", "Push the scanned image"):
+        assert not (steps[name][1].get("uses") or "").startswith("docker/build-push-action")
 
 
 def test_the_pushed_build_keeps_its_attestations_and_cache_write_rule():
@@ -184,12 +205,21 @@ def test_the_scan_input_check_runs_before_anything_reads_it():
 def test_a_multi_platform_scan_is_refused_up_front():
     steps, _ = build_push_steps()
     run = steps["Check the scan can run"][1]["run"]
-    assert run_snippet(run, PLATFORMS="linux/arm64").returncode == 0
-    assert run_snippet(run, PLATFORMS="").returncode == 0  # empty = the runner's own platform
+    assert run_snippet(run, PLATFORMS="linux/arm64", PUSH_BY_DIGEST="false").returncode == 0
+    assert run_snippet(run, PLATFORMS="", PUSH_BY_DIGEST="false").returncode == 0  # empty = the runner's own platform
     for many in ("linux/amd64,linux/arm64", "linux/amd64 linux/arm64", "linux/amd64, linux/arm64"):
-        result = run_snippet(run, PLATFORMS=many)
+        result = run_snippet(run, PLATFORMS=many, PUSH_BY_DIGEST="false")
         assert result.returncode != 0, f"platforms={many!r} must be refused"
         assert "needs a single platform" in result.stdout
+
+
+def test_a_by_digest_push_cannot_be_combined_with_the_scan():
+    """The scanned image is pushed with `docker push`, which needs a tag; push-by-digest publishes an untagged image."""
+    steps, _ = build_push_steps()
+    run = steps["Check the scan can run"][1]["run"]
+    result = run_snippet(run, PLATFORMS="linux/amd64", PUSH_BY_DIGEST="true")
+    assert result.returncode != 0
+    assert "cannot be combined with push-by-digest" in result.stdout
 
 
 def test_free_disk_runs_only_under_scan_and_reports_df_to_the_summary():
@@ -200,20 +230,24 @@ def test_free_disk_runs_only_under_scan_and_reports_df_to_the_summary():
     assert "GITHUB_STEP_SUMMARY" in step["run"] and "df -h" in step["run"]
 
 
-def test_the_scanned_layers_are_recorded_then_the_scan_image_is_dropped_before_the_push():
+def test_the_scanned_layers_are_recorded_before_the_push_and_the_image_is_dropped_after_it():
     steps, _ = build_push_steps()
-    record_i, record = steps["Record the scanned layers, then drop the scan image"]
-    push_i, _ = steps["Build & push"]
+    record_i, record = steps["Record the scanned layers"]
+    push_i, _ = steps["Push the scanned image"]
     scan_i, _ = steps["Scan before push (CRITICAL blocks; nothing has been pushed yet)"]
-    assert scan_i < record_i < push_i
-    assert record["if"] == "${{ inputs.scan == 'true' }}"
-    assert "{{json .RootFS.Layers}}" in record["run"] and "docker image rm" in record["run"]
+    drop_i, drop = steps["Drop the pushed image from the runner"]
+    assert scan_i < record_i < push_i < drop_i
+    assert record["if"] == drop["if"] == "${{ inputs.scan == 'true' }}"
+    assert "{{json .RootFS.Layers}}" in record["run"]
+    # The image must NOT be removed before the push any more: it IS the image being pushed.
+    assert "docker image rm" not in record["run"]
+    assert "docker image rm" in drop["run"]
 
 
 def test_the_pushed_image_must_have_the_scanned_layers_before_anything_downstream():
     steps, action = build_push_steps()
     verify_i, verify = steps["Verify the pushed image has the scanned layers"]
-    push_i, _ = steps["Build & push"]
+    push_i, _ = steps["Push the scanned image"]
     expose_i, _ = steps["Expose image URI and digest"]
     assert push_i < verify_i < expose_i
     assert verify["if"] == "${{ inputs.scan == 'true' }}"
@@ -230,12 +264,52 @@ def test_trivy_keeps_its_cache_out_of_the_build_context():
     assert "github.workspace" not in str(scan["with"]["cache-dir"])
 
 
+def test_the_scan_path_attests_the_pushed_digest():
+    """The scan path pushes the local image, so the buildx attestations are gone. They must come back as GitHub attestations
+    on the PUSHED DIGEST: provenance, and an SBOM of that same image, both not a rebuild or a pull."""
+    steps, _ = build_push_steps()
+    push_i, _ = steps["Push the scanned image"]
+    verify_i, _ = steps["Verify the pushed image has the scanned layers"]
+    prov_i, prov = steps["Attest the pushed image's build provenance"]
+    sbom_i, sbom = steps["Generate an SBOM for the pushed image"]
+    attest_i, attest = steps["Attest the pushed image's SBOM"]
+    drop_i, _ = steps["Drop the pushed image from the runner"]
+    assert push_i < verify_i < prov_i < sbom_i < attest_i < drop_i
+    assert prov["uses"].startswith("actions/attest-build-provenance@")
+    assert attest["uses"].startswith("actions/attest-sbom@")
+    assert sbom["uses"].startswith("anchore/sbom-action@")
+    for step in (prov, attest):
+        assert step["with"]["subject-digest"] == "${{ steps.build.outputs.digest }}"
+        assert step["with"]["subject-name"] == "${{ inputs.ecr-registry }}/${{ inputs.image-name }}"
+        assert step["if"] == "${{ inputs.scan == 'true' }}"
+    assert attest["with"]["sbom-path"] == "${{ runner.temp }}/sbom.spdx.json"
+    assert sbom["with"]["output-file"] == "${{ runner.temp }}/sbom.spdx.json"
+    # syft reads the local copy; the image must not be dropped before it runs, and nothing must pull it back from the registry.
+    assert sbom["with"]["image"] == "ecr-prepush-scan/${{ inputs.image-name }}:scan"
+    assert sbom["with"]["upload-artifact"] is False and sbom["with"]["upload-release-assets"] is False
+
+
+def test_registry_cache_is_refused_with_the_scan():
+    """A registry cache is written DURING the build, before the gates: a rejected image would still leave layers in GHCR."""
+    steps, _ = build_push_steps()
+    run = steps["Resolve cache backend"][1]["run"]
+    env = {"BACKEND": "registry", "SCAN": "true", "SCOPE": "s", "REGISTRY": "ghcr.io/o", "IMAGE": "i",
+           "REF": "refs/heads/main", "DEFAULT_BRANCH": "main"}
+    result = run_snippet(run, GITHUB_OUTPUT=os.devnull, GITHUB_STEP_SUMMARY=os.devnull, **env)
+    assert result.returncode != 0
+    assert "registry cannot be used with scan: true" in result.stdout
+    # gha (the default) and none stay allowed, and registry stays allowed without the scan.
+    for ok in ({"BACKEND": "gha", "SCAN": "true"}, {"BACKEND": "none", "SCAN": "true"}, {"BACKEND": "registry", "SCAN": "false"}):
+        result = run_snippet(run, GITHUB_OUTPUT=os.devnull, GITHUB_STEP_SUMMARY=os.devnull, **{**env, **ok})
+        assert result.returncode == 0, (ok, result.stdout)
+
+
 def test_the_build_context_is_checked_between_the_scan_and_the_push():
     steps, _ = build_push_steps()
     record_i, record = steps["Record the build context"]
     scan_i, _ = steps["Scan before push (CRITICAL blocks; nothing has been pushed yet)"]
     check_i, check = steps["Check nothing wrote into the build context (the push would ship it)"]
-    push_i, _ = steps["Build & push"]
+    push_i, _ = steps["Push the scanned image"]
     assert record_i < scan_i < check_i < push_i
     assert record["if"] == check["if"] == "${{ inputs.scan == 'true' }}"
 

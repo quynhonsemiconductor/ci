@@ -15,8 +15,9 @@
 #     must not fight this workflow for one scope).
 #   - Scan BEFORE push, and the scan covers vulns AND secrets: the packages
 #     are PUBLIC, so a failed scan must leave nothing in the registry. The
-#     composite's pre-push scan (build-push-ecr `scan: true`) builds locally,
-#     scans, then verifies the pushed layers equal the scanned ones. Gate
+#     composite's pre-push scan (build-push-ecr `scan: true`) builds once,
+#     scans the local image and pushes THAT image (`docker push`, no rebuild),
+#     then checks the registry's manifest carries the scanned layers. Gate
 #     policy = the ECR path's: CRITICAL fixable vulns block, HIGH vulns are
 #     reported only, and ANY secret blocks.
 #   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
@@ -28,8 +29,10 @@
 #     the inherited set, they do not add to it — see k8s-deploy.yml).
 #   - org.opencontainers.image.source labels the image with the CALLING repo, so
 #     GHCR links each package to that repo's page.
-#   - No attestation for now. §11.1 defers Cosign/Sigstore on the on-prem path;
-#     the ECS path keeps its attestation unchanged.
+#   - Provenance + SBOM are GitHub attestations on the PUSHED DIGEST (the scan
+#     path's composite attests it), which is why this workflow, and every caller,
+#     grants `id-token: write` and `attestations: write`. No Cosign/Sigstore yet
+#     (§11.1 defers it); verify with `gh attestation verify`.
 #
 # Concurrency: one run per product at a time, no cancellation. A run started by
 # push A that is still building when push B arrives finishes and pushes
@@ -92,6 +95,11 @@ on:
 permissions:
   contents: read
   packages: write
+  # The scan path attests the pushed digest (actions/attest-build-provenance + attest-sbom): both need an OIDC token and
+  # permission to write to the repo's attestation store. A CALLER MUST GRANT THESE TOO — a reusable workflow's job
+  # permissions are capped by its caller's.
+  id-token: write
+  attestations: write
 
 concurrency:
   group: ghcr-publish-${{ inputs.product }}
@@ -115,6 +123,9 @@ jobs:
       # from GitHub Packages with this same token, and the push below needs
       # packages: write — one grant covers both.
       packages: write
+      # Attesting the pushed digest (see the `scan` input of build-push-ecr).
+      id-token: write
+      attestations: write
     strategy:
       # One image per service, matching the ECR convention: <product>-<service>,
       # one Dockerfile stage per service, `build-target: <service>` (k8s-deploy.yml
