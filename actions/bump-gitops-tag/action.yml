@@ -196,7 +196,12 @@ runs:
         set -euo pipefail
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
-        git add -A
+        # Stage ONLY the machine-owned values file and its render. `git add -A`
+        # would put unrelated work in a bot commit — and on dev that breaks the
+        # gitops bot-scope rule the auto-merge depends on.
+        files=("values/${PRODUCT}/tags.${ENV}.yaml")
+        [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] && files+=("rendered/${PRODUCT}/${ENV}.yaml")
+        git add -- "${files[@]}"
         git commit -m "chore(${PRODUCT}): ${ENV} -> ${TAG}"
         # Rebase rather than merge: two products bumping concurrently is normal,
         # and a merge commit per deploy makes the promotion diff unreadable.
@@ -232,7 +237,11 @@ runs:
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
         git checkout -b "$branch"
-        git add -A
+        # Stage ONLY the machine-owned values file and its render (see the commit
+        # step): a promotion PR must stay a three-line diff.
+        files=("values/${PRODUCT}/tags.${ENV}.yaml")
+        [ -e "rendered/${PRODUCT}/${ENV}.yaml" ] && files+=("rendered/${PRODUCT}/${ENV}.yaml")
+        git add -- "${files[@]}"
         git commit -m "$title"
         git push -u origin "$branch"
         if [ "$ENV" = "prod" ]; then

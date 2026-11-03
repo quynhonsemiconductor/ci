@@ -47,7 +47,7 @@ def test_dev_opens_a_bump_branch_with_a_chore_title_and_auto_merges(tmp_path):
     result, calls = run_step(tmp_path, env_name="dev", tag="sha-0123456789ab", auto_merge="true")
     assert result.returncode == 0, result.stderr
     assert "git checkout -b bump/rova-dev-sha-0123456789ab" in calls
-    assert "git add -A" in calls
+    assert any(c.startswith("git add -- values/rova/tags.dev.yaml") for c in calls)
     assert "git commit -m chore(rova): dev -> sha-0123456789ab" in calls
     assert "git push -u origin bump/rova-dev-sha-0123456789ab" in calls
     assert any(c.startswith("gh pr create --title chore(rova): dev -> sha-0123456789ab") for c in calls)
@@ -122,7 +122,7 @@ def test_render_step_runs_in_the_target_repo_and_the_pr_commit_carries_rendered(
     assert r.returncode == 0, r.stderr
     files = subprocess.run(["git", "--git-dir", str(origin), "show", "--name-only", "--format=", "bump/rova-dev-sha-new"],
                            capture_output=True, text=True, check=True).stdout.split()
-    assert sorted(files) == ["rendered/rova/brand-new.yaml", "rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+    assert sorted(files) == ["rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
 
 
 def test_render_step_is_conditional_and_pins_helm():
@@ -146,4 +146,4 @@ def test_commit_mode_commit_carries_rendered_too(tmp_path):
     assert r.returncode == 0, r.stderr
     files = subprocess.run(["git", "--git-dir", str(origin), "show", "--name-only", "--format=", "main"],
                            capture_output=True, text=True, check=True).stdout.split()
-    assert sorted(files) == ["rendered/rova/brand-new.yaml", "rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+    assert sorted(files) == ["rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]

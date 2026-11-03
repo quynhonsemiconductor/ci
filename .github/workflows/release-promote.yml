@@ -107,6 +107,36 @@ jobs:
     outputs:
       pr-url: ${{ steps.pr.outputs.url }}
     steps:
+      - name: Validate the promote inputs
+        env:
+          PRODUCT: ${{ inputs.gitops-product || inputs.product }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          # Both become a filesystem path and a git branch name below. Validate
+          # HERE, not after either is built.
+          [[ "$PRODUCT" =~ ^[a-z0-9-]+$ ]] || { echo "::error title=release-promote::invalid gitops-product '$PRODUCT' (expected a slug like rova)"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error title=release-promote::invalid release tag '$TAG' (expected vX.Y.Z)"; exit 1; }
+
+      # The release body is read with the JOB token (contents: read on the calling
+      # repo). The app token below is scoped to gitops and cannot read this repo's
+      # releases; using it here is why the changelog used to be "not supplied".
+      - name: Read the release notes
+        id: notes
+        if: ${{ inputs.changelog == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          [ -n "$body" ] || { echo "::error title=release-promote::release $TAG has an empty body"; exit 1; }
+          {
+            echo "changelog<<__QC_EOF__"
+            echo "$body"
+            echo "__QC_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
@@ -117,6 +147,9 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
+      # persist-credentials stays false (zizmor artipacked): the token would
+      # otherwise be written into .git/config and travel with any artifact. The
+      # PR step sets the same extraheader for exactly the one push it makes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: quynhonsemiconductor/gitops
@@ -164,13 +197,15 @@ jobs:
         working-directory: .gitops
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          GIT_TOKEN: ${{ steps.app.outputs.token }}
           PRODUCT: ${{ inputs.gitops-product || inputs.product }}
           TAG: ${{ inputs.release-tag }}
-          CHANGELOG: ${{ inputs.changelog }}
+          CHANGELOG: ${{ inputs.changelog || steps.notes.outputs.changelog }}
           DEV_HEALTH: ${{ inputs.dev-health }}
           DIGESTS: ${{ needs.retag.outputs.digests }}
         run: |
           set -euo pipefail
+          [[ "$PRODUCT" =~ ^[a-z0-9-]+$ ]] || { echo "::error title=release-promote::invalid gitops-product '$PRODUCT'"; exit 1; }
           branch="promote/${PRODUCT}-${TAG}"
           existing=$(gh pr list --head "$branch" --json url --jq '.[0].url // ""')
           if [ -n "$existing" ]; then
@@ -178,21 +213,35 @@ jobs:
             echo "::notice::promotion PR already open: $existing"
             exit 0
           fi
-          changelog="$CHANGELOG"
-          if [ -z "$changelog" ]; then
-            changelog=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || true)
+          # The PR check does not cover a branch left behind by a failed earlier
+          # run. Creating it again would either force-push over that state or fail
+          # with git's own message; fail clearly instead.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::error title=release-promote::branch $branch exists on gitops but no PR was found. Delete it (or re-run after cleanup) rather than repointing a promotion."
+            exit 1
           fi
-          [ -n "$changelog" ] || changelog="Not supplied by the caller and no GitHub release body found."
+          changelog="$CHANGELOG"
+          [ -n "$changelog" ] || { echo "::error title=release-promote::no changelog supplied or found for $TAG"; exit 1; }
           [ -n "$DEV_HEALTH" ] || DEV_HEALTH="Not supplied by the caller."
           git config user.name  "qnsc-ci"
           git config user.email "ci@qnsc.vn"
           git checkout -b "$branch"
-          git add -A
+          # Stage ONLY the machine-owned values file and its render. `git add -A`
+          # would let the bot-scope gate see unrelated work, and a promotion PR is
+          # supposed to be a three-line diff.
+          files=("values/${PRODUCT}/tags.prod.yaml")
+          [ -e "rendered/${PRODUCT}/prod.yaml" ] && files+=("rendered/${PRODUCT}/prod.yaml")
+          git add -- "${files[@]}"
           if git diff --cached --quiet; then
             echo "::error title=release-promote::prod is already at ${TAG}; nothing to promote."
             exit 1
           fi
           git commit -m "chore(${PRODUCT}): promote prod to ${TAG}"
+          # Auth for this one push without persisting the token: the same
+          # AUTHORIZATION header actions/checkout would have written into
+          # .git/config, scoped to this process' git config only.
+          git config --local "http.https://github.com/.extraheader" \
+            "AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')"
           git push -u origin "$branch"
           body=$(printf '%s\n' \
             "Promotion is a reviewable diff. The images below already ran in dev; this changes which digest prod points at and builds nothing. Merging this PR is the approval; rollback is a revert." \
