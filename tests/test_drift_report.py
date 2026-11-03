@@ -6,6 +6,8 @@ import sys
 import unittest
 
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "actions", "destructive-guard")
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+AI_CONTROLS_EDGE = os.path.join(FIXTURES, "infra-edge-drift-ai-controls-2026-11-03.json")
 
 
 def drift(address, rtype, actions, before=None, after=None):
@@ -101,6 +103,45 @@ class DriftReport(unittest.TestCase):
     def test_significant_wins_over_informational(self):
         code, _ = run([drift("a.b", "aws_sns_topic", ["update"]), drift("cloudflare_record.c", "cloudflare_record", ["update"])])
         self.assertEqual(code, 2)
+
+    def test_the_2026_11_03_edge_ai_controls_drift_is_informational(self):
+        """The real plan of infra drift run 41594029415 (edge): the MCP server re-probed and reported a new error string.
+        It went to "MATTERS" because the type is protected, and made the nightly red for nothing."""
+        with open(AI_CONTROLS_EDGE, encoding="utf-8") as fh:
+            code, out = run(raw=fh.read())
+        self.assertEqual(code, 3, out)
+        self.assertIn("informational", out)
+        self.assertNotIn("MATTERS", out)
+
+    def test_every_provider_computed_ai_controls_field_is_noise_on_both_types(self):
+        # The catalogue and the sync state are written by Cloudflare's probe, not by the configuration.
+        fields = {
+            "error": ("Server error: HTTP 404", "Unable to connect to server"),
+            "error_details": ({"cause": "a", "is_upstream": True}, {"cause": "b", "is_upstream": False}),
+            "last_synced": ("2026-11-03T06:11:01Z", "2026-11-03T06:22:15Z"),
+            "last_successful_sync": ("2026-11-02T22:05:11Z", "2026-11-03T06:22:15Z"),
+            "authentication_status": ("ready", "pending"),
+            "tools": ([{"name": "search"}], [{"name": "search"}, {"name": "fetch"}]),
+            "prompts": ([], [{"name": "summarise"}]),
+            "auth_config_summary": ("OAuth discovery succeeded", "OAuth discovery failed"),
+        }
+        for rtype in ("cloudflare_zero_trust_access_ai_controls_mcp_server",
+                      "cloudflare_zero_trust_access_ai_controls_mcp_portal"):
+            for field, (before, after) in fields.items():
+                with self.subTest(rtype=rtype, field=field):
+                    code, out = run([drift("x.y[0]", rtype, ["update"], {field: before}, {field: after})])
+                    self.assertEqual(code, 3, out)
+
+    def test_a_real_ai_controls_change_still_matters(self):
+        # What the configuration manages: where the server is, how it authenticates, and whether it acts on behalf.
+        for field, before, after in (("hostname", "a.example.com", "b.example.com"),
+                                     ("auth_type", "oauth", "service_auth"),
+                                     ("on_behalf", False, True)):
+            with self.subTest(field=field):
+                code, out = run([drift("x.y[0]", "cloudflare_zero_trust_access_ai_controls_mcp_server", ["update"],
+                                       {field: before, "error": "e1"}, {field: after, "error": "e2"})])
+                self.assertEqual(code, 2, out)
+                self.assertIn(field, out)
 
     def test_noop_entries_are_ignored(self):
         self.assertEqual(run([drift("a.b", "aws_sns_topic", ["no-op"]), drift("c.d", "aws_sns_topic", [])])[0], 0)

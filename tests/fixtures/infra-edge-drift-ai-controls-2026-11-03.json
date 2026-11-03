@@ -1,0 +1,86 @@
+{
+  "format_version": "1.2",
+  "resource_drift": [
+    {
+      "address": "cloudflare_zero_trust_access_ai_controls_mcp_server.rova_prod[0]",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_ai_controls_mcp_server",
+      "name": "rova_prod",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "rova-prod",
+          "hostname": "mcp.example.com",
+          "auth_type": "oauth",
+          "on_behalf": false,
+          "error": "Server error: HTTP 404",
+          "error_details": {
+            "cause": "Error POSTing to endpoint: ",
+            "is_upstream": true
+          },
+          "last_synced": "2026-11-03T06:11:01Z",
+          "last_successful_sync": "2026-11-02T22:05:11Z",
+          "authentication_status": "ready",
+          "tools": [
+            {"name": "search", "description": "Search the knowledge base"},
+            {"name": "fetch", "description": "Fetch a document by id"}
+          ],
+          "prompts": [],
+          "auth_config_summary": "OAuth discovery succeeded"
+        },
+        "after": {
+          "id": "rova-prod",
+          "hostname": "mcp.example.com",
+          "auth_type": "oauth",
+          "on_behalf": false,
+          "error": "Unable to connect to server | {\"error\":\"MCP requires a Cloudflare Access bearer token\"}",
+          "error_details": {
+            "cause": "Version negotiation probe failed: Server rejected replacement authorization token",
+            "is_upstream": false
+          },
+          "last_synced": "2026-11-03T06:22:15Z",
+          "last_successful_sync": "2026-11-03T06:22:15Z",
+          "authentication_status": "ready",
+          "tools": [
+            {"name": "search", "description": "Search the knowledge base"}
+          ],
+          "prompts": [],
+          "auth_config_summary": "OAuth discovery succeeded"
+        }
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_ai_controls_mcp_portal.qnsc[0]",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_ai_controls_mcp_portal",
+      "name": "qnsc",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "qnsc",
+          "name": "QNSC",
+          "authentication_status": "ready",
+          "last_synced": "2026-11-03T06:11:01Z",
+          "last_successful_sync": "2026-11-02T22:05:11Z",
+          "error": null,
+          "error_details": null,
+          "tools": [{"name": "search"}],
+          "prompts": [],
+          "auth_config_summary": "OAuth discovery succeeded"
+        },
+        "after": {
+          "id": "qnsc",
+          "name": "QNSC",
+          "authentication_status": "pending",
+          "last_synced": "2026-11-03T06:22:15Z",
+          "last_successful_sync": "2026-11-03T06:22:15Z",
+          "error": "Server error: HTTP 504",
+          "error_details": {"cause": "timeout", "is_upstream": true},
+          "tools": [],
+          "prompts": [],
+          "auth_config_summary": "OAuth discovery failed"
+        }
+      }
+    }
+  ]
+}

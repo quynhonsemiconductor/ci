@@ -38,9 +38,25 @@ from destructive_guard import is_protected  # noqa: E402  (same directory)
 # NARROW, PER TYPE. A name that is computed on one resource can be the whole point of another (`hostname` is what a
 # cloudflare_custom_hostname IS), so nothing is ignored for "every cloudflare_*" except timestamps.
 CLOUDFLARE_TIMESTAMPS = frozenset({"created_on", "modified_on", "created_at", "modified_at", "updated_at"})
+# The Access AI-controls pair (MCP server and portal) SYNC from the MCP endpoint: Cloudflare writes the health and the
+# discovered catalogue itself, so a refresh-only plan reports a change every time the probe result moves. What the
+# configuration manages on these resources is the server identity and its access policy (hostname, auth_type, on_behalf,
+# the portal's servers list), and a change to any of those still matters.
+AI_CONTROLS_COMPUTED = frozenset({
+    "error",                # the provider's last connect error, e.g. "Server error: HTTP 404" -> "Unable to connect ..."
+    "error_details",        # the same, structured (cause, is_upstream)
+    "last_synced",          # when Cloudflare last probed the server
+    "last_successful_sync",
+    "authentication_status",
+    "tools",                # the MCP tool catalogue, discovered
+    "prompts",              # discovered
+    "auth_config_summary",  # computed from auth_type/on_behalf
+})
 CLOUDFLARE_COMPUTED_BY_TYPE = {
     "cloudflare_record": frozenset({"proxiable", "metadata", "zone_name"}),
     "cloudflare_r2_custom_domain": frozenset({"zone_name"}),
+    "cloudflare_zero_trust_access_ai_controls_mcp_server": AI_CONTROLS_COMPUTED,
+    "cloudflare_zero_trust_access_ai_controls_mcp_portal": AI_CONTROLS_COMPUTED,
 }
 # `status` is a lifecycle, not a constant: it is noise only while it is ARRIVING at "active" (a custom domain finishing
 # activation: ownership pending -> active, ssl initializing -> active). Anything LEAVING active, or arriving anywhere else
