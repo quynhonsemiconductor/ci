@@ -1,13 +1,16 @@
 name: platform-conformance
 
-# Every contract that crosses a repository boundary, checked in one place.
+# The two contracts that still cross a repository boundary, checked in one place:
+# a rendered manifest's secret reference vs its creator (gitops), and a live
+# stack's module source vs a real tf-modules tag (infra → tf-modules).
 #
 # This is the only workflow that checks out MORE THAN ONE repository, and that is
 # the whole reason it exists: the bugs it catches are invisible to any check that
 # sees one repo at a time. terraform validate, helm lint and helm unittest all
 # pass on every one of them, because each file is individually valid.
 #
-# §17 retires `stack_conformance.py` with the ECS estate. This is what takes over.
+# The ECS-era `size`, `services` (IRSA) and `remote-state` contracts, and the
+# retired stack_conformance workflow, went with the per-product AWS stacks.
 
 on:
   schedule:
