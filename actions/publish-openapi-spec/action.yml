@@ -1,22 +1,11 @@
 name: Publish OpenAPI Spec
 description: >
-  Upload the generated OpenAPI spec as a GitHub Actions artifact and optionally
-  push it to an S3 bucket for cross-repo access.
+  Upload the generated OpenAPI spec as a GitHub Actions artifact, for the
+  same-run contract check (`validate-openapi-contract`) and the web repo's
+  codegen step.
 
-  This implements the OpenAPI-first contract workflow described in ARCHITECTURE_CURRENT.md §3.2:
-    the API repo's CI generates the spec → publishes it here →
-    the web repo's CI downloads it → runs openapi-typescript/Orval codegen →
-    a breaking API change becomes a FE build failure, not a production surprise.
-
-  Two delivery mechanisms (use both for full coverage):
-  1. **GitHub artifact** — available within the same workflow run. Use in the
-     same-run job for contract validation (`validate-openapi-contract` action).
-  2. **S3 upload** — durable, cross-repo accessible. The web repo's CI downloads
-     the base branch spec from S3 before running codegen and contract diff.
-
-  S3 key convention (enforced by this action):
-    openapi/{environment}/{git-ref}/openapi.json   ← immutable, per-build
-    openapi/{environment}/latest/openapi.json      ← mutable pointer, for FE codegen
+  The former S3 path was AWS-era: no caller ever set `s3-upload`, and the AWS
+  account is closed. Artifact only.
 
 inputs:
   spec-path:
@@ -31,36 +20,11 @@ inputs:
     description: Number of days to retain the GitHub artifact
     required: false
     default: '30'
-  s3-upload:
-    description: Upload the spec to S3 as well (requires AWS credentials)
-    required: false
-    default: 'false'
-  s3-bucket:
-    description: S3 bucket name (e.g. qnsc-artifacts)
-    required: false
-    default: ''
-  s3-environment:
-    description: Environment label used in the S3 key path (e.g. develop, production)
-    required: false
-    default: develop
-  s3-prefix:
-    description: >
-      Optional prefix override for the S3 key.
-      Default convention: `openapi/{s3-environment}/{git-sha}/openapi.json`
-    required: false
-    default: ''
-  region:
-    description: AWS region (required when s3-upload is true)
-    required: false
-    default: ap-southeast-1
 
 outputs:
   artifact-name:
     description: Name of the uploaded GitHub artifact
     value: ${{ steps.upload.outputs.artifact-name }}
-  s3-key:
-    description: S3 object key of the uploaded spec (populated when s3-upload is true)
-    value: ${{ steps.s3-upload.outputs.s3-key }}
 
 runs:
   using: composite
@@ -89,41 +53,3 @@ runs:
         if-no-files-found: error
       env:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
-
-    - name: Upload to S3
-      id: s3-upload
-      if: inputs.s3-upload == 'true'
-      shell: bash
-      env:
-        BUCKET: ${{ inputs.s3-bucket }}
-        ENV: ${{ inputs.s3-environment }}
-        SHA: ${{ github.sha }}
-        PREFIX_INPUT: ${{ inputs.s3-prefix }}
-        SPEC_PATH: ${{ inputs.spec-path }}
-        REGION: ${{ inputs.region }}
-      run: |
-        PREFIX="$PREFIX_INPUT"
-
-        if [ -z "$PREFIX" ]; then
-          PREFIX="openapi/${ENV}/${SHA}"
-        fi
-
-        KEY="${PREFIX}/openapi.json"
-        LATEST_KEY="openapi/${ENV}/latest/openapi.json"
-
-        echo "Uploading to s3://$BUCKET/$KEY"
-        aws s3 cp "$SPEC_PATH" "s3://${BUCKET}/${KEY}" \
-          --region "$REGION" \
-          --cache-control "no-cache, max-age=0" \
-          --content-type "application/json"
-
-        echo "Updating latest pointer: s3://$BUCKET/$LATEST_KEY"
-        aws s3 cp "$SPEC_PATH" "s3://${BUCKET}/${LATEST_KEY}" \
-          --region "$REGION" \
-          --cache-control "no-cache, max-age=0" \
-          --content-type "application/json"
-
-        echo "s3-key=$KEY" >> "$GITHUB_OUTPUT"
-        echo "✓ Spec published to S3"
-        echo "  immutable: s3://${BUCKET}/${KEY}"
-        echo "  latest:    s3://${BUCKET}/${LATEST_KEY}"

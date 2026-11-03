@@ -34,7 +34,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 ### API Contract
 | Action | Description |
 |---|---|
-| [`publish-openapi-spec`](actions/publish-openapi-spec/action.yml) | Upload generated spec as artifact + optionally to S3 for cross-repo codegen |
+| [`publish-openapi-spec`](actions/publish-openapi-spec/action.yml) | Upload the generated spec as a GitHub artifact for the contract check and FE codegen |
 | [`validate-openapi-contract`](actions/validate-openapi-contract/action.yml) | oasdiff breaking-change detection between two OpenAPI specs |
 | [`fetch-openapi-base-spec`](actions/fetch-openapi-base-spec/action.yml) | Download the OpenAPI spec of a pull request's base commit (or its nearest ancestor), failing rather than skipping when it is missing |
 
@@ -355,19 +355,10 @@ jobs:
 | `spec-path` | `openapi.json` | Path to the generated spec |
 | `artifact-name` | `openapi-spec` | GitHub artifact name |
 | `retention-days` | `30` | Artifact retention in days |
-| `s3-upload` | `false` | Also upload to S3 |
-| `s3-bucket` | `` | S3 bucket (required when `s3-upload: true`) |
-| `s3-environment` | `develop` | Env label for the S3 key path |
-| `region` | `ap-southeast-1` | AWS region (for S3) |
 
 | Output | Description |
 |---|---|
 | `artifact-name` | Uploaded GitHub artifact name |
-| `s3-key` | S3 key of the immutable copy (when `s3-upload: true`) |
-
-S3 key convention:
-- `openapi/{env}/{git-sha}/openapi.json` — immutable per-build copy
-- `openapi/{env}/latest/openapi.json` — mutable latest pointer (for FE codegen)
 
 ---
 
