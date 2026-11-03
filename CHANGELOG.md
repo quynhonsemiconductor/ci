@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.31.0](https://github.com/quynhonsemiconductor/ci/compare/v1.30.0...v1.31.0) (2026-11-03)
+
+
+### Features
+
+* **bump-gitops-tag:** dev bump as a pull request with optional auto-merge ([#277](https://github.com/quynhonsemiconductor/ci/issues/277)) ([91c6d37](https://github.com/quynhonsemiconductor/ci/commit/91c6d37495ece118b0a02f3f258e95b92e679683))
+* **bump-gitops-tag:** re-render the target repo and commit rendered/ with the tags ([#280](https://github.com/quynhonsemiconductor/ci/issues/280)) ([f626372](https://github.com/quynhonsemiconductor/ci/commit/f6263728ef7b9d7ffd4b376f95a4ae428d91ef20))
+* **bump-gitops-tag:** write image digests next to the tag ([#275](https://github.com/quynhonsemiconductor/ci/issues/275)) ([5afdeb8](https://github.com/quynhonsemiconductor/ci/commit/5afdeb84f1e64b2c13c5c1c6c91422e6606e369a))
+
+
+### Bug Fixes
+
+* **bump-gitops-tag:** conventional title for the prod promote PR ([#281](https://github.com/quynhonsemiconductor/ci/issues/281)) ([db42e37](https://github.com/quynhonsemiconductor/ci/commit/db42e37e2f62255b27dadd301d585d8edac1c62b))
+
 ## [1.30.0](https://github.com/quynhonsemiconductor/ci/compare/v1.29.0...v1.30.0) (2026-10-31)
 
 
