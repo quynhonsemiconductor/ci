@@ -5,24 +5,21 @@
 # The on-prem delivery path (ONPREM-PLAN §11.1, "Build" row): every product
 # image is published to ghcr.io/quynhonsemiconductor/<product>-<service> with
 # the immutable identity tag sha-<commit>, which the gitops manifests pin. This
-# is the only image build since the AWS exit (2026-11-02): the ECR deploy
-# pipelines (backend-deploy.yml, k8s-deploy.yml) are gone.
+# is the only image build since the AWS exit (2026-11-02); the old ECR deploy
+# pipelines are gone.
 #
-# Differences from the ECR path, and why:
-#   - linux/amd64 only. The k3s host is amd64; ECS keeps pulling the arm64 entry
-#     of the ECR images, so this workflow does not rebuild for it. The GHA cache
-#     scope is suffixed -amd64 for the same reason (k8s-deploy builds arm64 and
-#     must not fight this workflow for one scope).
+# Choices, and why:
+#   - linux/amd64 only. The k3s host is amd64. The GHA cache scope is suffixed
+#     -amd64 so another platform's build cannot fight this workflow for one scope.
 #   - Scan BEFORE push, and the scan covers vulns AND secrets: the packages
 #     are PUBLIC, so a failed scan must leave nothing in the registry. The
-#     composite's pre-push scan (build-push-ecr `scan: true`) builds once,
-#     scans the local image and pushes THAT image (`docker push`, no rebuild),
-#     then checks the registry's manifest carries the scanned layers. Gate
-#     policy = the ECR path's: CRITICAL fixable vulns block, HIGH vulns are
-#     reported only, and ANY secret blocks.
+#     composite's pre-push scan (`scan: true`) builds once, scans the local image
+#     and pushes THAT image (`docker push`, no rebuild), then checks the
+#     registry's manifest carries the scanned layers. Gate policy: CRITICAL
+#     fixable vulns block, HIGH vulns are reported only, and ANY secret blocks.
 #   - `ignore-unfixed: true` means only vulnerabilities WITH an available fix
-#     gate the push — unfixed ones are reported, not fatal. Same bar as the ECR
-#     path for vulns; the secret scan has no such concept and always gates.
+#     gate the push — unfixed ones are reported, not fatal; the secret scan has
+#     no such concept and always gates.
 #   - GITHUB_TOKEN with packages: write. No AWS OIDC, no IAM role — GHCR auth
 #     comes from the calling repo's token, so the caller must grant
 #     `packages: write` (a job-level grant: workflow-level permissions REPLACE
@@ -123,13 +120,13 @@ jobs:
       # from GitHub Packages with this same token, and the push below needs
       # packages: write — one grant covers both.
       packages: write
-      # Attesting the pushed digest (see the `scan` input of build-push-ecr).
+      # Attesting the pushed digest (see the `scan` input of build-push-image).
       id-token: write
       attestations: write
     strategy:
-      # One image per service, matching the ECR convention: <product>-<service>,
-      # one Dockerfile stage per service, `build-target: <service>` (k8s-deploy.yml
-      # records the byte-identical-images incident this convention prevents).
+      # One image per service: <product>-<service>, one Dockerfile stage per
+      # service, `build-target: <service>` (k8s-deploy.yml records the
+      # byte-identical-images incident this convention prevents).
       matrix:
         service: ${{ fromJSON(inputs.services-json) }}
       fail-fast: false
@@ -157,11 +154,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # FULL SHA of the composite change this workflow needs (the
-      # scan-scanners/labels inputs) — the ci#243 squash-merge commit on main.
-      # A same-repo SHA cannot name a composite edited in the same PR — hence
-      # the split; @v1/@main move on every merge and would not do (zizmor,
-      # unpinned-uses).
+      # FULL SHA of the composite change this workflow needs — the ci#243
+      # squash-merge commit on main. A same-repo SHA cannot name a composite
+      # edited in the same PR — hence the split; @v1/@main move on every merge
+      # and would not do (zizmor, unpinned-uses).
+      #
+      # The composite was renamed to actions/build-push-image; this pin stays on
+      # the old path (removed in v1.34.0) until the next release, then moves with
+      # its SHA. Both accept `ecr-registry` until v1.34.0, so the bump is the path
+      # and the SHA only.
       - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
         uses: quynhonsemiconductor/ci/actions/build-push-ecr@a6146a0980d2d9329b4cbc8b9fcf41118700a261  # ci#243
@@ -173,8 +174,7 @@ jobs:
           dockerfile: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
           # PRE-PUSH scan: nothing reaches the (public) package unless the scan
-          # passed, and the composite verifies the pushed layers equal the
-          # scanned ones. Two gates, matching the ECR path's policy:
+          # passed; the composite pushes the image it scanned. Two gates:
           #   vulns   — CRITICAL only, ignore-unfixed (HIGH is reported, not
           #             gating: unfixable-upstream findings must not block)
           #   secrets — ANY finding blocks (the composite's separate no-filter

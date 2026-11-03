@@ -8,17 +8,18 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 
 ## Actions
 
-> **AWS exit, 2026-11-02.** The AWS-only actions (`setup-aws-oidc`, `ecs-run-task`, `update-task-definition`, `run-db-migration`, `ensure-environment-awake`, `promote-ecr-images`) and the `backend-deploy.yml` reusable were removed; no repository in the organisation referenced them. `build-push-ecr` keeps its name but is what `ghcr-publish.yml` uses to build, scan and push to GHCR.
+> **AWS exit, 2026-11-02.** The AWS-only actions (`setup-aws-oidc`, `ecs-run-task`, `update-task-definition`, `run-db-migration`, `ensure-environment-awake`, `promote-ecr-images`) and the `backend-deploy.yml` reusable were removed; no repository in the organisation referenced them.
 
 ### Node / Build
 | Action | Description |
 |---|---|
 | [`setup-node-pnpm`](actions/setup-node-pnpm/action.yml) | Install pnpm, set up Node.js with cache, run `pnpm install` |
 
-### Docker / ECR
+### Docker / GHCR
 | Action | Description |
 |---|---|
-| [`build-push-ecr`](actions/build-push-ecr/action.yml) | Buildx + ECR build + push (OIDC-based, no stored keys) |
+| [`build-push-image`](actions/build-push-image/action.yml) | Buildx build + push, with an optional pre-push scan. Caller logs in first |
+| [`build-push-ecr`](actions/build-push-ecr/action.yml) | **Deprecated path, removed in v1.34.0**; identical to `build-push-image` |
 
 ### ECS / Deploy
 | Action | Description |
@@ -267,26 +268,37 @@ and includes a control showing that **without** the action pnpm 11 fails and pnp
 
 ---
 
-### `build-push-ecr`
+### `build-push-image`
 Log in to the target registry first (`docker/login-action`; GHCR with `GITHUB_TOKEN`).
 
 | Input | Default | Description |
 |---|---|---|
-| `ecr-registry` | **required** | ECR registry URL (`steps.aws.outputs.ecr-registry`) |
-| `image-name` | **required** | ECR repository name (e.g. `rova-api`) |
+| `registry` | **required** | Registry and namespace, no trailing slash (e.g. `ghcr.io/quynhonsemiconductor`). The old name `ecr-registry` is accepted until v1.34.0 |
+| `image-name` | **required** | Repository name inside the registry (e.g. `rova-api`) |
 | `image-tag` | **required** | Primary tag (e.g. `sha-abc1234`) |
 | `extra-tags` | `` | Newline-separated additional tags |
 | `dockerfile` | `Dockerfile` | Path to Dockerfile |
 | `build-context` | `.` | Docker build context |
 | `build-target` | `` | Multi-stage build target |
 | `cache-scope` | `default` | GHA cache scope key (use unique value per image) |
-| `cache-backend` | `gha` | Build cache: `gha`, `none`, or `registry`. `registry` cannot be used with IMMUTABLE repositories (the default) and pays ECR egress on every build; see the action's `cache-backend` input |
-| `scan` | `false` | `true` scans for CRITICAL CVEs from the local build, before the push. Nothing is pushed if one is found. Needs a single platform. After the push, the pushed image's layers are checked against the scanned ones. Use `backend-deploy` (`scan: 'true'`) rather than setting this by hand |
+| `cache-backend` | `gha` | Build cache: `gha`, `none`, or `registry`. `registry` cannot be used with IMMUTABLE repositories, pays egress on every build, and is refused with `scan: true` (the cache is written before the gates); see the action's `cache-backend` input |
+| `scan` | `false` | `true` scans for CRITICAL CVEs from the local build and pushes THAT image (no rebuild), then attests the pushed digest (provenance + SBOM). Nothing is pushed if a CRITICAL fixable CVE or any secret is found. Needs a single platform, and cannot be combined with `push-by-digest`. The calling job must grant `id-token: write` and `attestations: write` on top of `packages: write` |
 | `scan-severity` | `CRITICAL` | Severity that fails the pre-push scan (Trivy syntax, e.g. `HIGH,CRITICAL`); unfixed CVEs are ignored |
 
 | Output | Description |
 |---|---|
 | `image-uri` | Full `registry/name:tag` URI |
+| `image-digest` | The pushed digest (`sha256:...`), the subject of the attestations |
+
+With `scan: true` the caller's job needs:
+```yaml
+permissions:
+  contents: read
+  packages: write
+  id-token: write        # opens the OIDC token the attestation is signed with
+  attestations: write    # writes to the repository's attestation store
+```
+A reusable workflow's permissions are capped by its caller's, so a product that calls `ghcr-publish.yml` must grant these four on the calling job as well.
 
 ---
 

@@ -19,7 +19,7 @@ import pytest
 yaml = pytest.importorskip("yaml")
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-ACTION = ROOT / "actions/build-push-ecr"
+ACTION = ROOT / "actions/build-push-image"
 FILES = sorted(list((ROOT / ".github" / "workflows").glob("*.yml")) + list((ROOT / "actions").glob("*/action.yml")))
 
 ECR_REF = re.compile(r"ecr-registry|\.dkr\.ecr\.|ECR_REGISTRY|\$\{?REGISTRY\}?|inputs\.registry|image-uri|IMAGE_URI")
@@ -108,7 +108,7 @@ def test_the_guard_sees_through_env_and_continuations():
 def test_the_scanner_rule_catches_scan_image_as_well_as_trivy_action():
     assert is_scanner("aquasecurity/trivy-action@v0.36.0")
     assert is_scanner("quynhonsemiconductor/ci/actions/scan-image@v1")
-    assert not is_scanner("quynhonsemiconductor/ci/actions/build-push-ecr@v1")
+    assert not is_scanner("quynhonsemiconductor/ci/actions/build-push-image@v1")
     assert ECR_REF.search("${{ steps.tags.outputs.image-uri }}")
 
 
@@ -121,7 +121,7 @@ def test_imagetools_only_does_manifest_level_work():
 
 
 def test_registry_build_cache_is_never_the_default():
-    action = yaml.safe_load((ROOT / "actions/build-push-ecr/action.yml").read_text())
+    action = yaml.safe_load((ROOT / "actions/build-push-image/action.yml").read_text())
     assert action["inputs"]["cache-backend"]["default"] != "registry"
 
 
@@ -132,7 +132,43 @@ def test_no_workflow_or_action_asks_for_registry_cache_by_default():
             pytest.fail(f"{file} {where}: reads the build cache from a registry")
 
 
-# ── build-push-ecr: the pre-push scan ──────────────────────────────────────────────────────────────────────────────────────────
+# ── the rename from build-push-ecr ────────────────────────────────────────────────────────────────────────────────────────────
+
+DEPRECATION_DEADLINE = "v1.34.0"
+
+
+def test_the_old_path_is_a_deprecated_copy_of_the_new_one():
+    """The old path must keep working for a caller that only bumps its SHA, and must not silently drift.
+
+    A thin wrapper (`uses: quynhonsemiconductor/ci/actions/build-push-image@<sha>`) cannot be written in the release that
+    introduces the new path: the wrapper would have to name a SHA that does not exist until that commit is merged, and a
+    composite action cannot interpolate `uses:`. It becomes a wrapper in the pin-bump PR after the release; until then the
+    two files are kept identical below the deprecation header by this test.
+    """
+    new = yaml.safe_load((ROOT / "actions/build-push-image/action.yml").read_text())
+    old = yaml.safe_load((ROOT / "actions/build-push-ecr/action.yml").read_text())
+    for key in ("inputs", "outputs", "runs"):
+        assert old[key] == new[key], f"the deprecated alias drifted from build-push-image on {key}"
+    for name in ("same_layers.sh",):
+        assert (ROOT / "actions/build-push-ecr" / name).read_bytes() == (ROOT / "actions/build-push-image" / name).read_bytes()
+    # name and description: deprecated on the alias, with the ONE deadline, and clean on the new path.
+    assert "deprecated" in str(old["name"]).lower() and DEPRECATION_DEADLINE in str(old["name"])
+    assert "build-push-image" in str(old["description"]) and DEPRECATION_DEADLINE in str(old["description"])
+    assert "deprecat" not in (str(new["name"]) + str(new["description"])).lower()
+    assert DEPRECATION_DEADLINE not in (str(new["name"]) + str(new["description"]))
+    # the header comment carries the same deadline, so a reader of the raw file cannot see a second date.
+    raw = (ROOT / "actions/build-push-ecr/action.yml").read_text()
+    assert raw.count("v1.3") == raw.count(DEPRECATION_DEADLINE), "one deprecation deadline, and only one"
+
+
+def test_the_registry_input_takes_the_old_name_for_one_release():
+    _, action = build_push_steps()
+    assert "registry" in action["inputs"]
+    assert "ecr-registry" in action["inputs"], "old callers pass ecr-registry"
+    assert "ecr" not in str(action["name"]).lower()
+
+
+# ── build-push-image: the pre-push scan ──────────────────────────────────────────────────────────────────────────────────────────
 
 def build_push_steps():
     action = yaml.safe_load((ACTION / "action.yml").read_text())
@@ -190,11 +226,18 @@ def test_the_scan_input_must_be_exactly_true_or_false():
     steps, _ = build_push_steps()
     run = steps["Check the scan input"][1]["run"]
     for ok in ("true", "false"):
-        assert run_snippet(run, SCAN=ok).returncode == 0
+        assert run_snippet(run, SCAN=ok, REGISTRY="ghcr.io/quynhonsemiconductor").returncode == 0
     for bad in ("yes", "TRUE", "1", ""):
-        result = run_snippet(run, SCAN=bad)
+        result = run_snippet(run, SCAN=bad, REGISTRY="ghcr.io/quynhonsemiconductor")
         assert result.returncode != 0, f"scan={bad!r} must fail the step, not skip the scan"
         assert "scan must be exactly 'true' or 'false'" in result.stdout
+
+
+def test_an_empty_registry_fails_before_anything_is_built():
+    steps, _ = build_push_steps()
+    run = steps["Check the scan input"][1]["run"]
+    result = run_snippet(run, SCAN="false", REGISTRY="")
+    assert result.returncode != 0 and "set registry" in result.stdout
 
 
 def test_the_scan_input_check_runs_before_anything_reads_it():
@@ -280,12 +323,12 @@ def test_the_scan_path_attests_the_pushed_digest():
     assert sbom["uses"].startswith("anchore/sbom-action@")
     for step in (prov, attest):
         assert step["with"]["subject-digest"] == "${{ steps.build.outputs.digest }}"
-        assert step["with"]["subject-name"] == "${{ inputs.ecr-registry }}/${{ inputs.image-name }}"
+        assert step["with"]["subject-name"] == "${{ inputs.registry || inputs.ecr-registry }}/${{ inputs.image-name }}"
         assert step["if"] == "${{ inputs.scan == 'true' }}"
     assert attest["with"]["sbom-path"] == "${{ runner.temp }}/sbom.spdx.json"
     assert sbom["with"]["output-file"] == "${{ runner.temp }}/sbom.spdx.json"
     # syft reads the local copy; the image must not be dropped before it runs, and nothing must pull it back from the registry.
-    assert sbom["with"]["image"] == "ecr-prepush-scan/${{ inputs.image-name }}:scan"
+    assert sbom["with"]["image"] == "prepush-scan/${{ inputs.image-name }}:scan"
     assert sbom["with"]["upload-artifact"] is False and sbom["with"]["upload-release-assets"] is False
 
 
