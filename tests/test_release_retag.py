@@ -210,3 +210,32 @@ def test_attestation_is_verified_against_main(tmp_path):
     assert result.returncode == 0, result.stderr
     gh_calls = [call for call in calls if call.startswith("gh attestation")]
     assert gh_calls and "--source-ref refs/heads/main" in gh_calls[0]
+
+
+def test_an_auth_error_on_one_service_fails_the_whole_run(tmp_path):
+    ref = f"ghcr.io/quynhonsemiconductor/rova-api:sha-{SHA[:12]}"
+    result, _, calls = run(
+        tmp_path, tags=tags_map(api=D1, worker=D2), crane_errors={ref: "denied: denied"},
+    )
+    assert result.returncode != 0
+    assert "not a missing manifest" in result.stdout + result.stderr
+    assert not any(call.startswith("crane tag") for call in calls)
+
+
+def test_a_non_404_error_on_the_release_tag_lookup_never_tags(tmp_path):
+    rel = "ghcr.io/quynhonsemiconductor/rova-api:v1.2.3"
+    result, _, calls = run(
+        tmp_path, tags=tags_map(api=D1), crane_errors={rel: "unexpected status code 503"},
+    )
+    assert result.returncode != 0
+    assert "could not read" in result.stdout + result.stderr
+    assert not any(call.startswith("crane tag") for call in calls)
+
+
+def test_a_refusal_on_worker_after_api_is_ok_tags_nothing(tmp_path):
+    tags = tags_map(api=D1, worker=D2)
+    tags["ghcr.io/quynhonsemiconductor/rova-worker:v1.2.3"] = "sha256:" + "9" * 64
+    result, _, calls = run(tmp_path, tags=tags)
+    assert result.returncode != 0
+    assert "Refusing to move a published release tag" in result.stdout + result.stderr
+    assert not any(call.startswith("crane tag") for call in calls)
