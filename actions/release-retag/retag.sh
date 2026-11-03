@@ -86,8 +86,11 @@ for svc in $SERVICES; do
   else
     rc=$?
     [ "$rc" -eq 2 ] && exit 1
-    echo "release-retag: ${image}:${identity} not published for this commit — skipped"
-    continue
+    # Every service the caller lists is part of the release. Tagging only the
+    # found ones would publish a vX.Y.Z that is missing a service, so a missing
+    # manifest fails HERE, before the first tag.
+    echo "::error title=release-retag::${image}:${identity} is not published for this commit. Refusing a partial release; list only the services the product ships."
+    exit 1
   fi
   if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "::error title=release-retag::${image}:${identity} returned a bad digest '$digest'"
@@ -120,6 +123,7 @@ for svc in $SERVICES; do
   digests=$(jq -c --arg s "$svc" --arg d "$digest" '. + {($s): $d}' <<<"$digests")
 done
 
+# Unreachable with the failure above, kept as a guard if that loop changes.
 if [ "${#found[@]}" -eq 0 ]; then
   echo "::error title=release-retag::no ${PRODUCT}-<service> image carries ${identity}. Publish ran for this commit? Looked for: ${SERVICES}"
   exit 1

@@ -68,7 +68,7 @@ if any(formatted in ref for formatted in bad):
 
 
 def run(tmp_path, *, tags, gh_fail=(), crane_errors=None, tag="v1.2.3", commit=SHA,
-        services="api worker migrator web", product="rova", source="quynhonsemiconductor/rova"):
+        services="api", product="rova", source="quynhonsemiconductor/rova"):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for name, body in (("crane", CRANE_STUB), ("gh", GH_STUB)):
@@ -105,7 +105,7 @@ def tags_map(**per_service):
 
 
 def test_tags_the_published_digests_and_returns_the_map(tmp_path):
-    result, outputs, calls = run(tmp_path, tags=tags_map(api=D1, worker=D2))
+    result, outputs, calls = run(tmp_path, tags=tags_map(api=D1, worker=D2), services="api worker")
     assert result.returncode == 0, result.stderr
     assert json.loads(outputs["digests"]) == {"api": D1, "worker": D2}
     assert outputs["services"] == "api worker"
@@ -120,15 +120,17 @@ def test_tags_the_published_digests_and_returns_the_map(tmp_path):
     ]
 
 
-def test_a_service_the_product_does_not_ship_is_skipped(tmp_path):
-    result, outputs, _ = run(tmp_path, tags=tags_map(api=D1))
-    assert result.returncode == 0, result.stderr
-    assert outputs["services"] == "api"
-    assert "not published for this commit" in result.stdout
+def test_a_listed_service_with_no_image_fails_before_any_tag(tmp_path):
+    result, _, calls = run(tmp_path, tags=tags_map(api=D1), services="api worker")
+    assert result.returncode != 0
+    assert "Refusing a partial release" in result.stdout + result.stderr
+    # attestation of the services before the missing one may already have run;
+    # the guarantee is that NO tag was written.
+    assert not any(call.startswith("crane tag") for call in calls)
 
 
 def test_nothing_tagged_when_a_later_attestation_fails(tmp_path):
-    result, _, calls = run(tmp_path, tags=tags_map(api=D1, worker=D2), gh_fail=[D2])
+    result, _, calls = run(tmp_path, tags=tags_map(api=D1, worker=D2), services="api worker", gh_fail=[D2])
     assert result.returncode != 0
     assert "no valid build attestation" in result.stdout + result.stderr
     assert not any(call.startswith("crane tag") for call in calls)
@@ -137,7 +139,7 @@ def test_nothing_tagged_when_a_later_attestation_fails(tmp_path):
 def test_no_image_for_the_commit_fails_loudly(tmp_path):
     result, _, _ = run(tmp_path, tags={})
     assert result.returncode != 0
-    assert "no rova-<service> image carries sha-" in result.stdout + result.stderr
+    assert "is not published for this commit" in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("bad", ["latest", "sha-abc123", "1.2.3"])
@@ -215,7 +217,7 @@ def test_attestation_is_verified_against_main(tmp_path):
 def test_an_auth_error_on_one_service_fails_the_whole_run(tmp_path):
     ref = f"ghcr.io/quynhonsemiconductor/rova-api:sha-{SHA[:12]}"
     result, _, calls = run(
-        tmp_path, tags=tags_map(api=D1, worker=D2), crane_errors={ref: "denied: denied"},
+        tmp_path, tags=tags_map(api=D1, worker=D2), services="api worker", crane_errors={ref: "denied: denied"},
     )
     assert result.returncode != 0
     assert "not a missing manifest" in result.stdout + result.stderr
@@ -235,7 +237,7 @@ def test_a_non_404_error_on_the_release_tag_lookup_never_tags(tmp_path):
 def test_a_refusal_on_worker_after_api_is_ok_tags_nothing(tmp_path):
     tags = tags_map(api=D1, worker=D2)
     tags["ghcr.io/quynhonsemiconductor/rova-worker:v1.2.3"] = "sha256:" + "9" * 64
-    result, _, calls = run(tmp_path, tags=tags)
+    result, _, calls = run(tmp_path, tags=tags, services="api worker")
     assert result.returncode != 0
     assert "Refusing to move a published release tag" in result.stdout + result.stderr
     assert not any(call.startswith("crane tag") for call in calls)
