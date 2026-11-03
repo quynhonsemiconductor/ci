@@ -43,13 +43,14 @@ OWNER = "quynhonsemiconductor"
 # own actions would appear as a repository disagreeing with itself about nothing.
 SOURCES = {"ci", "tf-modules"}
 
-# `ci/.github/workflows/security.yml@v1.7.2`, `ci/actions/setup-tofu-aws@v1` — a floating or release TAG.
-CI_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s]+@(v\d+(?:\.\d+){0,2})")
+# `ci/.github/workflows/security.yml@v1.7.2`, `ci/actions/setup-tofu-aws@v1` — a floating or release TAG. The ref may sit
+# inside YAML quotes (`uses: "…@v1.2.3"`): the path excludes quotes and the closing one is not part of the match.
+CI_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s'\"]+@(v\d+(?:\.\d+){0,2})\b")
 # `ci/actions/setup-node-pnpm@4ab9d053...# v1.21.0` — the form every consumer uses since 2026-10-20: the ref is a full
 # commit SHA and the release lives in the trailing comment. The report was BLIND to these (it only matched tag refs), so
 # stale SHA pins — which is all of them — were never listed. The comment may be followed by another one
-# (`# v1.29.0 # ci#245 ...`); only the leading `vX.Y.Z` is read.
-CI_SHA_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s]+@[0-9a-f]{40}[ \t]+#[ \t]*(v\d+(?:\.\d+){0,2})\b")
+# (`# v1.29.0 # ci#245 ...`); only the leading `vX.Y.Z` is read. A quoted ref (`uses: "…@<sha>" # v1.2.3`) is the same pin.
+CI_SHA_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s'\"]+@[0-9a-f]{40}['\"]?[ \t]+#[ \t]*(v\d+(?:\.\d+){0,2})\b")
 # `modules/ecr?ref=ecr-v2.0.0`
 MODULE_PIN = re.compile(r"modules/[a-z0-9-]+\?ref=([a-z0-9-]+)-(v\d+\.\d+\.\d+)")
 # `iam-oidc-v3.0.1` — a per-module release tag in tf-modules
@@ -162,12 +163,18 @@ def pins_used(repo_dir: Path) -> tuple[set[str], dict[str, set[str]]]:
 
 
 def classify(values: list[str], newest: str) -> str:
-    """diverged beats stale: if the repos disagree, which one is behind is the lesser
-    question and fixing the disagreement usually resolves both."""
+    """mutable tag beats diverged beats stale: a `v1`-style ref is not a version at all.
+
+    `v1` is not "an old release that still works" — it is a ref that MOVES (or, since 2026-10-21 in ci, a frozen one), and
+    whichever it is, nothing in the pin says what code it runs. A repo on it is not compared to `newest`: the finding is the
+    pin form itself. That is why it gets its own status instead of being called "ok" (it has too few parts to count as stale).
+    """
     present = [v for v in values if v]
+    if any(v.count(".") < 2 for v in present):
+        return "**frozen/mutable tag**"
     if len({v for v in present}) > 1:
         return "**diverged**"
-    if any(v != newest and v.count(".") == 2 for v in present):
+    if any(v != newest for v in present):
         return "stale"
     return "ok"
 
@@ -224,8 +231,10 @@ def main() -> int:
             out.append("")
         out += [
             "`diverged` = the repos disagree. `stale` = they agree but a newer release exists.",
+            "`frozen/mutable tag` = a ref like `v1` that names no release: it moves, or it was frozen, and either way it is",
+            "not a version to compare. Pin a full commit SHA with a `# vX.Y.Z` comment.",
             "",
-            "Neither is automatically wrong. Holding a version back during a migration is",
+            "Diverged and stale are not automatically wrong. Holding a version back during a migration is",
             "legitimate; not knowing you are behind is not.",
             "",
         ]

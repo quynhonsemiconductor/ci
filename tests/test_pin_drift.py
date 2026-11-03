@@ -78,7 +78,29 @@ class Classification(unittest.TestCase):
         self.assertEqual(pin_drift.classify(["v1.23.0", "v1.23.0"], "v1.31.0"), "stale")
         self.assertEqual(pin_drift.classify(["v1.23.0", "v1.31.0"], "v1.31.0"), "**diverged**")
         self.assertEqual(pin_drift.classify(["", "v1.31.0"], "v1.31.0"), "ok")
-        self.assertEqual(pin_drift.classify(["v1"], "v1.31.0"), "ok")  # a truncated pin is a different thing, not stale
+        # `v1` is NOT "ok": it names no release (it moves, or it was frozen), so it is its own finding.
+        self.assertEqual(pin_drift.classify(["v1"], "v1.31.0"), "**frozen/mutable tag**")
+        self.assertEqual(pin_drift.classify(["v1", "v1.31.0"], "v1.31.0"), "**frozen/mutable tag**")
+        self.assertEqual(pin_drift.classify(["v1.2"], "v1.31.0"), "**frozen/mutable tag**")
+        self.assertEqual(pin_drift.classify(["v1.31.0"], "v1.31.0"), "ok")
+
+
+class QuotedRefs(unittest.TestCase):
+    """YAML allows the whole ref in quotes: `uses: "owner/repo/path@<sha>" # v1.2.3`."""
+
+    def test_a_quoted_sha_pin_with_a_release_comment_is_read(self):
+        for quote in ('"', "'"):
+            with self.subTest(quote=quote):
+                self.assertEqual(
+                    versions(f"uses: {quote}quynhonsemiconductor/ci/actions/x@{SHA}{quote} # v1.30.0"),
+                    {"v1.30.0"},
+                )
+
+    def test_a_quoted_tag_pin_is_read(self):
+        self.assertEqual(versions('uses: "quynhonsemiconductor/ci/actions/pr-labels@v1.24.3"'), {"v1.24.3"})
+
+    def test_a_quoted_ref_with_a_non_version_comment_is_still_ignored(self):
+        self.assertEqual(versions(f'uses: "quynhonsemiconductor/ci/actions/x@{SHA}" # ci#243'), set())
 
 
 if __name__ == "__main__":
