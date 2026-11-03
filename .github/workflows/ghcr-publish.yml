@@ -154,20 +154,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # FULL SHA of the composite change this workflow needs — the ci#243
-      # squash-merge commit on main. A same-repo SHA cannot name a composite
-      # edited in the same PR — hence the split; @v1/@main move on every merge
-      # and would not do (zizmor, unpinned-uses).
+      # FULL SHA of the released composite this workflow needs. A same-repo SHA
+      # cannot name a composite edited in the same PR — hence the split; @v1/@main
+      # move on every merge and would not do (zizmor, unpinned-uses).
       #
-      # The composite was renamed to actions/build-push-image; this pin stays on
-      # the old path (removed in v1.34.0) until the next release, then moves with
-      # its SHA. Both accept `ecr-registry` until v1.34.0, so the bump is the path
-      # and the SHA only.
+      # v1.31.1 renamed build-push-ecr to build-push-image and made the scan path
+      # attest the pushed digest; those attestations are what release-retag checks
+      # before it tags a release. The old alias would still run the old code.
       - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-ecr@a6146a0980d2d9329b4cbc8b9fcf41118700a261  # ci#243
+        uses: quynhonsemiconductor/ci/actions/build-push-image@7e8f6136a017c7b1f57a2e9a288dae3cd008950f  # v1.31.1
         with:
-          ecr-registry: ${{ env.GHCR_NAMESPACE }}
+          registry: ${{ env.GHCR_NAMESPACE }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
           image-tag: ${{ steps.tag.outputs.tag }}
           build-target: ${{ matrix.service }}
