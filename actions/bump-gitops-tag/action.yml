@@ -221,7 +221,8 @@ runs:
         set -euo pipefail
         if [ "$ENV" = "prod" ]; then
           branch="promote/${PRODUCT}-${TAG}"
-          title="promote(${PRODUCT}): prod -> ${TAG}"
+          # Conventional-commit type (gitops checks PR titles); "promote" is not a type.
+          title="chore(${PRODUCT}): promote prod to ${TAG}"
         else
           # dev: a plain bump, named per image so a re-run of the same build cannot clash with
           # a different one. A conventional-commit title (chore), not a promotion.
