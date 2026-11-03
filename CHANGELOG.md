@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.33.1](https://github.com/quynhonsemiconductor/ci/compare/v1.33.0...v1.33.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **release-retag:** refuse a partial release, publish per-commit, document self-pins ([#296](https://github.com/quynhonsemiconductor/ci/issues/296)) ([c5d2373](https://github.com/quynhonsemiconductor/ci/commit/c5d2373200bd39c609f3a67c5e7848aa89169d11))
+
 ## [1.33.0](https://github.com/quynhonsemiconductor/ci/compare/v1.32.0...v1.33.0) (2026-11-03)
 
 
