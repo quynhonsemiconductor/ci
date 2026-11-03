@@ -59,7 +59,7 @@ def test_prod_keeps_the_promote_branch_and_never_auto_merges_by_default(tmp_path
     result, calls = run_step(tmp_path, env_name="prod", tag="v1.2.3")
     assert result.returncode == 0, result.stderr
     assert "git checkout -b promote/rova-v1.2.3" in calls
-    assert any(c.startswith("gh pr create --title promote(rova): prod -> v1.2.3") for c in calls)
+    assert any(c.startswith("gh pr create --title chore(rova): promote prod to v1.2.3") for c in calls)
     assert not any(c.startswith("gh pr merge") for c in calls)
 
 
