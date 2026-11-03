@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.33.0](https://github.com/quynhonsemiconductor/ci/compare/v1.32.0...v1.33.0) (2026-11-03)
+
+
+### Features
+
+* **ghcr-publish:** shared opt-in dev bump, pinned to v1.32.0 ([#294](https://github.com/quynhonsemiconductor/ci/issues/294)) ([e5997be](https://github.com/quynhonsemiconductor/ci/commit/e5997be82732b6a983506aa5acd13c422f395bef))
+
 ## [1.32.0](https://github.com/quynhonsemiconductor/ci/compare/v1.31.2...v1.32.0) (2026-11-03)
 
 
