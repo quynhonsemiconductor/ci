@@ -1,0 +1,518 @@
+name: Build & push an image
+description: >
+  Set up Docker Buildx and build+push ONE image to a registry the calling job has already logged in to
+  (`docker/login-action`). With `scan: true` the image is scanned for CRITICAL CVEs BEFORE it is pushed, from the local
+  build, and then that same image is pushed, so no step ever has to pull a pushed image back to the runner (see `scan`).
+
+inputs:
+  registry:
+    description: >
+      Registry with its namespace, no trailing slash — `ghcr.io/quynhonsemiconductor`. Optional only so the old
+      `ecr-registry` name keeps working until it is removed (v1.34.0); set one of the two.
+    required: false
+    default: ''
+  ecr-registry:
+    description: DEPRECATED, use `registry`. Accepted until v1.34.0 so a caller that only bumps its SHA keeps working.
+    required: false
+    default: ''
+  image-name:
+    description: Repository name inside the registry, e.g. `<product>-api`
+    required: true
+  image-tag:
+    description: Primary image tag, e.g. `sha-abc1234` or `v1.2.3`
+    required: true
+  extra-tags:
+    description: >
+      Extra tags to apply (newline-separated, no registry prefix needed).
+      Leave empty to only push the primary tag.
+    required: false
+    default: ''
+  dockerfile:
+    description: Relative path to the Dockerfile
+    required: false
+    default: Dockerfile
+  build-context:
+    description: Docker build context path
+    required: false
+    default: '.'
+  build-target:
+    description: Dockerfile target stage (for multi-stage builds)
+    required: false
+    default: ''
+  platforms:
+    description: >
+      Target platform(s) for the image, e.g. `linux/amd64`. Must match the platform the workload runs on, or the
+      container fails to start with "image Manifest does not contain descriptor matching platform".
+
+      Build on a runner of the SAME architecture: `ghcr-publish.yml` takes a `build_runner` input for that. Cross-building
+      under QEMU works but costs several times the build minutes on a pnpm + Nest compile. Leave empty to build for the
+      runner's own platform.
+    required: false
+    default: ''
+  cache-scope:
+    description: >
+      Cache scope key — a unique value per image (e.g. `api`, `worker`, `migrator`).
+      Used as the GHA cache scope; the registry backend keys on the image name instead
+      and ignores this.
+    required: false
+    default: default
+  cache-backend:
+    description: >
+      Where the build cache lives: `gha` (default), `none`, or `registry`. `registry` is opt-in only, and is refused with
+      `scan: true` (see below).
+
+      `gha` — the GitHub Actions cache. Capped at 10 GB PER REPOSITORY and shared with every other workflow in it, so an
+      image with multi-GB layers can evict the rest of the repo's caches (and still miss its own). Such a product uses
+      `none`.
+
+      `registry` — a `:buildcache` tag per image repository. No size cap, but paid for twice: storage, and a full PULL of
+      the cache on every build, because a hosted runner is outside the registry's network. Egress scales with DEPLOY
+      FREQUENCY, not image count. It also requires a MUTABLE repository, since each build overwrites the tag; the on-prem
+      image repositories are IMMUTABLE, which makes `registry` unusable there.
+
+      `none` — no cache at all. Correct for a large image on a PUBLIC repository, where Actions minutes are unmetered:
+      the cache buys wall-clock, not money. Builds are slower and reproducible from scratch.
+
+      Only the cache location changes between the three.
+    required: false
+    default: gha
+  push-by-digest:
+    description: >
+      Push the image by DIGEST ONLY, with no tag: `outputs: type=image,push-by-digest=true`. For the per-architecture legs of a multi-arch
+      build, each on a runner of its own architecture; a later job creates the tag ONCE with `docker buildx imagetools create`, over
+      the digests of every leg. It has to be like this because the repositories are IMMUTABLE (task 0.8): two legs cannot both push
+      `sha-<commit>`, and a leg cannot re-tag after the merge. `image-tag` is ignored when this is true. Refused together with
+      `scan: true`: the scanned image is pushed with `docker push`, which needs a tag and cannot publish by digest. Default false:
+      unchanged behaviour.
+    required: false
+    default: 'false'
+  scan:
+    description: >
+      `true` scans the image for CRITICAL CVEs BEFORE it is pushed, and fails the step (nothing is pushed) if one is found.
+      The PUSHED IMAGE IS THE SCANNED ONE: the image is built once, loaded into the Docker daemon, scanned there, and then
+      pushed from that local copy with `docker push`. There is no rebuild between the scan and the push, so the pushed layers
+      cannot differ from the scanned ones. Default `false`: unchanged behaviour (build once, push with buildx).
+
+      WHY HERE AND NOT AFTER THE PUSH. A scan of the pushed image by its registry reference makes the runner DOWNLOAD the whole
+      image. A GitHub-hosted runner is outside AWS, so that is internet egress: qnsc-kb's api and worker images are 3-4 GB each,
+      three images per push, 34 pushes in 17 days, which was 206 GB and $24.78 of `DataTransfer-Out` against $2.11 of storage.
+      The image is already on the runner when it is built, so the scan reads it there.
+
+      WHY THIS PUSH, NOT A SECOND BUILD. The first version of this input rebuilt the same Dockerfile for the push and only
+      COMPARED the resulting diff_ids with the scanned ones. BuildKit answers a rebuild from its cache most of the time, but a
+      cache miss (pruned cache, a layer whose inputs moved) rebuilds a layer with a different diff_id, and qnsc-kb's worker
+      image failed exactly that way on 2026-11-03 (run 41580994349: 12 of 13 layers equal, the last one rebuilt). A check that
+      fails on a cache miss is a flaky gate, and pushing the rebuild is a gate that can be passed by the wrong image. So the
+      scan build is now the ONLY build on this path and its image is what gets pushed.
+
+      ATTESTATIONS on this path are GitHub attestations attached to the PUSHED DIGEST rather than buildx OCI attestation
+      manifests embedded at build time (the Docker exporter cannot carry those): actions/attest-build-provenance for
+      provenance, and actions/attest-sbom over a syft SPDX SBOM of that same local image. Same subject, same guarantee, and it
+      needs no rebuild or pull. THE CALLING JOB MUST GRANT `id-token: write` and `attestations: write`; without them the
+      attestation step fails loudly right after the push, so grant them together with `packages: write`.
+
+      Needs a SINGLE platform (`platforms` empty or one value): a multi-platform build cannot be loaded into the Docker daemon.
+      Incompatible with `push-by-digest` (that publishes an untagged image; `docker push` needs a tag). The per-architecture legs
+      of a multi-arch build each scan and push their own native image this way with tags, and the merge job needs no scan.
+    required: false
+    default: 'false'
+  scan-severity:
+    description: Severity that fails the pre-push scan (Trivy syntax, e.g. `CRITICAL` or `HIGH,CRITICAL`). Unfixed CVEs are ignored.
+    required: false
+    default: CRITICAL
+  scan-scanners:
+    description: >
+      Trivy `scanners` for the pre-push scan, e.g. `vuln` (default) or `vuln,secret`.
+      `secret` adds Trivy's secret scanner over the image layers — use it when the
+      registry the image lands in is PUBLIC, where a baked-in credential is a
+      disclosure the moment the push lands.
+    required: false
+    default: vuln
+  labels:
+    description: >
+      OCI labels applied to the pushed image, newline-separated `key=value` (passed
+      straight to the docker/build-push-action `labels` input). Callers pushing to a
+      registry where the package must link back to its repository set
+      `org.opencontainers.image.source=<server_url>/<repository>`.
+    required: false
+    default: ''
+  node-auth-token:
+    description: >
+      Token used by the Dockerfile's `pnpm install` to fetch private
+      @quynhonsemiconductor/* packages from GitHub Packages (mounted as build secret
+      `node_auth_token`). Defaults to the job's GITHUB_TOKEN; the calling job
+      must grant `packages: read`.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  image-uri:
+    description: Full URI of the pushed image (`registry/name:tag`)
+    value: ${{ steps.expose.outputs.image-uri }}
+  image-digest:
+    description: Image digest (`sha256:...`)
+    value: ${{ steps.expose.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    # A typo here would otherwise skip the scan silently: every scan step tests `== 'true'`.
+    - name: Check the scan input
+      shell: bash
+      env:
+        SCAN: ${{ inputs.scan }}
+        # `registry` replaced `ecr-registry` (the old name goes in v1.34.0); an empty one would otherwise build `"/name:tag"`.
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
+      run: |
+        case "$SCAN" in
+          true|false) ;;
+          *) echo "::error title=build-push-image::scan must be exactly 'true' or 'false' (got '$SCAN')"; exit 1 ;;
+        esac
+        [ -n "$REGISTRY" ] || { echo "::error title=build-push-image::set registry to the registry namespace, e.g. ghcr.io/<org>"; exit 1; }
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+    - name: Resolve tags
+      id: tags
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        EXTRA_TAGS: ${{ inputs.extra-tags }}
+      run: |
+        PRIMARY="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+        TAGS="$PRIMARY"
+        if [ -n "$EXTRA_TAGS" ]; then
+          while IFS= read -r t; do
+            [ -n "$t" ] && TAGS="$TAGS"$'\n'"${REGISTRY}/${IMAGE_NAME}:$t"
+          done <<< "$EXTRA_TAGS"
+        fi
+        echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$TAGS"      >> "$GITHUB_OUTPUT"
+        echo "EOF"        >> "$GITHUB_OUTPUT"
+        echo "image-uri=$PRIMARY" >> "$GITHUB_OUTPUT"
+
+    # Resolved in bash rather than in a `${{ }}` ternary, because the three-way form is a
+    # trap in GitHub expressions: `x == 'none' && '' || <registry>` evaluates the empty
+    # string as FALSY and falls straight through to the registry branch, so `none` would
+    # silently keep caching. Two nested ternaries avoid that and are unreadable. A step
+    # with a `case` is neither.
+    - name: Resolve cache backend
+      id: cache
+      shell: bash
+      env:
+        BACKEND:  ${{ inputs.cache-backend }}
+        SCAN:     ${{ inputs.scan }}
+        SCOPE:    ${{ inputs.cache-scope }}
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
+        IMAGE:    ${{ inputs.image-name }}
+        REF:      ${{ github.ref }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+        case "$BACKEND" in
+          none)
+            FROM=""; TO="" ;;
+          gha)
+            FROM="type=gha,scope=$SCOPE"
+            TO="type=gha,mode=max,scope=$SCOPE" ;;
+          registry)
+            # REFUSED WITH scan. A registry cache is written DURING the build, which is before the Trivy and secret gates:
+            # a rejected image would still leave its layers in the registry under :buildcache, in a repository that is
+            # supposed to receive nothing from a failed scan. There is no way to export the cache after the gates without
+            # building a second time, which is what the scan path deliberately does not do. `gha` keeps the cache out of the
+            # registry entirely.
+            if [ "$SCAN" = "true" ]; then
+              echo "::error title=build-push-image::cache-backend registry cannot be used with scan: true (the cache is written before the gates); use cache-backend gha or none"
+              exit 1
+            fi
+            FROM="type=registry,ref=$REGISTRY/$IMAGE:buildcache"
+            TO="type=registry,ref=$REGISTRY/$IMAGE:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" ;;
+          *)
+            echo "::error::cache-backend must be registry, gha or none (got '$BACKEND')"
+            exit 1 ;;
+        esac
+        # WRITE THE CACHE ONLY FROM THE DEFAULT BRANCH. A GitHub Actions cache entry is readable only by the ref that wrote it
+        # (and pull requests based on it), never by main or a sibling: a cache written from a tag or a manual run on another branch
+        # is read by nobody and still counts against the 10 GB per-repository cap, evicting the entries main DOES read. For the
+        # registry backend the same write is a push of the whole cache to the registry. READ is unchanged everywhere.
+        DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+        if [ "$REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+          if [ -n "$TO" ]; then
+            echo "cache: read-only on ${REF} (writes only from refs/heads/${DEFAULT_BRANCH})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          TO=""
+        fi
+        echo "from=$FROM" >> "$GITHUB_OUTPUT"
+        echo "to=$TO"     >> "$GITHUB_OUTPUT"
+        echo "cache backend: ${BACKEND}" >> "$GITHUB_STEP_SUMMARY"
+
+    # The scan builds the image twice on this runner, and the hosted image ships with several GB of SDKs this build never uses.
+    # Remove the largest ones first; the summary shows the disk before and after, so a future out-of-space failure is readable.
+    - name: Free runner disk for the scan
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      run: |
+        disk() { printf '### Disk %s\n```\n%s\n```\n' "$1" "$(df -h /)" >> "$GITHUB_STEP_SUMMARY"; }
+        disk before
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        disk after
+
+    - name: Check the scan can run
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        PLATFORMS: ${{ inputs.platforms }}
+        PUSH_BY_DIGEST: ${{ inputs.push-by-digest }}
+      run: |
+        # `load: true` puts the image in the local Docker daemon, which holds one platform. Any separator counts: the comma of a
+        # buildx list or a space in a hand-written one.
+        multi='[,[:space:]]'
+        if [[ "$PLATFORMS" =~ $multi ]]; then
+          echo "::error title=build-push-image::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
+          exit 1
+        fi
+        # The scanned image is pushed with `docker push`, which needs a tag; push-by-digest publishes an untagged image.
+        if [ "$PUSH_BY_DIGEST" = "true" ]; then
+          echo "::error title=build-push-image::scan: true pushes the scanned image by tag and cannot be combined with push-by-digest: true"
+          exit 1
+        fi
+
+    # Snapshot of the build context, to compare with just before the push. The push ships whatever is in the context, so
+    # anything a later step writes there (a scanner's cache, a report, a lock file) goes into the image. A snapshot is git's view
+    # (tracked, untracked and ignored files); it needs the context to be a git checkout, as every caller's is.
+    - name: Record the build context
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        CTX: ${{ inputs.build-context }}
+        SNAPSHOT: ${{ runner.temp }}/context-before.txt
+      run: |
+        set -euo pipefail
+        git -C "$CTX" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+          echo "::error title=build-push-image::scan: true needs the build context to be a git checkout (the context is '$CTX')"; exit 1; }
+        git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$SNAPSHOT"
+
+    # THE build on the scan path: local only, nothing is pushed. This is the image that is scanned AND then pushed, unchanged.
+    # Same context, Dockerfile, target, platform, secrets, cache and labels the pushed image must have. No provenance/SBOM: the
+    # Docker exporter cannot carry attestations (see the `scan` input for the trade-off).
+    - name: Build for scan (local, nothing pushed)
+      id: build-local
+      if: ${{ inputs.scan == 'true' }}
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.build-target }}
+        platforms: ${{ inputs.platforms }}
+        load: true
+        push: false
+        tags: prepush-scan/${{ inputs.image-name }}:scan
+        cache-from: ${{ steps.cache.outputs.from }}
+        cache-to: ${{ steps.cache.outputs.to }}
+        labels: ${{ inputs.labels }}
+        provenance: false
+        sbom: false
+        secrets: |
+          node_auth_token=${{ inputs.node-auth-token }}
+
+    - name: Scan before push (CRITICAL blocks; nothing has been pushed yet)
+      if: ${{ inputs.scan == 'true' }}
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: prepush-scan/${{ inputs.image-name }}:scan
+        format: table
+        exit-code: '1'
+        severity: ${{ inputs.scan-severity }}
+        scanners: vuln
+        ignore-unfixed: true
+        # trivy-action defaults this to ${{ github.workspace }}/.cache/trivy, which is inside the build context: the push build's
+        # `COPY . .` then shipped the trivy database in the image, and the layers no longer matched the scan. Keep it outside.
+        cache-dir: ${{ runner.temp }}/trivy-cache
+
+    # Secrets are a SEPARATE pass with NO severity filter: any secret found
+    # blocks. Trivy's --severity filter applies to secret findings too, and
+    # most secret rules are rated HIGH — filtering at CRITICAL would let them
+    # through, while raising the filter to HIGH would also gate HIGH
+    # vulnerabilities (a policy the caller may not want). Splitting keeps the
+    # vuln gate exactly `scan-severity` + ignore-unfixed, and the secret gate
+    # absolute. `scanners: secret` on its own also runs faster (no vuln DB).
+    - name: Scan before push (secrets — ANY finding blocks)
+      if: ${{ inputs.scan == 'true' && contains(inputs.scan-scanners, 'secret') }}
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: prepush-scan/${{ inputs.image-name }}:scan
+        format: table
+        exit-code: '1'
+        scanners: secret
+        cache-dir: ${{ runner.temp }}/trivy-cache
+
+    # What was scanned, by layer diff_id. Recorded before the push and compared with the pushed manifest after it, as a check
+    # that the registry stored what the runner had. There is no rebuild between the two, so this cannot differ for build reasons.
+    - name: Record the scanned layers
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
+      run: |
+        set -euo pipefail
+        docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}' > "$RUNNER_TEMP/scanned-layers.json"
+
+    # The check the snapshot exists for: anything a step wrote into the build context since the snapshot is in the image about to
+    # be pushed, and the scan did not see it. Fails before the push.
+    - name: Check nothing wrote into the build context (the push would ship it)
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        CTX: ${{ inputs.build-context }}
+        SNAPSHOT: ${{ runner.temp }}/context-before.txt
+      run: |
+        set -euo pipefail
+        git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$RUNNER_TEMP/context-after.txt"
+        if ! diff -u "$SNAPSHOT" "$RUNNER_TEMP/context-after.txt"; then
+          echo "::error title=build-push-image::something wrote into the build context '$CTX' after it was recorded (lines above). Nothing was pushed. Point the tool's output or cache outside the context."
+          exit 1
+        fi
+
+    # The scanned image gets the registry tags it is about to be pushed under. A retag of a local image, so no layer moves.
+    - name: Tag the scanned image
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r tag; do
+          [ -n "$tag" ] && docker tag "$IMAGE" "$tag"
+        done <<< "$TAGS"
+
+    # Push exactly the image that was scanned: the local copy, byte for byte. No rebuild, so no layer can differ.
+    - name: Push the scanned image
+      id: build
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        set -euo pipefail
+        digest=""
+        while IFS= read -r tag; do
+          [ -n "$tag" ] || continue
+          # 2>&1: the progress goes to stderr on some docker versions, and its last line carries the digest.
+          out="$(docker push "$tag" 2>&1)"
+          printf '%s\n' "$out"
+          digest="$(grep -oE 'sha256:[0-9a-f]{64}' <<< "$out" | tail -1 || true)"
+        done <<< "$TAGS"
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+    # scan: false — the original single build with buildx, attestations and the cache write. scan: true pushed above.
+    - name: Build & push
+      id: push
+      if: ${{ inputs.scan != 'true' }}
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.build-target }}
+        platforms: ${{ inputs.platforms }}
+        # Normal path: push: true + tags. By-digest path: `outputs` pushes an untagged image and `push`/`tags` must not also be set.
+        push: ${{ inputs.push-by-digest != 'true' }}
+        tags: ${{ inputs.push-by-digest != 'true' && steps.tags.outputs.tags || '' }}
+        outputs: ${{ inputs.push-by-digest == 'true' && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', inputs.registry || inputs.ecr-registry, inputs.image-name) || '' }}
+        # Both computed in the step above — see it for why this is not a `${{ }}` ternary,
+        # and see `cache-backend` for the cost of each backend.
+        #
+        # Empty is a valid value for both: docker/build-push-action treats an empty
+        # `cache-from`/`cache-to` as "no cache flags", which is exactly `none`.
+        #
+        # Cache misses are not failures either. `--cache-from` against a repository with no
+        # buildcache tag yet is a no-op, so the first build after enabling registry cache
+        # simply populates it, and the first build after DISABLING it just runs cold.
+        cache-from: ${{ steps.cache.outputs.from }}
+        cache-to: ${{ steps.cache.outputs.to }}
+        # Empty labels = no `--label` flags, exactly like the empty cache inputs above.
+        labels: ${{ inputs.labels }}
+        provenance: mode=max   # SLSA L3: full build graph with materials
+        sbom: true             # embed SBOM as OCI attestation (CycloneDX)
+        # Authenticates `pnpm install` against GitHub Packages for private
+        # @quynhonsemiconductor/* deps so a cold build (evicted cache) doesn't 401.
+        secrets: |
+          node_auth_token=${{ inputs.node-auth-token }}
+
+    # The image that was pushed must have the layers that were scanned. A manifest-level read of the pushed digest, nothing pulled.
+    - name: Verify the pushed image has the scanned layers
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+        SAME_LAYERS: ${{ github.action_path }}/same_layers.sh
+      run: |
+        set -euo pipefail
+        [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
+        docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" --format '{{json .Image}}' > "$RUNNER_TEMP/pushed-layers.json"
+        "$SAME_LAYERS" "$RUNNER_TEMP/scanned-layers.json" "$RUNNER_TEMP/pushed-layers.json"
+
+    # ATTESTS THE PUSHED DIGEST, not a rebuild: this is the supply-chain record the scan path used to lose when it stopped
+    # carrying the buildx attestations. A GitHub attestation is attached to a digest, so the bytes never have to move again.
+    # Requires the calling job to grant `id-token: write` and `attestations: write` (documented in the README); without them
+    # this step fails loudly rather than silently publishing an unattested image.
+    - name: Attest the pushed image's build provenance
+      if: ${{ inputs.scan == 'true' }}
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+      with:
+        # Registry + repository, no tag: the digest identifies the image.
+        subject-name: ${{ inputs.registry || inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: false
+
+    # The SBOM covers the image that was pushed: syft reads the local copy (still on disk at this point), so it describes
+    # exactly the bytes in the registry, and needs no pull.
+    - name: Generate an SBOM for the pushed image
+      if: ${{ inputs.scan == 'true' }}
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+      with:
+        image: prepush-scan/${{ inputs.image-name }}:scan
+        format: spdx-json
+        output-file: ${{ runner.temp }}/sbom.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Attest the pushed image's SBOM
+      if: ${{ inputs.scan == 'true' }}
+      uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+      with:
+        subject-name: ${{ inputs.registry || inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        sbom-path: ${{ runner.temp }}/sbom.spdx.json
+        push-to-registry: false
+
+    # Remove the local copies: every layer is in the registry and both attestations point at the digest, so the disk can go.
+    - name: Drop the pushed image from the runner
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        docker image rm "$IMAGE" || true
+        while IFS= read -r tag; do
+          [ -n "$tag" ] && { docker image rm "$tag" || true; }
+        done <<< "$TAGS"
+
+    - name: Expose image URI and digest
+      id: expose
+      shell: bash
+      env:
+        IMAGE_URI: ${{ steps.tags.outputs.image-uri }}
+        # scan: true pushes with `docker push` (step `build`); scan: false with buildx (step `push`). Only one runs.
+        DIGEST: ${{ steps.build.outputs.digest || steps.push.outputs.digest }}
+      run: |
+        echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+        echo "digest=${DIGEST}"      >> "$GITHUB_OUTPUT"

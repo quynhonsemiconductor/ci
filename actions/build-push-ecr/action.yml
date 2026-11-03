@@ -1,17 +1,27 @@
-name: Build & Push image to Amazon ECR
+# DEPRECATED PATH — REMOVED IN v1.34.0. The action is now actions/build-push-image (nothing about it was ECR-specific).
+# Until then this copy is identical below this comment, so a caller that only bumps its SHA keeps working. A test keeps the
+# two in sync.
+name: Build & push an image (deprecated, removed in v1.34.0)
 description: >
-  Set up Docker Buildx, log in to ECR via OIDC credentials already configured
-  in the calling job, and build+push a single image. With `scan: true` the image is scanned for CRITICAL CVEs BEFORE it is
-  pushed, from the local build, so no step ever has to pull a pushed image back to the runner (see `scan` below).
-  Caller must have already run `aws-actions/configure-aws-credentials` and
-  `aws-actions/amazon-ecr-login`.
+  DEPRECATED — REMOVED IN v1.34.0. Use `quynhonsemiconductor/ci/actions/build-push-image`; the inputs, outputs and
+  behaviour are the same (including the old `ecr-registry` name, which also goes in v1.34.0).
+  Set up Docker Buildx and build+push ONE image to a registry the calling job has already logged in to
+  (`docker/login-action`). With `scan: true` the image is scanned for CRITICAL CVEs BEFORE it is pushed, from the local
+  build, and then that same image is pushed, so no step ever has to pull a pushed image back to the runner (see `scan`).
 
 inputs:
+  registry:
+    description: >
+      Registry with its namespace, no trailing slash — `ghcr.io/quynhonsemiconductor`. Optional only so the old
+      `ecr-registry` name keeps working until it is removed (v1.34.0); set one of the two.
+    required: false
+    default: ''
   ecr-registry:
-    description: ECR registry URL — `<account>.dkr.ecr.<region>.amazonaws.com`
-    required: true
+    description: DEPRECATED, use `registry`. Accepted until v1.34.0 so a caller that only bumps its SHA keeps working.
+    required: false
+    default: ''
   image-name:
-    description: ECR repository name, e.g. `<product>-api`
+    description: Repository name inside the registry, e.g. `<product>-api`
     required: true
   image-tag:
     description: Primary image tag, e.g. `sha-abc1234` or `v1.2.3`
@@ -36,15 +46,12 @@ inputs:
     default: ''
   platforms:
     description: >
-      Target platform(s) for the image, e.g. `linux/arm64` for Fargate Graviton
-      tasks (~20% cheaper per vCPU-hour and GB-hour than x86). Must match the
-      `cpu_architecture` on the ECS task definition, or the container fails to
-      start with "image Manifest does not contain descriptor matching platform".
+      Target platform(s) for the image, e.g. `linux/amd64`. Must match the platform the workload runs on, or the
+      container fails to start with "image Manifest does not contain descriptor matching platform".
 
-      Build on a runner of the SAME architecture — the reusable backend-deploy
-      workflow takes a `runner` input for that. Cross-building under QEMU works but
-      costs several times the build minutes on a pnpm + Nest compile, which is worse
-      than the Fargate saving. Leave empty to build for the runner's own platform.
+      Build on a runner of the SAME architecture: `ghcr-publish.yml` takes a `build_runner` input for that. Cross-building
+      under QEMU works but costs several times the build minutes on a pnpm + Nest compile. Leave empty to build for the
+      runner's own platform.
     required: false
     default: ''
   cache-scope:
@@ -56,58 +63,22 @@ inputs:
     default: default
   cache-backend:
     description: >
-      Where the build cache lives: `gha` (default), `none`, or `registry`. `registry` is opt-in only (see below): it is no longer
-      the default.
+      Where the build cache lives: `gha` (default), `none`, or `registry`. `registry` is opt-in only, and is refused with
+      `scan: true` (see below).
 
-      READ THE COST NOTE BELOW BEFORE CHOOSING `registry` FOR A MULTI-GB IMAGE.
+      `gha` — the GitHub Actions cache. Capped at 10 GB PER REPOSITORY and shared with every other workflow in it, so an
+      image with multi-GB layers can evict the rest of the repo's caches (and still miss its own). Such a product uses
+      `none`.
 
-      GHA is the default (it used to be `registry`). The GitHub Actions cache is capped at 10 GB PER REPOSITORY, shared with every
-      other workflow in it, so a product whose images carry multi-GB layers can blow through that on its own and evict constantly:
-      qnsc-kb re-downloaded a 2.2 GB model on most builds while appearing to be cached, and starved the rest of the repo's caches
-      doing it; such a product uses `none`. Registry cache has no cap, but it is paid for in internet egress on every build and
-      cannot work against an IMMUTABLE repository, so it is not the default.
+      `registry` — a `:buildcache` tag per image repository. No size cap, but paid for twice: storage, and a full PULL of
+      the cache on every build, because a hosted runner is outside the registry's network. Egress scales with DEPLOY
+      FREQUENCY, not image count. It also requires a MUTABLE repository, since each build overwrites the tag; the on-prem
+      image repositories are IMMUTABLE, which makes `registry` unusable there.
 
-      COST, CORRECTED. This input previously described the cost as "a `:buildcache` tag
-      per image repository, a few GB at $0.10/GB-month". That counted STORAGE and missed
-      EGRESS, which is the larger number by an order of magnitude: a GitHub-hosted runner
-      is outside AWS, so every build PULLS the whole cache back out of ECR across the
-      internet. Measured on this account 2026-08-01..16 — `APS1-DataTransfer-Out-Bytes`
-      on ECR was 147.3 GB in sixteen days, $10.90/mo, against $1.51/mo of cache storage.
+      `none` — no cache at all. Correct for a large image on a PUBLIC repository, where Actions minutes are unmetered:
+      the cache buys wall-clock, not money. Builds are slower and reproducible from scratch.
 
-      Egress scales with DEPLOY FREQUENCY, not with image count, so it is the one line on
-      the bill that grows when the team ships more. Size the decision per product:
-
-        qnsc-kb   `:buildcache` is 4.28 GB   -> pulled in full on every build
-        rova     `:buildcache` is 0.33 GB   -> effectively free, keep it
-
-      A self-hosted runner inside the VPC would make this free (same-region traffic), and
-      is the real fix if registry cache is ever wanted for a large image.
-
-      `none` disables the cache entirely — no `cache-from`, no `cache-to`, nothing
-      written to ECR. Correct for a large image on a PUBLIC repository, where Actions
-      minutes are unmetered: the cache is then buying wall-clock, not money, and the
-      egress is real money. Builds are slower and fully reproducible from scratch.
-
-      `gha` (the default) suits a product with small images, and keeps the cache out of ECR
-      entirely. Only the cache location changes between the three.
-
-      Registry mode requires a MUTABLE ECR repository, because each build overwrites the
-      `buildcache` tag. As of task 0.8 the image repositories are IMMUTABLE (the ecr
-      module's default), so `registry` cache is INCOMPATIBLE with them — a `buildcache`
-      overwrite is rejected exactly as a second `:latest` push would be. That is why the
-      products moved off it: rova and opshub use `gha`, qnsc-kb uses `none`. Do not set
-      `registry` against an IMMUTABLE repository; use `gha` or `none`, or a self-hosted
-      in-VPC runner if registry cache is ever genuinely wanted (see the egress note above).
-
-      (Historical: this action used to push a moving `:latest` via `extra-tags`, which
-      needed mutability for the same reason. That push was removed in 0.8 — §11 — and the
-      repositories flipped to IMMUTABLE, so both the tag and the cache constraint changed
-      together.)
-
-      The ECR lifecycle policy leaves `buildcache` alone: its rules key on the `v` and
-      `sha-` prefixes and on untagged images, and `buildcache` matches neither. So
-      switching a product to `none` does NOT reclaim its existing cache tag — delete it
-      once by hand with `aws ecr batch-delete-image --image-ids imageTag=buildcache`.
+      Only the cache location changes between the three.
     required: false
     default: gha
   push-by-digest:
@@ -195,11 +166,14 @@ runs:
       shell: bash
       env:
         SCAN: ${{ inputs.scan }}
+        # `registry` replaced `ecr-registry` (the old name goes in v1.34.0); an empty one would otherwise build `"/name:tag"`.
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
       run: |
         case "$SCAN" in
           true|false) ;;
-          *) echo "::error title=build-push-ecr::scan must be exactly 'true' or 'false' (got '$SCAN')"; exit 1 ;;
+          *) echo "::error title=build-push-image::scan must be exactly 'true' or 'false' (got '$SCAN')"; exit 1 ;;
         esac
+        [ -n "$REGISTRY" ] || { echo "::error title=build-push-image::set registry to the registry namespace, e.g. ghcr.io/<org>"; exit 1; }
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
@@ -208,16 +182,16 @@ runs:
       id: tags
       shell: bash
       env:
-        ECR_REGISTRY: ${{ inputs.ecr-registry }}
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
         IMAGE_NAME: ${{ inputs.image-name }}
         IMAGE_TAG: ${{ inputs.image-tag }}
         EXTRA_TAGS: ${{ inputs.extra-tags }}
       run: |
-        PRIMARY="${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+        PRIMARY="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
         TAGS="$PRIMARY"
         if [ -n "$EXTRA_TAGS" ]; then
           while IFS= read -r t; do
-            [ -n "$t" ] && TAGS="$TAGS"$'\n'"${ECR_REGISTRY}/${IMAGE_NAME}:$t"
+            [ -n "$t" ] && TAGS="$TAGS"$'\n'"${REGISTRY}/${IMAGE_NAME}:$t"
           done <<< "$EXTRA_TAGS"
         fi
         echo "tags<<EOF" >> "$GITHUB_OUTPUT"
@@ -237,7 +211,7 @@ runs:
         BACKEND:  ${{ inputs.cache-backend }}
         SCAN:     ${{ inputs.scan }}
         SCOPE:    ${{ inputs.cache-scope }}
-        REGISTRY: ${{ inputs.ecr-registry }}
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
         IMAGE:    ${{ inputs.image-name }}
         REF:      ${{ github.ref }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -268,7 +242,7 @@ runs:
         # WRITE THE CACHE ONLY FROM THE DEFAULT BRANCH. A GitHub Actions cache entry is readable only by the ref that wrote it
         # (and pull requests based on it), never by main or a sibling: a cache written from a tag or a manual run on another branch
         # is read by nobody and still counts against the 10 GB per-repository cap, evicting the entries main DOES read. For the
-        # registry backend the same write is a push of the whole cache to ECR. READ is unchanged everywhere.
+        # registry backend the same write is a push of the whole cache to the registry. READ is unchanged everywhere.
         DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
         if [ "$REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then
           if [ -n "$TO" ]; then
@@ -302,12 +276,12 @@ runs:
         # buildx list or a space in a hand-written one.
         multi='[,[:space:]]'
         if [[ "$PLATFORMS" =~ $multi ]]; then
-          echo "::error title=build-push-ecr::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
+          echo "::error title=build-push-image::scan: true needs a single platform (got '$PLATFORMS'); build each architecture on its own runner and scan in each leg"
           exit 1
         fi
         # The scanned image is pushed with `docker push`, which needs a tag; push-by-digest publishes an untagged image.
         if [ "$PUSH_BY_DIGEST" = "true" ]; then
-          echo "::error title=build-push-ecr::scan: true pushes the scanned image by tag and cannot be combined with push-by-digest: true"
+          echo "::error title=build-push-image::scan: true pushes the scanned image by tag and cannot be combined with push-by-digest: true"
           exit 1
         fi
 
@@ -323,7 +297,7 @@ runs:
       run: |
         set -euo pipefail
         git -C "$CTX" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-          echo "::error title=build-push-ecr::scan: true needs the build context to be a git checkout (the context is '$CTX')"; exit 1; }
+          echo "::error title=build-push-image::scan: true needs the build context to be a git checkout (the context is '$CTX')"; exit 1; }
         git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$SNAPSHOT"
 
     # THE build on the scan path: local only, nothing is pushed. This is the image that is scanned AND then pushed, unchanged.
@@ -340,7 +314,7 @@ runs:
         platforms: ${{ inputs.platforms }}
         load: true
         push: false
-        tags: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        tags: prepush-scan/${{ inputs.image-name }}:scan
         cache-from: ${{ steps.cache.outputs.from }}
         cache-to: ${{ steps.cache.outputs.to }}
         labels: ${{ inputs.labels }}
@@ -353,7 +327,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        image-ref: prepush-scan/${{ inputs.image-name }}:scan
         format: table
         exit-code: '1'
         severity: ${{ inputs.scan-severity }}
@@ -374,7 +348,7 @@ runs:
       if: ${{ inputs.scan == 'true' && contains(inputs.scan-scanners, 'secret') }}
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        image-ref: prepush-scan/${{ inputs.image-name }}:scan
         format: table
         exit-code: '1'
         scanners: secret
@@ -386,7 +360,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
-        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
       run: |
         set -euo pipefail
         docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}' > "$RUNNER_TEMP/scanned-layers.json"
@@ -403,7 +377,7 @@ runs:
         set -euo pipefail
         git -C "$CTX" status --porcelain --ignored=matching --untracked-files=all > "$RUNNER_TEMP/context-after.txt"
         if ! diff -u "$SNAPSHOT" "$RUNNER_TEMP/context-after.txt"; then
-          echo "::error title=build-push-ecr::something wrote into the build context '$CTX' after it was recorded (lines above). Nothing was pushed. Point the tool's output or cache outside the context."
+          echo "::error title=build-push-image::something wrote into the build context '$CTX' after it was recorded (lines above). Nothing was pushed. Point the tool's output or cache outside the context."
           exit 1
         fi
 
@@ -412,7 +386,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
-        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
         set -euo pipefail
@@ -453,7 +427,7 @@ runs:
         # Normal path: push: true + tags. By-digest path: `outputs` pushes an untagged image and `push`/`tags` must not also be set.
         push: ${{ inputs.push-by-digest != 'true' }}
         tags: ${{ inputs.push-by-digest != 'true' && steps.tags.outputs.tags || '' }}
-        outputs: ${{ inputs.push-by-digest == 'true' && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', inputs.ecr-registry, inputs.image-name) || '' }}
+        outputs: ${{ inputs.push-by-digest == 'true' && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true', inputs.registry || inputs.ecr-registry, inputs.image-name) || '' }}
         # Both computed in the step above — see it for why this is not a `${{ }}` ternary,
         # and see `cache-backend` for the cost of each backend.
         #
@@ -479,7 +453,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
-        REGISTRY: ${{ inputs.ecr-registry }}
+        REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
         IMAGE_NAME: ${{ inputs.image-name }}
         DIGEST: ${{ steps.build.outputs.digest }}
         SAME_LAYERS: ${{ github.action_path }}/same_layers.sh
@@ -498,7 +472,7 @@ runs:
       uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
       with:
         # Registry + repository, no tag: the digest identifies the image.
-        subject-name: ${{ inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-name: ${{ inputs.registry || inputs.ecr-registry }}/${{ inputs.image-name }}
         subject-digest: ${{ steps.build.outputs.digest }}
         push-to-registry: false
 
@@ -508,7 +482,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
       with:
-        image: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        image: prepush-scan/${{ inputs.image-name }}:scan
         format: spdx-json
         output-file: ${{ runner.temp }}/sbom.spdx.json
         upload-artifact: false
@@ -519,7 +493,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
       with:
-        subject-name: ${{ inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-name: ${{ inputs.registry || inputs.ecr-registry }}/${{ inputs.image-name }}
         subject-digest: ${{ steps.build.outputs.digest }}
         sbom-path: ${{ runner.temp }}/sbom.spdx.json
         push-to-registry: false
@@ -529,7 +503,7 @@ runs:
       if: ${{ inputs.scan == 'true' }}
       shell: bash
       env:
-        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        IMAGE: prepush-scan/${{ inputs.image-name }}:scan
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
         docker image rm "$IMAGE" || true
