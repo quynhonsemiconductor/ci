@@ -471,22 +471,15 @@ Re-review after a switch: the review action's checkpoint fingerprint hashes the 
 
 ## Versioning
 
-Pin to a release tag for production stability:
-```yaml
-# Production — pin to a tag
-uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1.21.0
-
-# Dev / fast iteration
-uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@main
-```
-
-This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Consuming repos must pin to a released `@vX.Y.Z` **plus its commit digest** (Renovate does both, via the org preset's `pinDigests`), e.g.
+Consumers pin a FULL COMMIT SHA and name the release it belongs to in the trailing comment:
 
 ```yaml
 uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@4ab9d053b565b4fef50da119b0ff675de19217e0 # v1.21.0
 ```
 
-The floating `v1` / `v1.21` tags are retired (2026-10-20): a push to ci main can no longer change any consumer's pipeline — bumps land only through reviewed Renovate PRs.
+This repo uses [release-please](https://github.com/googleapis/release-please) to auto-generate tags and `CHANGELOG.md`. Renovate (org preset, `pinDigests`) moves the SHA and the comment together in a reviewed pull request, so a bump is a reviewed diff rather than a ref that moves under the caller. The `# vX.Y.Z` comment is not decoration: `scripts/pin_drift.py` reads the version from it, so a SHA pin without one is invisible to the pin-drift report.
+
+**`v1` is FROZEN** (2026-10-21, at v1.22). It does not move on release and will not be moved again; a caller on it runs code from before the on-prem migration, 40+ commits behind `main`. Do not use `v1`, or any other floating tag (`v1.<minor>`), in a workflow or an action — pin a SHA plus its `# vX.Y.Z` comment.
 
 ## Adding new actions
 

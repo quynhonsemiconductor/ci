@@ -43,8 +43,13 @@ OWNER = "quynhonsemiconductor"
 # own actions would appear as a repository disagreeing with itself about nothing.
 SOURCES = {"ci", "tf-modules"}
 
-# `ci/.github/workflows/security.yml@v1.7.2`, `ci/actions/setup-tofu-aws@v1`
+# `ci/.github/workflows/security.yml@v1.7.2`, `ci/actions/setup-tofu-aws@v1` — a floating or release TAG.
 CI_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s]+@(v\d+(?:\.\d+){0,2})")
+# `ci/actions/setup-node-pnpm@4ab9d053...# v1.21.0` — the form every consumer uses since 2026-10-20: the ref is a full
+# commit SHA and the release lives in the trailing comment. The report was BLIND to these (it only matched tag refs), so
+# stale SHA pins — which is all of them — were never listed. The comment may be followed by another one
+# (`# v1.29.0 # ci#245 ...`); only the leading `vX.Y.Z` is read.
+CI_SHA_PIN = re.compile(r"quynhonsemiconductor/ci/[^@\s]+@[0-9a-f]{40}[ \t]+#[ \t]*(v\d+(?:\.\d+){0,2})\b")
 # `modules/ecr?ref=ecr-v2.0.0`
 MODULE_PIN = re.compile(r"modules/[a-z0-9-]+\?ref=([a-z0-9-]+)-(v\d+\.\d+\.\d+)")
 # `iam-oidc-v3.0.1` — a per-module release tag in tf-modules
@@ -150,6 +155,7 @@ def pins_used(repo_dir: Path) -> tuple[set[str], dict[str, set[str]]]:
             continue
         text = path.read_text(errors="ignore")
         ci.update(CI_PIN.findall(text))
+        ci.update(CI_SHA_PIN.findall(text))
         for name, version in MODULE_PIN.findall(text):
             modules[name].add(version)
     return ci, modules
