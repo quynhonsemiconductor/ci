@@ -147,3 +147,17 @@ def test_commit_mode_commit_carries_rendered_too(tmp_path):
     files = subprocess.run(["git", "--git-dir", str(origin), "show", "--name-only", "--format=", "main"],
                            capture_output=True, text=True, check=True).stdout.split()
     assert sorted(files) == ["rendered/rova/dev.yaml", "values/rova/tags.dev.yaml"]
+
+
+def test_gitops_checkout_persists_no_credentials_and_both_pushes_authenticate_env_only():
+    doc = yaml.safe_load(ACTION.read_text(encoding="utf-8"))
+    steps = doc["runs"]["steps"]
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))
+    assert checkout["with"].get("persist-credentials") is False
+    for name in ("Commit (dev)", "Open a pull request"):
+        step = next(s for s in steps if s.get("name") == name)
+        run = step["run"]
+        assert "GIT_CONFIG_COUNT=1" in run
+        assert 'GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"' in run
+        assert 'GIT_CONFIG_VALUE_0="AUTHORIZATION: basic' in run
+        assert "git config --local" not in run

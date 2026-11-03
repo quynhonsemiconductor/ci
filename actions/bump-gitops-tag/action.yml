@@ -101,11 +101,15 @@ runs:
           exit 1
         fi
 
+    # persist-credentials stays false (zizmor artipacked): the token would
+    # otherwise be written into .gitops/.git/config and travel with any artifact.
+    # The two push paths below supply it env-only for their git commands.
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         repository: ${{ inputs.gitops-repo }}
         token: ${{ inputs.gitops-token }}
         path: .gitops
+        persist-credentials: false
 
     - name: Bump
       id: bump
@@ -192,10 +196,16 @@ runs:
         PRODUCT: ${{ inputs.product }}
         ENV: ${{ inputs.env }}
         TAG: ${{ inputs.tag }}
+        GIT_TOKEN: ${{ inputs.gitops-token }}
       run: |
         set -euo pipefail
         git config user.name  "qnsc-ci"
         git config user.email "ci@qnsc.vn"
+        # Auth env-only (same form as release-promote.yml): GIT_CONFIG_* applies
+        # to these git commands and writes nothing to .git/config.
+        export GIT_CONFIG_COUNT=1
+        export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+        export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')"
         # Stage ONLY the machine-owned values file and its render. `git add -A`
         # would put unrelated work in a bot commit — and on dev that breaks the
         # gitops bot-scope rule the auto-merge depends on. -A (with the explicit
@@ -223,6 +233,7 @@ runs:
       working-directory: .gitops
       env:
         GH_TOKEN: ${{ inputs.gitops-token }}
+        GIT_TOKEN: ${{ inputs.gitops-token }}
         PRODUCT: ${{ inputs.product }}
         ENV: ${{ inputs.env }}
         TAG: ${{ inputs.tag }}
@@ -252,6 +263,11 @@ runs:
         fi
         git diff --cached --quiet && { echo "::error::nothing staged for ${PRODUCT} ${ENV}"; exit 1; }
         git commit -m "$title"
+        # Auth env-only (same form as release-promote.yml): nothing is written
+        # to .git/config, so the token never rests in the checkout.
+        export GIT_CONFIG_COUNT=1
+        export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+        export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')"
         git push -u origin "$branch"
         if [ "$ENV" = "prod" ]; then
           body="$(cat <<'BODY'

@@ -226,12 +226,14 @@ jobs:
           git config user.name  "qnsc-ci"
           git config user.email "ci@qnsc.vn"
           git checkout -b "$branch"
-          # Stage ONLY the machine-owned values file and its render. `git add -A`
-          # would let the bot-scope gate see unrelated work, and a promotion PR is
-          # supposed to be a three-line diff.
-          files=("values/${PRODUCT}/tags.prod.yaml")
-          [ -e "rendered/${PRODUCT}/prod.yaml" ] && files+=("rendered/${PRODUCT}/prod.yaml")
-          git add -- "${files[@]}"
+          # Stage ONLY the machine-owned values file and its render — the SAME
+          # form as bump-gitops-tag, so the two stay identical. -A stages a render
+          # that is new or deleted (the gitops stale-render gate needs it).
+          if [ -e "rendered/${PRODUCT}/prod.yaml" ] || git ls-files --error-unmatch "rendered/${PRODUCT}/prod.yaml" >/dev/null 2>&1; then
+            git add -A -- "values/${PRODUCT}/tags.prod.yaml" "rendered/${PRODUCT}/prod.yaml"
+          else
+            git add -A -- "values/${PRODUCT}/tags.prod.yaml"
+          fi
           if git diff --cached --quiet; then
             echo "::error title=release-promote::prod is already at ${TAG}; nothing to promote."
             exit 1

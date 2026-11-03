@@ -89,7 +89,7 @@ def test_opens_a_promotion_pr_staged_to_the_machine_owned_files(tmp_path):
     assert result.returncode == 0, result.stderr
     assert outputs["url"] == "https://github.com/example/gitops/pull/9"
     assert "git checkout -b promote/rova-v1.2.3" in calls
-    assert any(c.startswith("git add -- values/rova/tags.prod.yaml rendered/rova/prod.yaml") for c in calls)
+    assert any(c.startswith("git add -A -- values/rova/tags.prod.yaml rendered/rova/prod.yaml") for c in calls)
     assert "git commit -m chore(rova): promote prod to v1.2.3" in calls
     joined = "\n".join(calls)
     assert "gh pr create --title chore(rova): promote prod to v1.2.3" in joined

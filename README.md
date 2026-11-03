@@ -306,6 +306,8 @@ A reusable workflow's permissions are capped by its caller's, so a product that 
 ### `release-retag`
 Cut a version without rebuilding. For each candidate service it reads the image's identity tag `sha-<commit>`, gets its digest, verifies that digest's build attestation (`gh attestation verify`, signer `ghcr-publish.yml`), and only after every found image passes does it run `crane tag <image>@<digest> vX.Y.Z` — the tag moves onto the SAME digest. A service with no `sha-<commit>` tag is skipped (the product may not ship it); zero images or one failed attestation fails the step, so the release never points at an unverified image. Log in to the registry first.
 
+A failed `crane tag` mid-loop leaves the earlier services tagged with this release; re-running is safe, because an existing tag at the same digest is a no-op and a tag at a different digest is refused.
+
 The reusable workflow is the supported entry point (it installs crane, logs in to GHCR and calls the action):
 
 ```yaml
