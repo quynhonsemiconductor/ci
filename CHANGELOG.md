@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.31.2](https://github.com/quynhonsemiconductor/ci/compare/v1.31.1...v1.31.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* **ghcr-publish:** run the v1.31.1 build-push-image on the publish path ([#288](https://github.com/quynhonsemiconductor/ci/issues/288)) ([be13c01](https://github.com/quynhonsemiconductor/ci/commit/be13c01949c5a0e84e83ee7d9fc10cd9e622cf09))
+
 ## [1.31.1](https://github.com/quynhonsemiconductor/ci/compare/v1.31.0...v1.31.1) (2026-11-03)
 
 
