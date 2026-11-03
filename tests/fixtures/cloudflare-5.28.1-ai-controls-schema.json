@@ -1,0 +1,400 @@
+{
+  "provider": "cloudflare",
+  "resources": {
+    "cloudflare_zero_trust_access_ai_controls_mcp_portal": {
+      "account_id": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "allow_code_mode": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "code_mode": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "created_at": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "created_by": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "hostname": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "id": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "modified_at": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "modified_by": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "secure_web_gateway": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "servers": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "servers.default_disabled": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "servers.on_behalf": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "servers.server_id": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "servers.updated_prompts": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_prompts.alias": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_prompts.description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_prompts.enabled": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_prompts.name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "servers.updated_tools": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_tools.alias": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_tools.description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_tools.enabled": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "servers.updated_tools.name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      }
+    },
+    "cloudflare_zero_trust_access_ai_controls_mcp_server": {
+      "account_id": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "auth_config_summary": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.auth_mode": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.client_secret_version": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config.authorization_endpoint": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config.issuer": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config.resource": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config.revocation_endpoint": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.config.token_endpoint": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.has_client_secret": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.registration_info": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.registration_info.client_id": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.registration_info.redirect_uris": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.registration_info.scope": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_config_summary.registration_info.token_endpoint_auth_method": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "auth_credentials": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "auth_type": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "authentication_status": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "client_secret": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "created_at": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "created_by": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "error": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details.cause": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details.is_upstream": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details.mcp_code": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details.retryable": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "error_details.status_code": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "hostname": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "id": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "is_shared_oauth_callback_enabled": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "last_successful_sync": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "last_synced": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "modified_at": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "modified_by": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "prompts": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "secure_web_gateway": {
+        "computed": true,
+        "optional": true,
+        "required": false
+      },
+      "status": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "tools": {
+        "computed": true,
+        "optional": false,
+        "required": false
+      },
+      "updated_prompts": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_prompts.alias": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_prompts.description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_prompts.enabled": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_prompts.name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      },
+      "updated_tools": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_tools.alias": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_tools.description": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_tools.enabled": {
+        "computed": false,
+        "optional": true,
+        "required": false
+      },
+      "updated_tools.name": {
+        "computed": false,
+        "optional": false,
+        "required": true
+      }
+    }
+  },
+  "version": "5.28.1"
+}

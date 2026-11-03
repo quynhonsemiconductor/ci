@@ -8,6 +8,8 @@ import unittest
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "actions", "destructive-guard")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 AI_CONTROLS_EDGE = os.path.join(FIXTURES, "infra-edge-drift-ai-controls-2026-11-03.json")
+# `tofu providers schema -json` for cloudflare 5.28.1, trimmed to the two AI-controls resources.
+AI_CONTROLS_SCHEMA = os.path.join(FIXTURES, "cloudflare-5.28.1-ai-controls-schema.json")
 
 
 def drift(address, rtype, actions, before=None, after=None):
@@ -113,8 +115,9 @@ class DriftReport(unittest.TestCase):
         self.assertIn("informational", out)
         self.assertNotIn("MATTERS", out)
 
-    def test_every_provider_computed_ai_controls_field_is_noise_on_both_types(self):
-        # The catalogue and the sync state are written by Cloudflare's probe, not by the configuration.
+    def test_every_provider_computed_ai_controls_field_is_noise(self):
+        # The catalogue and the sync state are written by Cloudflare's probe, not by the configuration. Server only: the
+        # portal does not have these fields (see the schema test below).
         fields = {
             "error": ("Server error: HTTP 404", "Unable to connect to server"),
             "error_details": ({"cause": "a", "is_upstream": True}, {"cause": "b", "is_upstream": False}),
@@ -125,12 +128,11 @@ class DriftReport(unittest.TestCase):
             "prompts": ([], [{"name": "summarise"}]),
             "auth_config_summary": ("OAuth discovery succeeded", "OAuth discovery failed"),
         }
-        for rtype in ("cloudflare_zero_trust_access_ai_controls_mcp_server",
-                      "cloudflare_zero_trust_access_ai_controls_mcp_portal"):
-            for field, (before, after) in fields.items():
-                with self.subTest(rtype=rtype, field=field):
-                    code, out = run([drift("x.y[0]", rtype, ["update"], {field: before}, {field: after})])
-                    self.assertEqual(code, 3, out)
+        rtype = "cloudflare_zero_trust_access_ai_controls_mcp_server"
+        for field, (before, after) in fields.items():
+            with self.subTest(field=field):
+                code, out = run([drift("x.y[0]", rtype, ["update"], {field: before}, {field: after})])
+                self.assertEqual(code, 3, out)
 
     def test_a_real_ai_controls_change_still_matters(self):
         # What the configuration manages: where the server is, how it authenticates, and whether it acts on behalf.
@@ -142,6 +144,54 @@ class DriftReport(unittest.TestCase):
                                        {field: before, "error": "e1"}, {field: after, "error": "e2"})])
                 self.assertEqual(code, 2, out)
                 self.assertIn(field, out)
+
+    def test_every_ignored_field_is_computed_only_in_the_provider_schema(self):
+        """The safety rule: an Optional field is configuration, so ignoring it would hide a real edit. Checked against
+        cloudflare 5.28.1's own schema, not against a list someone typed."""
+        sys.path.insert(0, HERE)
+        import drift_report
+        with open(AI_CONTROLS_SCHEMA, encoding="utf-8") as fh:
+            schema = json.load(fh)["resources"]
+        for rtype, ignored in drift_report.CLOUDFLARE_COMPUTED_BY_TYPE.items():
+            if not rtype.startswith("cloudflare_zero_trust_access_ai_controls"):
+                continue
+            attrs = schema[rtype]
+            for field in ignored:
+                with self.subTest(rtype=rtype, field=field):
+                    self.assertIn(field, attrs, "a field that does not exist on the type cannot be justified as computed")
+                    self.assertTrue(attrs[field]["computed"], f"{field} is not computed by the provider")
+                    self.assertFalse(attrs[field]["optional"], f"{field} is Optional: it is configuration and must never be ignored")
+
+    def test_the_portal_servers_list_is_configuration_not_noise(self):
+        """servers[] is computed AND optional, and every field the configuration can set inside it is Optional: a membership
+        change, a renamed server, or an edited tool entry is a real change and must MATTER."""
+        portal = "cloudflare_zero_trust_access_ai_controls_mcp_portal"
+        base = {"hostname": "h", "name": "QNSC", "servers": [{"server_id": "a", "on_behalf": False,
+                                                              "updated_tools": [{"name": "search", "enabled": True}]}]}
+        cases = {
+            "added server": {**base, "servers": base["servers"] + [{"server_id": "b"}]},
+            "removed server": {**base, "servers": []},
+            "renamed server entry": {**base, "servers": [{**base["servers"][0], "name": "Renamed"}]},
+            "on_behalf flipped": {**base, "servers": [{**base["servers"][0], "on_behalf": True}]},
+            "updated_tools edited": {**base, "servers": [{**base["servers"][0],
+                                                          "updated_tools": [{"name": "search", "enabled": False}]}]},
+            "updated_prompts added": {**base, "servers": [{**base["servers"][0],
+                                                           "updated_prompts": [{"name": "summarise"}]}]},
+            "server_id changed": {**base, "servers": [{**base["servers"][0], "server_id": "z"}]},
+        }
+        for label, after in cases.items():
+            with self.subTest(case=label):
+                code, out = run([drift("p.q[0]", portal, ["update"], base, after)])
+                self.assertEqual(code, 2, out)
+
+    def test_names_and_on_behalf_on_both_types_matter(self):
+        for rtype in ("cloudflare_zero_trust_access_ai_controls_mcp_server",
+                      "cloudflare_zero_trust_access_ai_controls_mcp_portal"):
+            for field, before, after in (("name", "old", "new"), ("hostname", "a.example", "b.example")):
+                with self.subTest(rtype=rtype, field=field):
+                    code, out = run([drift("x.y[0]", rtype, ["update"], {field: before}, {field: after})])
+                    self.assertEqual(code, 2, out)
+                    self.assertIn(field, out)
 
     def test_noop_entries_are_ignored(self):
         self.assertEqual(run([drift("a.b", "aws_sns_topic", ["no-op"]), drift("c.d", "aws_sns_topic", [])])[0], 0)
