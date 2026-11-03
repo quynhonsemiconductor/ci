@@ -25,7 +25,7 @@ def step_script() -> str:
     return next(s for s in doc["runs"]["steps"] if s.get("id") == "pr")["run"]
 
 
-def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
+def run_step(tmp_path, *, env_name, tag, auto_merge="false", changelog="", dev_health=""):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "calls.log"
@@ -38,6 +38,7 @@ def run_step(tmp_path, *, env_name, tag, auto_merge="false"):
     env = {
         "PATH": f"{bindir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out), "GH_TOKEN": "x", "PRODUCT": "rova",
         "ENV": env_name, "TAG": tag, "AUTO_MERGE": auto_merge,
+        "CHANGELOG": changelog, "DEV_HEALTH": dev_health,
     }
     result = subprocess.run(["bash", "-c", step_script()], cwd=tmp_path, capture_output=True, text=True, env=env, timeout=30)
     return result, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
@@ -61,6 +62,18 @@ def test_prod_keeps_the_promote_branch_and_never_auto_merges_by_default(tmp_path
     assert "git checkout -b promote/rova-v1.2.3" in calls
     assert any(c.startswith("gh pr create --title chore(rova): promote prod to v1.2.3") for c in calls)
     assert not any(c.startswith("gh pr merge") for c in calls)
+
+
+def test_prod_body_carries_the_changelog_and_dev_health(tmp_path):
+    result, calls = run_step(
+        tmp_path, env_name="prod", tag="v1.2.3",
+        changelog="### Bug Fixes\n* retag instead of rebuild", dev_health="rova-dev: Synced / Healthy",
+    )
+    assert result.returncode == 0, result.stderr
+    body = "\n".join(calls)
+    assert "retag instead of rebuild" in body
+    assert "rova-dev: Synced / Healthy" in body
+    assert "Release changelog" in body and "Dev health (ArgoCD, at promote time)" in body
 
 
 def test_dev_without_auto_merge_does_not_enable_it(tmp_path):

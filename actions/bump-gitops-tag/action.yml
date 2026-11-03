@@ -44,6 +44,16 @@ inputs:
       pull-request mode only: enable auto-merge (squash) on the PR it opens. The PR still has to
       satisfy gitops's branch rules; auto-merge only removes the manual click. Use it for dev only.
     default: 'false'
+  changelog:
+    description: >
+      pull-request + prod only: the release changelog, included in the promotion PR body so the
+      approval makes an informed decision. The caller (release-promote) supplies it.
+    default: ''
+  dev-health:
+    description: >
+      pull-request + prod only: the current dev ArgoCD health at promote time (sync/health per
+      application), included in the promotion PR body. Empty is printed as "not reported".
+    default: ''
   render:
     description: >
       'true' (default) | 'false'. After the tags are written, run the target repo's scripts/render.sh when
@@ -217,6 +227,8 @@ runs:
         ENV: ${{ inputs.env }}
         TAG: ${{ inputs.tag }}
         AUTO_MERGE: ${{ inputs.auto-merge }}
+        CHANGELOG: ${{ inputs.changelog }}
+        DEV_HEALTH: ${{ inputs.dev-health }}
       run: |
         set -euo pipefail
         if [ "$ENV" = "prod" ]; then
@@ -236,16 +248,26 @@ runs:
         git commit -m "$title"
         git push -u origin "$branch"
         if [ "$ENV" = "prod" ]; then
-          body="$(cat <<'BODY'
+          # Approval is the ONE prod gate (DELIVERY-DESIGN §2): put the release
+          # content and the dev state in front of the approver, not in a link.
+          body="$(cat <<BODY
         §11 — promotion is a reviewable diff.
 
-        Before this existed, a version tag applied whatever `main` contained, which
-        is why rova production ran code from before 7 September while `main` was 44
+        Before this existed, a version tag applied whatever \`main\` contained, which
+        is why rova production ran code from before 7 September while \`main\` was 44
         commits ahead — and why an alerting fix could not reach production without
         shipping nine features.
 
-        The image below already ran in dev. This changes which tag production
+        The images below already ran in dev. This changes which digests production
         points at; it builds nothing.
+
+        ## Release changelog
+
+        ${CHANGELOG:-Not supplied by the caller.}
+
+        ## Dev health (ArgoCD, at promote time)
+
+        ${DEV_HEALTH:-Not reported by the caller.}
 
         Rollback: revert this commit.
         BODY
