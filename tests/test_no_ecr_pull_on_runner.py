@@ -264,6 +264,46 @@ def test_trivy_keeps_its_cache_out_of_the_build_context():
     assert "github.workspace" not in str(scan["with"]["cache-dir"])
 
 
+def test_the_scan_path_attests_the_pushed_digest():
+    """The scan path pushes the local image, so the buildx attestations are gone. They must come back as GitHub attestations
+    on the PUSHED DIGEST: provenance, and an SBOM of that same image, both not a rebuild or a pull."""
+    steps, _ = build_push_steps()
+    push_i, _ = steps["Push the scanned image"]
+    verify_i, _ = steps["Verify the pushed image has the scanned layers"]
+    prov_i, prov = steps["Attest the pushed image's build provenance"]
+    sbom_i, sbom = steps["Generate an SBOM for the pushed image"]
+    attest_i, attest = steps["Attest the pushed image's SBOM"]
+    drop_i, _ = steps["Drop the pushed image from the runner"]
+    assert push_i < verify_i < prov_i < sbom_i < attest_i < drop_i
+    assert prov["uses"].startswith("actions/attest-build-provenance@")
+    assert attest["uses"].startswith("actions/attest-sbom@")
+    assert sbom["uses"].startswith("anchore/sbom-action@")
+    for step in (prov, attest):
+        assert step["with"]["subject-digest"] == "${{ steps.build.outputs.digest }}"
+        assert step["with"]["subject-name"] == "${{ inputs.ecr-registry }}/${{ inputs.image-name }}"
+        assert step["if"] == "${{ inputs.scan == 'true' }}"
+    assert attest["with"]["sbom-path"] == "${{ runner.temp }}/sbom.spdx.json"
+    assert sbom["with"]["output-file"] == "${{ runner.temp }}/sbom.spdx.json"
+    # syft reads the local copy; the image must not be dropped before it runs, and nothing must pull it back from the registry.
+    assert sbom["with"]["image"] == "ecr-prepush-scan/${{ inputs.image-name }}:scan"
+    assert sbom["with"]["upload-artifact"] is False and sbom["with"]["upload-release-assets"] is False
+
+
+def test_registry_cache_is_refused_with_the_scan():
+    """A registry cache is written DURING the build, before the gates: a rejected image would still leave layers in GHCR."""
+    steps, _ = build_push_steps()
+    run = steps["Resolve cache backend"][1]["run"]
+    env = {"BACKEND": "registry", "SCAN": "true", "SCOPE": "s", "REGISTRY": "ghcr.io/o", "IMAGE": "i",
+           "REF": "refs/heads/main", "DEFAULT_BRANCH": "main"}
+    result = run_snippet(run, GITHUB_OUTPUT=os.devnull, GITHUB_STEP_SUMMARY=os.devnull, **env)
+    assert result.returncode != 0
+    assert "registry cannot be used with scan: true" in result.stdout
+    # gha (the default) and none stay allowed, and registry stays allowed without the scan.
+    for ok in ({"BACKEND": "gha", "SCAN": "true"}, {"BACKEND": "none", "SCAN": "true"}, {"BACKEND": "registry", "SCAN": "false"}):
+        result = run_snippet(run, GITHUB_OUTPUT=os.devnull, GITHUB_STEP_SUMMARY=os.devnull, **{**env, **ok})
+        assert result.returncode == 0, (ok, result.stdout)
+
+
 def test_the_build_context_is_checked_between_the_scan_and_the_push():
     steps, _ = build_push_steps()
     record_i, record = steps["Record the build context"]

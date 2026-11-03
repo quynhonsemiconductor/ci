@@ -139,9 +139,11 @@ inputs:
       fails on a cache miss is a flaky gate, and pushing the rebuild is a gate that can be passed by the wrong image. So the
       scan build is now the ONLY build on this path and its image is what gets pushed.
 
-      TRADE-OFF: the Docker exporter cannot carry the buildx attestations, so on this path the image has no provenance/SBOM
-      attestation. That is the state of the GHCR path today anyway (see ghcr-publish.yml: "No attestation for now"); supply-chain
-      attestations are attached separately in phase P4 (actions/attest-build-provenance + SBOM), which needs no rebuild.
+      ATTESTATIONS on this path are GitHub attestations attached to the PUSHED DIGEST rather than buildx OCI attestation
+      manifests embedded at build time (the Docker exporter cannot carry those): actions/attest-build-provenance for
+      provenance, and actions/attest-sbom over a syft SPDX SBOM of that same local image. Same subject, same guarantee, and it
+      needs no rebuild or pull. THE CALLING JOB MUST GRANT `id-token: write` and `attestations: write`; without them the
+      attestation step fails loudly right after the push, so grant them together with `packages: write`.
 
       Needs a SINGLE platform (`platforms` empty or one value): a multi-platform build cannot be loaded into the Docker daemon.
       Incompatible with `push-by-digest` (that publishes an untagged image; `docker push` needs a tag). The per-architecture legs
@@ -233,6 +235,7 @@ runs:
       shell: bash
       env:
         BACKEND:  ${{ inputs.cache-backend }}
+        SCAN:     ${{ inputs.scan }}
         SCOPE:    ${{ inputs.cache-scope }}
         REGISTRY: ${{ inputs.ecr-registry }}
         IMAGE:    ${{ inputs.image-name }}
@@ -247,6 +250,15 @@ runs:
             FROM="type=gha,scope=$SCOPE"
             TO="type=gha,mode=max,scope=$SCOPE" ;;
           registry)
+            # REFUSED WITH scan. A registry cache is written DURING the build, which is before the Trivy and secret gates:
+            # a rejected image would still leave its layers in the registry under :buildcache, in a repository that is
+            # supposed to receive nothing from a failed scan. There is no way to export the cache after the gates without
+            # building a second time, which is what the scan path deliberately does not do. `gha` keeps the cache out of the
+            # registry entirely.
+            if [ "$SCAN" = "true" ]; then
+              echo "::error title=build-push-image::cache-backend registry cannot be used with scan: true (the cache is written before the gates); use cache-backend gha or none"
+              exit 1
+            fi
             FROM="type=registry,ref=$REGISTRY/$IMAGE:buildcache"
             TO="type=registry,ref=$REGISTRY/$IMAGE:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" ;;
           *)
@@ -428,19 +440,6 @@ runs:
         [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
         echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-    # Remove the local copies: every layer is in the registry now, and the disk is what the next step needs.
-    - name: Drop the pushed image from the runner
-      if: ${{ inputs.scan == 'true' }}
-      shell: bash
-      env:
-        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
-        TAGS: ${{ steps.tags.outputs.tags }}
-      run: |
-        docker image rm "$IMAGE" || true
-        while IFS= read -r tag; do
-          [ -n "$tag" ] && { docker image rm "$tag" || true; }
-        done <<< "$TAGS"
-
     # scan: false — the original single build with buildx, attestations and the cache write. scan: true pushed above.
     - name: Build & push
       id: push
@@ -489,6 +488,54 @@ runs:
         [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest from the push"; exit 1; }
         docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" --format '{{json .Image}}' > "$RUNNER_TEMP/pushed-layers.json"
         "$SAME_LAYERS" "$RUNNER_TEMP/scanned-layers.json" "$RUNNER_TEMP/pushed-layers.json"
+
+    # ATTESTS THE PUSHED DIGEST, not a rebuild: this is the supply-chain record the scan path used to lose when it stopped
+    # carrying the buildx attestations. A GitHub attestation is attached to a digest, so the bytes never have to move again.
+    # Requires the calling job to grant `id-token: write` and `attestations: write` (documented in the README); without them
+    # this step fails loudly rather than silently publishing an unattested image.
+    - name: Attest the pushed image's build provenance
+      if: ${{ inputs.scan == 'true' }}
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+      with:
+        # Registry + repository, no tag: the digest identifies the image.
+        subject-name: ${{ inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: false
+
+    # The SBOM covers the image that was pushed: syft reads the local copy (still on disk at this point), so it describes
+    # exactly the bytes in the registry, and needs no pull.
+    - name: Generate an SBOM for the pushed image
+      if: ${{ inputs.scan == 'true' }}
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+      with:
+        image: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        format: spdx-json
+        output-file: ${{ runner.temp }}/sbom.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
+        dependency-snapshot: false
+
+    - name: Attest the pushed image's SBOM
+      if: ${{ inputs.scan == 'true' }}
+      uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
+      with:
+        subject-name: ${{ inputs.ecr-registry }}/${{ inputs.image-name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        sbom-path: ${{ runner.temp }}/sbom.spdx.json
+        push-to-registry: false
+
+    # Remove the local copies: every layer is in the registry and both attestations point at the digest, so the disk can go.
+    - name: Drop the pushed image from the runner
+      if: ${{ inputs.scan == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ecr-prepush-scan/${{ inputs.image-name }}:scan
+        TAGS: ${{ steps.tags.outputs.tags }}
+      run: |
+        docker image rm "$IMAGE" || true
+        while IFS= read -r tag; do
+          [ -n "$tag" ] && { docker image rm "$tag" || true; }
+        done <<< "$TAGS"
 
     - name: Expose image URI and digest
       id: expose
