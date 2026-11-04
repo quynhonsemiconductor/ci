@@ -32,6 +32,21 @@ promotion or rollback can never keep running an older pinned image.
     digests: ${{ needs.publish.outputs.digests }}
 ```
 
+## The `web` component
+
+A product's SPA is not a service in the chart (`charts/qnsc-service/templates/web.yaml`):
+it is the optional top-level `web` component, and every `services` entry requires a
+`kind`. List `web` in `services` like any other image and this action writes its tag and
+digest to `web.image` in the same machine-owned tags file — never to `services.web`,
+which the values schema would reject and the render would fail on.
+
+```yaml
+    services: "api worker migrator web"
+    digests: '{"api":"sha256:..","worker":"sha256:..","migrator":"sha256:..","web":"sha256:.."}'
+```
+
+`web` must be in `digests` when `digests` is set, like any other listed image.
+
 ## Dev as a PR with auto-merge
 
 `mode: pull-request` also works for `env: dev`: it opens `bump/<product>-dev-<tag>` with a
