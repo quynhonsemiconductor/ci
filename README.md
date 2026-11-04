@@ -19,7 +19,7 @@ Shared CI/CD logic lives here as versioned composite actions, so bug fixes and i
 | Action | Description |
 |---|---|
 | [`build-push-image`](actions/build-push-image/action.yml) | Buildx build + push, with an optional pre-push scan. Caller logs in first |
-| [`build-push-ecr`](actions/build-push-ecr/action.yml) | **Deprecated path, removed in v1.34.0**; identical to `build-push-image` |
+| [`build-push-ecr`](actions/build-push-ecr/action.yml) | **Deprecated path, removed in v1.35.0**; identical to `build-push-image` |
 | [`release-retag`](actions/release-retag/action.yml) | Add a release tag to the digests already published for a commit — verifies the build attestation first, never rebuilds. The [`release-retag` reusable workflow](.github/workflows/release-retag.yml) runs it on a tag push |
 
 ### ECS / Deploy
@@ -274,7 +274,7 @@ Log in to the target registry first (`docker/login-action`; GHCR with `GITHUB_TO
 
 | Input | Default | Description |
 |---|---|---|
-| `registry` | **required** | Registry and namespace, no trailing slash (e.g. `ghcr.io/quynhonsemiconductor`). The old name `ecr-registry` is accepted until v1.34.0 |
+| `registry` | **required** | Registry and namespace, no trailing slash (e.g. `ghcr.io/quynhonsemiconductor`). The old name `ecr-registry` is accepted until v1.35.0 |
 | `image-name` | **required** | Repository name inside the registry (e.g. `rova-api`) |
 | `image-tag` | **required** | Primary tag (e.g. `sha-abc1234`) |
 | `extra-tags` | `` | Newline-separated additional tags |

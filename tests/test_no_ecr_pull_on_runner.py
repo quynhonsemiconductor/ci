@@ -134,7 +134,7 @@ def test_no_workflow_or_action_asks_for_registry_cache_by_default():
 
 # ── the rename from build-push-ecr ────────────────────────────────────────────────────────────────────────────────────────────
 
-DEPRECATION_DEADLINE = "v1.34.0"
+DEPRECATION_DEADLINE = "v1.35.0"
 
 
 def test_the_old_path_is_a_deprecated_copy_of_the_new_one():

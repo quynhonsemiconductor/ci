@@ -8,11 +8,11 @@ inputs:
   registry:
     description: >
       Registry with its namespace, no trailing slash — `ghcr.io/quynhonsemiconductor`. Optional only so the old
-      `ecr-registry` name keeps working until it is removed (v1.34.0); set one of the two.
+      `ecr-registry` name keeps working until it is removed (v1.35.0); set one of the two.
     required: false
     default: ''
   ecr-registry:
-    description: DEPRECATED, use `registry`. Accepted until v1.34.0 so a caller that only bumps its SHA keeps working.
+    description: DEPRECATED, use `registry`. Accepted until v1.35.0 so a caller that only bumps its SHA keeps working.
     required: false
     default: ''
   image-name:
@@ -161,7 +161,7 @@ runs:
       shell: bash
       env:
         SCAN: ${{ inputs.scan }}
-        # `registry` replaced `ecr-registry` (the old name goes in v1.34.0); an empty one would otherwise build `"/name:tag"`.
+        # `registry` replaced `ecr-registry` (the old name goes in v1.35.0); an empty one would otherwise build `"/name:tag"`.
         REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
       run: |
         case "$SCAN" in
