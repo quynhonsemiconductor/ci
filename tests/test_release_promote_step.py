@@ -53,7 +53,8 @@ def step_script() -> str:
 
 
 def run(tmp_path, *, product="rova", tag="v1.2.3", changelog="### Fixes\\n* retag", dev_health="rova-dev: Synced / Healthy",
-        pr_url="", ls_remote_exit=1, no_changes=1, ls_files_exit=1, digests=DIGESTS):
+        pr_url="", ls_remote_exit=1, no_changes=1, ls_files_exit=1, digests=DIGESTS,
+        repository="quynhonsemiconductor/rova"):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for name, body in (("git", GIT_STUB), ("gh", GH_STUB)):
@@ -74,6 +75,7 @@ def run(tmp_path, *, product="rova", tag="v1.2.3", changelog="### Fixes\\n* reta
         "STUB_NO_CHANGES": str(no_changes),
         "STUB_LS_FILES_EXIT": str(ls_files_exit),
         "GH_TOKEN": "app-token",
+        "GITHUB_REPOSITORY": repository,
         "PRODUCT": product,
         "TAG": tag,
         "CHANGELOG": changelog,
@@ -91,7 +93,7 @@ def test_opens_a_promotion_pr_staged_to_the_machine_owned_files(tmp_path):
     result, outputs, calls = run(tmp_path)
     assert result.returncode == 0, result.stderr
     assert outputs["url"] == "https://github.com/example/gitops/pull/9"
-    assert "git checkout -b promote/rova-v1.2.3" in calls
+    assert "git checkout -b promote/rova-rova-v1.2.3" in calls
     assert any(c.startswith("git add -A -- values/rova/tags.prod.yaml rendered/rova/prod.yaml") for c in calls)
     assert "git commit -m chore(rova): promote prod to v1.2.3" in calls
     joined = "\n".join(calls)
@@ -175,3 +177,18 @@ def test_nothing_staged_fails_before_the_commit(tmp_path):
     assert result.returncode != 0
     assert "nothing to promote" in result.stdout + result.stderr
     assert not any(c.startswith("git commit") for c in calls)
+
+
+def test_two_repositories_promoting_one_product_get_different_branches(tmp_path):
+    """kb is promoted by two repositories with independent tags. A shared
+    promote/kb-<tag> branch lost the second promotion: one repo exited green on
+    the other's open PR, or failed on the branch-exists guard."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    _, _, calls_first = run(first, product="kb", repository="quynhonsemiconductor/qnsc-kb-backend")
+    _, _, calls_second = run(second, product="kb", repository="quynhonsemiconductor/qnsc-kb-frontend")
+    head_first = [c for c in calls_first if c.startswith("git checkout -b promote/kb-")]
+    head_second = [c for c in calls_second if c.startswith("git checkout -b promote/kb-")]
+    assert head_first and head_second, (calls_first, calls_second)
+    assert head_first != head_second, (head_first, head_second)
