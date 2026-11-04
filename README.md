@@ -283,8 +283,13 @@ Log in to the target registry first (`docker/login-action`; GHCR with `GITHUB_TO
 | `build-target` | `` | Multi-stage build target |
 | `cache-scope` | `default` | GHA cache scope key (use unique value per image) |
 | `cache-backend` | `gha` | Build cache: `gha`, `none`, or `registry`. `registry` cannot be used with IMMUTABLE repositories, pays egress on every build, and is refused with `scan: true` (the cache is written before the gates); see the action's `cache-backend` input |
+| `platforms` | `` | Target platform(s), e.g. `linux/amd64`. Must match where the workload runs, and the runner must be the SAME architecture (`ghcr-publish.yml`'s `build_runner` input exists for that) |
+| `push-by-digest` | `false` | Push by digest only, no tag — the per-architecture legs of a multi-arch build. A later job creates the tag once with `docker buildx imagetools create`; cannot be combined with `scan: true` |
 | `scan` | `false` | `true` scans for CRITICAL CVEs from the local build and pushes THAT image (no rebuild), then attests the pushed digest (provenance + SBOM). Nothing is pushed if a CRITICAL fixable CVE or any secret is found. Needs a single platform, and cannot be combined with `push-by-digest`. The calling job must grant `id-token: write` and `attestations: write` on top of `packages: write` |
 | `scan-severity` | `CRITICAL` | Severity that fails the pre-push scan (Trivy syntax, e.g. `HIGH,CRITICAL`); unfixed CVEs are ignored |
+| `scan-scanners` | `vuln` | Trivy scanners for the pre-push scan, e.g. `vuln` or `vuln,secret`. `secret` is for images landing in a PUBLIC registry, where a baked-in credential is a disclosure the moment the push lands |
+| `labels` | `` | OCI labels, newline-separated `key=value`. Set `org.opencontainers.image.source=<server_url>/<repository>` so the package links back to its repository |
+| `node-auth-token` | `${{ github.token }}` | Token the Dockerfile's `pnpm install` uses for private `@quynhonsemiconductor/*` packages (build secret `node_auth_token`); the calling job must grant `packages: read` |
 
 | Output | Description |
 |---|---|
