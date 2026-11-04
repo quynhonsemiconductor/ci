@@ -1,4 +1,9 @@
 # =============================================================================
+# DEPRECATED (2026-11-04) — NO CALLER IN THE ORGANISATION. Kept, not deleted, until
+# the next minor release: every repository's own deploy-reaper.yml was the caller and
+# those were retired with the per-product deploy workflows it existed for. Do not add
+# a new caller; delete this file in the release after the one that confirms none.
+#
 # Reusable: deploy reaper — clear parked deploy runs that deadlock the next release.
 #
 # Deploy workflows serialize on a workflow-level `concurrency` group with
