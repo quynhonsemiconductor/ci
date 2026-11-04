@@ -26,6 +26,7 @@ permissions:
 jobs:
   conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # `gitops` and `infra` are PRIVATE, and the job token is scoped to this
       # repository only — a cross-repo checkout with it 404s. The read-only
