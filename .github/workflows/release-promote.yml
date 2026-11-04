@@ -186,8 +186,23 @@ jobs:
               || { echo "::error::no digest for $svc in the release map"; exit 1; }
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad digest for $svc"; exit 1; }
             # The digest is the deployed identity; the tag stays as the human label.
-            digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
-            TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+            #
+            # `web` is NOT a service in the chart: the SPA is the optional top-level
+            # `web` component (charts/qnsc-service/templates/web.yaml) and its values
+            # key is `web.image`. A `services.web` entry is rejected by the values
+            # schema — every services entry requires `kind`. Same mapping as
+            # ci/actions/bump-gitops-tag, which writes the dev tags; the two must not
+            # disagree about where the SPA image lives.
+            case "$svc" in
+              web)
+                digest="$digest" yq -i '.web.image.digest = strenv(digest)' "$file"
+                TAG="$TAG" yq -i '.web.image.tag = strenv(TAG)' "$file"
+                ;;
+              *)
+                digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
+                TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+                ;;
+            esac
           done
           if [ -x ./scripts/render.sh ]; then ./scripts/render.sh; fi
           git status --short || true
