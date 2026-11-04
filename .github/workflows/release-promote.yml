@@ -48,7 +48,10 @@ on:
         type: string
         required: true
       services:
-        description: 'Candidate services; missing ones are skipped.'
+        description: >-
+          Services to retag and write. Every one must be published for `commit`:
+          a missing image FAILS the release, so a partial promotion can never
+          ship. List only the services the calling repository builds.
         type: string
         default: api worker migrator web
       gitops-product:
@@ -221,7 +224,15 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PRODUCT" =~ ^[a-z0-9-]+$ ]] || { echo "::error title=release-promote::invalid gitops-product '$PRODUCT'"; exit 1; }
-          branch="promote/${PRODUCT}-${TAG}"
+          # The SOURCE REPOSITORY is part of the branch name, not decoration. Two
+          # repositories can promote the SAME gitops product (kb: qnsc-kb-backend
+          # writes api/worker/migrator, qnsc-kb-frontend writes web) and they cut
+          # INDEPENDENT release tags. With promote/<product>-<tag>, the second
+          # repository's promotion either found the first's PR and exited green
+          # without promoting, or hit the branch-exists guard and failed.
+          REPO_SLUG="${GITHUB_REPOSITORY#*/}"
+          [[ "$REPO_SLUG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error title=release-promote::invalid repository slug '$REPO_SLUG'"; exit 1; }
+          branch="promote/${PRODUCT}-${REPO_SLUG}-${TAG}"
           existing=$(gh pr list --head "$branch" --json url --jq '.[0].url // ""')
           if [ -n "$existing" ]; then
             echo "url=$existing" >> "$GITHUB_OUTPUT"
