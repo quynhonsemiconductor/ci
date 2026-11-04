@@ -31,12 +31,19 @@ YQ_STUB = """
 import os, sys, yaml
 expr, path = sys.argv[-2], sys.argv[-1]
 doc = yaml.safe_load(open(path)) or {}
-img = doc["services"][os.environ["svc"]]["image"]
-if expr == ".services[strenv(svc)].image.tag = strenv(TAG)":
+# `web` is the chart's top-level component, not a services entry; the action writes it at web.image.
+svc = os.environ["svc"]
+assert ("web.image" in expr) == (svc == "web"), "wrong path for " + svc + ": " + expr
+if expr.startswith("del("):
+    # Deleting from an absent component is a no-op in yq; do not create it here.
+    img = ((doc.get("web") or {}).get("image") or {}) if svc == "web" else doc["services"][svc]["image"]
+else:
+    img = doc.setdefault("web", {}).setdefault("image", {}) if svc == "web" else doc["services"][svc]["image"]
+if expr == ".services[strenv(svc)].image.tag = strenv(TAG)" or expr == ".web.image.tag = strenv(TAG)":
     img["tag"] = os.environ["TAG"]
-elif expr == ".services[strenv(svc)].image.digest = strenv(digest)":
+elif expr == ".services[strenv(svc)].image.digest = strenv(digest)" or expr == ".web.image.digest = strenv(digest)":
     img["digest"] = os.environ["digest"]
-elif expr == "del(.services[strenv(svc)].image.digest)":
+elif expr == "del(.services[strenv(svc)].image.digest)" or expr == "del(.web.image.digest)":
     img.pop("digest", None)
 else:
     sys.exit("unexpected yq expression: " + expr)
@@ -117,6 +124,26 @@ def test_missing_digest_entry_fails(tmp_path):
     result, _, _ = run_bump(tmp_path, values(api={"tag": "x"}, worker={"tag": "x"}), digests={"api": D1})
     assert result.returncode != 0
     assert "digests has no entry for worker" in result.stdout + result.stderr
+
+
+def test_web_is_written_at_the_top_level_not_under_services(tmp_path):
+    # charts/qnsc-service reads the SPA image from top-level `web.image` (templates/web.yaml) and
+    # rejects any services entry without `kind`, so services.web would fail the render.
+    result, outputs, doc = run_bump(
+        tmp_path, values(api={"tag": "sha-old"}), services="api web", digests={"api": D1, "web": D2}
+    )
+    assert result.returncode == 0, result.stderr
+    assert doc["web"]["image"] == {"tag": "v1.2.3", "digest": D2}
+    assert "web" not in doc["services"]
+    assert doc["services"]["api"]["image"] == {"tag": "v1.2.3", "digest": D1}
+    assert outputs["changed"] == "true"
+
+
+def test_web_tag_only_bump_deletes_a_stale_digest(tmp_path):
+    doc = {"services": {"api": {"image": {"tag": "sha-old"}}}, "web": {"image": {"tag": "sha-old", "digest": D1}}}
+    result, _, out = run_bump(tmp_path, doc, services="api web")
+    assert result.returncode == 0, result.stderr
+    assert out["web"]["image"] == {"tag": "v1.2.3"}
 
 
 @pytest.mark.parametrize("bad", ["sha256:short", "sha256:" + "A" * 64, "latest"])

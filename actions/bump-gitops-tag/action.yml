@@ -20,7 +20,10 @@ inputs:
     description: 'dev | prod. Never develop/production (§7c).'
     required: true
   services:
-    description: 'Space-separated service names, e.g. "api worker migrator".'
+    description: >
+      Space-separated image names, e.g. "api worker migrator web". A real service is
+      written under services.<name>.image; `web` is the chart's top-level SPA component
+      and is written to web.image instead (see the Bump step).
     required: true
   tag:
     description: >
@@ -144,17 +147,37 @@ runs:
           # expression (braces omitted deliberately — see below):
           # yq has its own expression language, and interpolating into it is the
           # same bug one layer down.
-          TAG="$TAG" svc="$svc" yq -i '.services[strenv(svc)].image.tag = strenv(TAG)' "$file"
+          #
+          # `web` is NOT a service in the chart (charts/qnsc-service/templates/web.yaml:
+          # the SPA is the optional top-level `web` component). Its image is `web.image`,
+          # and a `services.web` entry would be rejected by the values schema — every
+          # services entry requires `kind`. Callers list `web` in `services` like any
+          # other image; the tag/digest still land in the same machine-owned tags file,
+          # at the path the chart reads. The three expressions are chosen from these
+          # two fixed sets, never built from the input.
+          case "$svc" in
+            web)
+              tag_expr='.web.image.tag = strenv(TAG)'
+              digest_expr='.web.image.digest = strenv(digest)'
+              del_expr='del(.web.image.digest)'
+              ;;
+            *)
+              tag_expr='.services[strenv(svc)].image.tag = strenv(TAG)'
+              digest_expr='.services[strenv(svc)].image.digest = strenv(digest)'
+              del_expr='del(.services[strenv(svc)].image.digest)'
+              ;;
+          esac
+          TAG="$TAG" svc="$svc" yq -i "$tag_expr" "$file"
           if [ -n "$DIGESTS" ]; then
             digest=$(jq -er --arg s "$svc" '.[$s]' <<< "$DIGESTS") \
               || { echo "::error::digests has no entry for $svc"; exit 1; }
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
               || { echo "::error::bad digest for $svc"; exit 1; }
-            digest="$digest" svc="$svc" yq -i '.services[strenv(svc)].image.digest = strenv(digest)' "$file"
+            digest="$digest" svc="$svc" yq -i "$digest_expr" "$file"
           else
             # A tag-only bump must not leave an older digest behind: the chart pins
             # the digest and ignores the tag, so a stale one keeps the old image.
-            svc="$svc" yq -i 'del(.services[strenv(svc)].image.digest)' "$file"
+            svc="$svc" yq -i "$del_expr" "$file"
           fi
         done
         after=$(sha256sum "$file" | cut -d' ' -f1)
