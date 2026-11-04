@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.0](https://github.com/quynhonsemiconductor/ci/compare/v1.33.1...v1.34.0) (2026-11-04)
+
+
+### Features
+
+* **bump-gitops-tag:** write the web component under web.image ([#300](https://github.com/quynhonsemiconductor/ci/issues/300)) ([fbfd8ab](https://github.com/quynhonsemiconductor/ci/commit/fbfd8ab0ca0a60cee462b97add648d47ae3fd5a9))
+
 ## [1.33.1](https://github.com/quynhonsemiconductor/ci/compare/v1.33.0...v1.33.1) (2026-11-03)
 
 
