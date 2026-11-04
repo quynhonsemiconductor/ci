@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.1](https://github.com/quynhonsemiconductor/ci/compare/v1.34.0...v1.34.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **release-promote:** write the web image to web.image, not services.web ([#305](https://github.com/quynhonsemiconductor/ci/issues/305)) ([355d3c2](https://github.com/quynhonsemiconductor/ci/commit/355d3c2c5893cb3b60fc68977d19e87554ed8648))
+
 ## [1.34.0](https://github.com/quynhonsemiconductor/ci/compare/v1.33.1...v1.34.0) (2026-11-04)
 
 
