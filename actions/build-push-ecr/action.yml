@@ -1,10 +1,11 @@
-# DEPRECATED PATH — REMOVED IN v1.34.0. The action is now actions/build-push-image (nothing about it was ECR-specific).
+# DEPRECATED PATH — REMOVED IN v1.35.0. The action is now actions/build-push-image (nothing about it was ECR-specific).
+# Moved by the SA on 2026-11-04: the P3 launch release carries no breaking change.
 # Until then this copy is identical below this comment, so a caller that only bumps its SHA keeps working. A test keeps the
 # two in sync.
-name: Build & push an image (deprecated, removed in v1.34.0)
+name: Build & push an image (deprecated, removed in v1.35.0)
 description: >
-  DEPRECATED — REMOVED IN v1.34.0. Use `quynhonsemiconductor/ci/actions/build-push-image`; the inputs, outputs and
-  behaviour are the same (including the old `ecr-registry` name, which also goes in v1.34.0).
+  DEPRECATED — REMOVED IN v1.35.0. Use `quynhonsemiconductor/ci/actions/build-push-image`; the inputs, outputs and
+  behaviour are the same (including the old `ecr-registry` name, which also goes in v1.35.0).
   Set up Docker Buildx and build+push ONE image to a registry the calling job has already logged in to
   (`docker/login-action`). With `scan: true` the image is scanned for CRITICAL CVEs BEFORE it is pushed, from the local
   build, and then that same image is pushed, so no step ever has to pull a pushed image back to the runner (see `scan`).
@@ -13,11 +14,11 @@ inputs:
   registry:
     description: >
       Registry with its namespace, no trailing slash — `ghcr.io/quynhonsemiconductor`. Optional only so the old
-      `ecr-registry` name keeps working until it is removed (v1.34.0); set one of the two.
+      `ecr-registry` name keeps working until it is removed (v1.35.0); set one of the two.
     required: false
     default: ''
   ecr-registry:
-    description: DEPRECATED, use `registry`. Accepted until v1.34.0 so a caller that only bumps its SHA keeps working.
+    description: DEPRECATED, use `registry`. Accepted until v1.35.0 so a caller that only bumps its SHA keeps working.
     required: false
     default: ''
   image-name:
@@ -166,7 +167,7 @@ runs:
       shell: bash
       env:
         SCAN: ${{ inputs.scan }}
-        # `registry` replaced `ecr-registry` (the old name goes in v1.34.0); an empty one would otherwise build `"/name:tag"`.
+        # `registry` replaced `ecr-registry` (the old name goes in v1.35.0); an empty one would otherwise build `"/name:tag"`.
         REGISTRY: ${{ inputs.registry || inputs.ecr-registry }}
       run: |
         case "$SCAN" in
