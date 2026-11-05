@@ -112,11 +112,11 @@ jobs:
           persist-credentials: false
 
       - name: Workflow lint (actionlint)
-        uses: quynhonsemiconductor/ci/actions/lint-workflows@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        uses: quynhonsemiconductor/ci/actions/lint-workflows@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
 
       - name: Actions security (zizmor)
         if: ${{ !cancelled() }}
-        uses: quynhonsemiconductor/ci/actions/audit-workflows@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        uses: quynhonsemiconductor/ci/actions/audit-workflows@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           path: ${{ inputs.path }}
           min-severity: ${{ inputs.min_severity }}

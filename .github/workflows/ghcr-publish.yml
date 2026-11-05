@@ -191,7 +191,7 @@ jobs:
       # before it tags a release. The old alias would still run the old code.
       - name: Build, scan (pre-push), push ${{ matrix.service }}
         id: build
-        uses: quynhonsemiconductor/ci/actions/build-push-image@7e8f6136a017c7b1f57a2e9a288dae3cd008950f  # v1.31.1
+        uses: quynhonsemiconductor/ci/actions/build-push-image@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           registry: ${{ env.GHCR_NAMESPACE }}
           image-name: ${{ inputs.product }}-${{ matrix.service }}
@@ -311,7 +311,7 @@ jobs:
       # v1.32.0 is the first release whose bump-gitops-tag keeps no credentials
       # at rest and stages exactly the tags file + render. A job cannot pin a SHA
       # that does not exist, so this arrives only after that release.
-      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@6c53291be3b072939236c87b3316c0f9ea187c59  # v1.32.0
+      - uses: quynhonsemiconductor/ci/actions/bump-gitops-tag@956804ad4aa2dcf930909553d306d72b3708fd5d  # v1.34.1+ci#308
         with:
           product: ${{ inputs.gitops-product || inputs.product }}
           env: dev
