@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.3](https://github.com/quynhonsemiconductor/ci/compare/v1.34.2...v1.34.3) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** retry the pinned zizmor install in the shell ([#311](https://github.com/quynhonsemiconductor/ci/issues/311)) ([47e8107](https://github.com/quynhonsemiconductor/ci/commit/47e8107c920ac82e1e7c0c14464dda90cc070799))
+
 ## [1.34.2](https://github.com/quynhonsemiconductor/ci/compare/v1.34.1...v1.34.2) (2026-11-05)
 
 
