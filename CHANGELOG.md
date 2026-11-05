@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.2](https://github.com/quynhonsemiconductor/ci/compare/v1.34.1...v1.34.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** point nested composites at the all-SHA v1.34.1 tree ([#308](https://github.com/quynhonsemiconductor/ci/issues/308)) ([956804a](https://github.com/quynhonsemiconductor/ci/commit/956804ad4aa2dcf930909553d306d72b3708fd5d))
+
 ## [1.34.1](https://github.com/quynhonsemiconductor/ci/compare/v1.34.0...v1.34.1) (2026-11-04)
 
 
