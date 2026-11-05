@@ -36,7 +36,20 @@ runs:
 
     - name: Install zizmor
       shell: bash
-      run: pip install --disable-pip-version-check zizmor==1.5.2
+      run: |
+        # PyPI intermittently answers 504 through the shared proxy, and pip does
+        # NOT retry a 504 (its --retries covers connection/read errors, not this
+        # status), so raise the retry above pip: three attempts with a short
+        # backoff around the same pinned install.
+        for attempt in 1 2 3; do
+          if python -m pip install --disable-pip-version-check zizmor==1.5.2; then
+            exit 0
+          fi
+          echo "::warning::zizmor install failed (attempt ${attempt}/3); retrying"
+          sleep $((attempt * 10))
+        done
+        echo "::error::zizmor install failed after 3 attempts"
+        exit 1
 
     - name: zizmor scan (SARIF)
       shell: bash
