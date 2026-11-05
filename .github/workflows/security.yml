@@ -170,7 +170,7 @@ jobs:
           secrets: |
             node_auth_token=${{ secrets.GITHUB_TOKEN }}
 
-      - uses: quynhonsemiconductor/ci/actions/scan-image@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+      - uses: quynhonsemiconductor/ci/actions/scan-image@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           image-ref: ${{ inputs.product }}-${{ inputs.image_target }}:scan
 
@@ -193,20 +193,20 @@ jobs:
           persist-credentials: false
 
       - name: Secret scan (Gitleaks)
-        uses: quynhonsemiconductor/ci/actions/scan-secrets@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        uses: quynhonsemiconductor/ci/actions/scan-secrets@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           fail-on-leak: 'true'
 
       - name: Dependency CVE scan (osv-scanner)
         if: ${{ !cancelled() }}
-        uses: quynhonsemiconductor/ci/actions/scan-osv@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        uses: quynhonsemiconductor/ci/actions/scan-osv@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           version: ${{ inputs.osv_scanner_version }}
           blocking: ${{ inputs.osv_blocking }}
 
       - name: SAST (Semgrep)
         if: ${{ !cancelled() }}
-        uses: quynhonsemiconductor/ci/actions/scan-semgrep@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        uses: quynhonsemiconductor/ci/actions/scan-semgrep@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           config: ${{ inputs.semgrep_config }}
           version: ${{ inputs.semgrep_version }}

@@ -61,7 +61,7 @@ jobs:
     timeout-minutes: 5
     steps:
       # The steps live in a composite so the PR-title job can run the same ones (one runner instead of two).
-      - uses: quynhonsemiconductor/ci/actions/pr-labels@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+      - uses: quynhonsemiconductor/ci/actions/pr-labels@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
         with:
           configuration-path: ${{ inputs.configuration_path }}
           sync-labels: ${{ inputs.sync_labels }}

@@ -42,7 +42,7 @@ description: >
       runs-on: ubuntu-latest
       timeout-minutes: 5
       steps:
-        - uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@0cc991aa5f421622ce37c831b90f818676c94add # v1.34.1
+        - uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@956804ad4aa2dcf930909553d306d72b3708fd5d # v1.34.1+ci#308
           with:
             results: <join(needs.*.result, ',') wrapped in expression braces>
   ```

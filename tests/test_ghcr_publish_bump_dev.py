@@ -12,7 +12,7 @@ import pathlib
 import yaml
 
 WORKFLOW = pathlib.Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ghcr-publish.yml"
-V1320 = "6c53291be3b072939236c87b3316c0f9ea187c59"
+V1350 = "956804ad4aa2dcf930909553d306d72b3708fd5d"
 
 
 def doc():
@@ -33,8 +33,8 @@ def test_bump_dev_is_opt_in_and_dev_only():
 def test_bump_dev_calls_the_fixed_release():
     job = doc()["jobs"]["bump-dev"]
     uses = next(s["uses"] for s in job["steps"] if "bump-gitops-tag" in s.get("uses", ""))
-    assert uses == f"quynhonsemiconductor/ci/actions/bump-gitops-tag@{V1320}"
-    assert f"bump-gitops-tag@{V1320}  # v1.32.0" in WORKFLOW.read_text(encoding="utf-8")
+    assert uses == f"quynhonsemiconductor/ci/actions/bump-gitops-tag@{V1350}"
+    assert f"bump-gitops-tag@{V1350}  # v1.34.1+ci#308" in WORKFLOW.read_text(encoding="utf-8")
     # The old, credential-persisting pin must never come back.
     assert "db42e37" not in WORKFLOW.read_text(encoding="utf-8")
 
