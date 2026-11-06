@@ -513,6 +513,33 @@ Cost: Claude is billed per token on the Anthropic account; GLM is a flat plan. T
 
 Re-review after a switch: the review action's checkpoint fingerprint hashes the endpoint, model, protocol, extra body and reasoning effort, so changing provider or model reviews the full range on the next push. To force one anyway, convert the pull request to draft and mark it ready, or re-open it.
 
+## Retention
+
+### Container packages (GHCR)
+
+Pruning is **deferred** (RETENTION-2026-11-06 §E, SA decision). Deleting
+registry images is high-risk for little gain — multi-arch child manifests,
+attestations and shared layers make a safe delete hard — and the node-disk
+problem is already covered by the kubelet image GC (infra#454).
+
+`.github/workflows/ghcr-report.yml` runs weekly and writes one summary row per
+container package: version count, untagged count, and the total size of the
+manifest layers (shared blobs counted per version, so an upper bound on
+registry storage, not the billing number). It makes no delete call and needs
+only `packages: read`; every qnsc package is public.
+
+The numbers are the input to a later pruning decision.
+
+### Actions artifacts and logs
+
+14 days, set once at the organisation level (the GitHub provider in
+`integrations/github` 6.13 has no resource for it, so it is an owner setting):
+
+```sh
+gh api orgs/quynhonsemiconductor/actions/permissions/artifact-and-log-retention
+gh api -X PUT orgs/quynhonsemiconductor/actions/permissions/artifact-and-log-retention -f days=14
+```
+
 ## Versioning
 
 Consumers pin a FULL COMMIT SHA and name the release it belongs to in the trailing comment:
