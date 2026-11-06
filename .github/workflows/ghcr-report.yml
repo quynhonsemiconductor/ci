@@ -1,0 +1,118 @@
+# =============================================================================
+# GHCR report — measured weekly, pruning deferred.
+#
+# RETENTION-2026-11-06 §E (SA decision: YAGNI/KISS). Deleting registry images is
+# high-risk for little gain: multi-arch manifests, attestations and shared
+# layers make a safe delete hard, and the node-disk problem is already covered
+# by the kubelet image GC (infra#454). This workflow therefore makes NO delete
+# call. It reports, per container package:
+#
+#   * the number of versions;
+#   * how many of those are untagged;
+#   * the total size of the manifest layers (shared blobs counted per version,
+#     so this is an upper bound on registry storage, not the billing number).
+#
+# The summary is the input to a later pruning decision. Auth is anonymous
+# registry pulls plus the workflow token for package metadata; every qnsc
+# package is public, and no Packages write is requested or needed.
+# =============================================================================
+name: GHCR report
+
+on:
+  schedule:
+    - cron: '17 4 * * 3' # Wednesdays 04:17 UTC (11:17 Asia/Ho_Chi_Minh)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ghcr-report
+  cancel-in-progress: false
+
+jobs:
+  list:
+    name: List container packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - name: List container packages
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          packages="$(gh api 'orgs/quynhonsemiconductor/packages?package_type=container&per_page=100' --paginate --slurp \
+            | jq -c '[.[][] | .name]')"
+          echo "packages=${packages}" >> "$GITHUB_OUTPUT"
+          echo "packages: ${packages}"
+
+  report:
+    name: Report ${{ matrix.package }}
+    needs: list
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.list.outputs.packages) }}
+    steps:
+      - name: Measure the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          encoded="${PACKAGE//\//%2F}"
+          gh api "orgs/quynhonsemiconductor/packages/container/${encoded}/versions?per_page=100" --paginate --slurp \
+            > /tmp/versions.json
+
+          versions="$(jq 'add | length' /tmp/versions.json)"
+          untagged="$(jq 'add | map(select((.metadata.container.tags // []) | length == 0)) | length' /tmp/versions.json)"
+
+          # Anonymous pull token for a public package. The registry token endpoint
+          # prints a token for the repository scope; no credentials are sent.
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:quynhonsemiconductor/${PACKAGE}:pull" | jq -r .token)"
+
+          accept="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+          manifest_bytes() {
+            local ref="$1" body child cbody total
+            body="$(curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
+              "https://ghcr.io/v2/quynhonsemiconductor/${PACKAGE}/manifests/${ref}")"
+            if jq -e 'has("manifests")' >/dev/null <<<"$body"; then
+              # Multi-arch index: sum the child manifests' layers.
+              total=0
+              while IFS= read -r child; do
+                cbody="$(curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
+                  "https://ghcr.io/v2/quynhonsemiconductor/${PACKAGE}/manifests/${child}")"
+                total=$(( total + $(jq '([.layers[]?.size] | add // 0) + (.config.size // 0)' <<<"$cbody") ))
+              done < <(jq -r '.manifests[].digest' <<<"$body")
+              echo "$total"
+            else
+              jq '([.layers[]?.size] | add // 0) + (.config.size // 0)' <<<"$body"
+            fi
+          }
+
+          size=0
+          while IFS= read -r digest; do
+            size=$(( size + $(manifest_bytes "$digest") ))
+          done < <(jq -r 'add[].name' /tmp/versions.json)
+
+          {
+            echo "### ${PACKAGE}"
+            echo
+            echo "| versions | untagged | layer bytes |"
+            echo "|---:|---:|---:|"
+            echo "| ${versions} | ${untagged} | ${size} |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "${PACKAGE}: versions=${versions} untagged=${untagged} bytes=${size}"
